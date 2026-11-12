@@ -1,0 +1,202 @@
+//! Azure Storage: the `Microsoft.Storage/storageAccounts` resource type on Resource
+//! Manager and the Blob service data plane on `{account}.blob.core.<suffix>`.
+
+pub mod blob;
+mod shared_key;
+mod state;
+
+use std::sync::Arc;
+
+use base64::Engine as _;
+use emulator_core::arm::{ArmContext, ArmRegistry, PutRequest, Resource, ResourceTypeHandler};
+use emulator_core::ArmError;
+use rand::RngCore;
+use serde_json::{json, Value};
+
+pub use state::StorageState;
+use state::Account;
+
+const RESOURCE_TYPE: &str = "Microsoft.Storage/storageAccounts";
+
+/// Mounts the Storage resource provider on Resource Manager.
+pub fn register(registry: &mut ArmRegistry) {
+    registry.register_type(StorageAccounts);
+    registry.register_provider_action(
+        "Microsoft.Storage/checkNameAvailability",
+        Arc::new(check_name_availability),
+    );
+}
+
+fn now_iso() -> String {
+    emulator_core::http_util::iso_timestamp()
+}
+
+/// A new 512-bit account key, base64 encoded as the service returns it.
+fn new_key() -> String {
+    let mut bytes = [0u8; 64];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+fn is_valid_account_name(name: &str) -> bool {
+    (3..=24).contains(&name.len())
+        && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+}
+
+fn invalid_name_message(name: &str) -> String {
+    format!("{name} is not a valid storage account name. Storage account name must be between 3 and 24 characters in length and use numbers and lower-case letters only.")
+}
+
+fn taken_message(name: &str) -> String {
+    format!("The storage account named {name} is already taken.")
+}
+
+fn keys_json(account: &Account) -> Value {
+    json!({"keys": [
+        {"creationTime": account.key_created[0], "keyName": "key1", "value": account.keys[0], "permissions": "FULL"},
+        {"creationTime": account.key_created[1], "keyName": "key2", "value": account.keys[1], "permissions": "FULL"},
+    ]})
+}
+
+struct StorageAccounts;
+
+impl ResourceTypeHandler for StorageAccounts {
+    fn resource_type(&self) -> &'static str {
+        RESOURCE_TYPE
+    }
+
+    fn put(&self, ctx: &ArmContext<'_>, request: &PutRequest<'_>) -> Result<Value, ArmError> {
+        let name = request.name;
+        if !is_valid_account_name(name) {
+            return Err(ArmError::bad_request("AccountNameInvalid", invalid_name_message(name)));
+        }
+        let body = request.body;
+        if request.existing.is_none() {
+            // The wording of these two refusals has not been checked against Azure.
+            for (member, present) in [
+                ("sku", body.pointer("/sku/name").and_then(Value::as_str).is_some()),
+                ("kind", body.get("kind").and_then(Value::as_str).is_some()),
+            ] {
+                if !present {
+                    return Err(ArmError::bad_request(
+                        "InvalidRequestContent",
+                        format!("The request content was invalid: the required property '{member}' is missing."),
+                    ));
+                }
+            }
+        }
+
+        let state = ctx.engine.state::<StorageState>();
+        let mut state = state.lock();
+        if request.existing.is_none() {
+            // Account names are global: they are DNS labels.
+            if state.accounts.contains_key(name) {
+                return Err(ArmError::conflict("StorageAccountAlreadyTaken", taken_message(name)));
+            }
+            let created = now_iso();
+            state.accounts.insert(
+                name.to_string(),
+                Account {
+                    keys: [new_key(), new_key()],
+                    key_created: [created.clone(), created],
+                    containers: Default::default(),
+                },
+            );
+        }
+
+        // Caller-settable properties pass through; the service-owned ones overlay them.
+        let mut properties = request
+            .existing
+            .map(|r| r.properties.clone())
+            .unwrap_or_else(|| json!({}));
+        if let Some(requested) = body.get("properties").and_then(Value::as_object) {
+            for (key, value) in requested {
+                properties[key] = value.clone();
+            }
+        }
+        if properties.get("supportsHttpsTrafficOnly").is_none() {
+            properties["supportsHttpsTrafficOnly"] = json!(true);
+        }
+        let kind = body
+            .get("kind")
+            .and_then(Value::as_str)
+            .or_else(|| request.existing.and_then(|r| r.kind.as_ref()).and_then(Value::as_str))
+            .unwrap_or("");
+        if properties.get("accessTier").is_none() && matches!(kind, "StorageV2" | "BlobStorage") {
+            properties["accessTier"] = json!("Hot");
+        }
+        if properties.get("creationTime").is_none() {
+            properties["creationTime"] = json!(now_iso());
+        }
+        properties["provisioningState"] = json!("Succeeded");
+        properties["primaryLocation"] = json!(request.location);
+        properties["statusOfPrimary"] = json!("available");
+        // Only the services the emulator serves are advertised.
+        properties["primaryEndpoints"] = json!({"blob": ctx.engine.config().blob_endpoint(name)});
+        Ok(properties)
+    }
+
+    fn deleted(&self, ctx: &ArmContext<'_>, resource: &Resource) {
+        ctx.engine.state::<StorageState>().lock().accounts.remove(&resource.name);
+    }
+
+    fn action(
+        &self,
+        ctx: &ArmContext<'_>,
+        resource: &Resource,
+        action: &str,
+        body: &Value,
+    ) -> Result<Value, ArmError> {
+        let state = ctx.engine.state::<StorageState>();
+        let mut state = state.lock();
+        let account = state.accounts.get_mut(&resource.name).ok_or_else(|| {
+            ArmError::not_found(
+                "ResourceNotFound",
+                format!("The storage account '{}' was not found.", resource.name),
+            )
+        })?;
+        match action.to_ascii_lowercase().as_str() {
+            "listkeys" => Ok(keys_json(account)),
+            "regeneratekey" => {
+                let index = match body.get("keyName").and_then(Value::as_str) {
+                    Some("key1") => 0,
+                    Some("key2") => 1,
+                    _ => {
+                        return Err(ArmError::bad_request(
+                            "InvalidValuesForRequestParameters",
+                            "Values for request parameters are invalid: keyName.",
+                        ))
+                    }
+                };
+                account.keys[index] = new_key();
+                account.key_created[index] = now_iso();
+                Ok(keys_json(account))
+            }
+            other => Err(ArmError::not_implemented(format_args!(
+                "the '{other}' action on {RESOURCE_TYPE}"
+            ))),
+        }
+    }
+}
+
+fn check_name_availability(ctx: &ArmContext<'_>, body: &Value) -> Result<Value, ArmError> {
+    let name = body.get("name").and_then(Value::as_str).ok_or_else(|| {
+        ArmError::bad_request(
+            "InvalidRequestContent",
+            "The request content was invalid: the required property 'name' is missing.",
+        )
+    })?;
+    if !is_valid_account_name(name) {
+        return Ok(json!({
+            "nameAvailable": false,
+            "reason": "AccountNameInvalid",
+            "message": invalid_name_message(name),
+        }));
+    }
+    let taken = ctx.engine.state::<StorageState>().lock().accounts.contains_key(name);
+    Ok(if taken {
+        json!({"nameAvailable": false, "reason": "AlreadyExists", "message": taken_message(name)})
+    } else {
+        json!({"nameAvailable": true})
+    })
+}

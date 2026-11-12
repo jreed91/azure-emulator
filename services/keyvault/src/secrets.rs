@@ -1,0 +1,448 @@
+//! The Key Vault secrets data plane.
+//!
+//! Implemented: set, get (latest and by version), update attributes, list, list
+//! versions, delete (soft), get/list deleted, recover and purge. Listings return
+//! every item in one page.
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use axum::body::Body;
+use axum::response::{IntoResponse, Response};
+use emulator_core::auth::{self, AuthFailure};
+use emulator_core::http_util::{json_response, parse_query, percent_decode, read_body, request_id};
+use emulator_core::{ArmError, Engine};
+use http::{header, HeaderValue, Method, Request, StatusCode};
+use serde_json::{json, Value};
+
+use crate::KeyVaultState;
+
+/// Days a deleted secret stays recoverable.
+const RECOVERABLE_DAYS: i64 = 90;
+
+#[derive(Default)]
+pub(crate) struct Vault {
+    /// Keyed by lowercased secret name.
+    secrets: BTreeMap<String, Secret>,
+    deleted: BTreeMap<String, DeletedSecret>,
+}
+
+#[derive(Clone)]
+struct Secret {
+    /// The name as first created; ids keep this casing.
+    name: String,
+    /// Oldest first; the last one is the current version.
+    versions: Vec<SecretVersion>,
+}
+
+#[derive(Clone)]
+struct SecretVersion {
+    version: String,
+    value: String,
+    content_type: Option<Value>,
+    tags: Option<Value>,
+    enabled: bool,
+    not_before: Option<Value>,
+    expires: Option<Value>,
+    created: i64,
+    updated: i64,
+}
+
+struct DeletedSecret {
+    secret: Secret,
+    deleted_date: i64,
+}
+
+fn now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn not_found(what: &str) -> ArmError {
+    ArmError::not_found(
+        "SecretNotFound",
+        format!("A secret with (name/id) {what} was not found in this key vault. If you recently deleted this secret you may be able to recover it using the correct recovery command. For help resolving this issue, please see https://go.microsoft.com/fwlink/?linkid=2125182"),
+    )
+}
+
+fn is_valid_secret_name(name: &str) -> bool {
+    (1..=127).contains(&name.len())
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+struct SecretRequest<'a> {
+    engine: &'a Engine,
+    vault: &'a str,
+    body: &'a Value,
+}
+
+impl SecretVersion {
+    fn attributes(&self) -> Value {
+        let mut out = json!({
+            "enabled": self.enabled,
+            "created": self.created,
+            "updated": self.updated,
+            "recoveryLevel": "Recoverable+Purgeable",
+            "recoverableDays": RECOVERABLE_DAYS,
+        });
+        if let Some(not_before) = &self.not_before {
+            out["nbf"] = not_before.clone();
+        }
+        if let Some(expires) = &self.expires {
+            out["exp"] = expires.clone();
+        }
+        out
+    }
+
+    /// Applies the settable members of a set/update request body.
+    fn apply(&mut self, body: &Value) {
+        if let Some(content_type) = body.get("contentType") {
+            self.content_type = Some(content_type.clone()).filter(|v| !v.is_null());
+        }
+        if let Some(tags) = body.get("tags") {
+            self.tags = Some(tags.clone()).filter(|v| !v.is_null());
+        }
+        let Some(attributes) = body.get("attributes") else {
+            return;
+        };
+        if let Some(enabled) = attributes.get("enabled").and_then(Value::as_bool) {
+            self.enabled = enabled;
+        }
+        if let Some(not_before) = attributes.get("nbf") {
+            self.not_before = Some(not_before.clone()).filter(|v| !v.is_null());
+        }
+        if let Some(expires) = attributes.get("exp") {
+            self.expires = Some(expires.clone()).filter(|v| !v.is_null());
+        }
+    }
+}
+
+impl SecretRequest<'_> {
+    fn base(&self) -> String {
+        self.engine.config().vault_uri(self.vault)
+    }
+
+    /// A secret item or bundle. `versioned` puts the version in the id; `value`
+    /// includes the secret value.
+    fn bundle(&self, name: &str, version: &SecretVersion, versioned: bool, value: bool) -> Value {
+        let mut id = format!("{}secrets/{name}", self.base());
+        if versioned {
+            id.push_str(&format!("/{}", version.version));
+        }
+        let mut out = json!({"id": id, "attributes": version.attributes()});
+        if value {
+            out["value"] = json!(version.value);
+        }
+        if let Some(content_type) = &version.content_type {
+            out["contentType"] = content_type.clone();
+        }
+        if let Some(tags) = &version.tags {
+            out["tags"] = tags.clone();
+        }
+        out
+    }
+
+    fn deleted_bundle(&self, deleted: &DeletedSecret, value: bool) -> Value {
+        let secret = &deleted.secret;
+        let current = secret.versions.last().expect("a secret has a version");
+        let mut out = self.bundle(&secret.name, current, true, value);
+        out["recoveryId"] = json!(format!("{}deletedsecrets/{}", self.base(), secret.name));
+        out["deletedDate"] = json!(deleted.deleted_date);
+        out["scheduledPurgeDate"] = json!(deleted.deleted_date + RECOVERABLE_DAYS * 86_400);
+        out
+    }
+
+    fn with_vault<T>(&self, f: impl FnOnce(&mut Vault) -> Result<T, ArmError>) -> Result<T, ArmError> {
+        let state = self.engine.state::<KeyVaultState>();
+        let mut state = state.lock();
+        let vault = state
+            .vaults
+            .get_mut(self.vault)
+            .ok_or_else(|| ArmError::not_found("VaultNotFound", "The vault was not found."))?;
+        f(vault)
+    }
+
+    fn set(&self, name: &str) -> Result<Value, ArmError> {
+        let value = self.body.get("value").and_then(Value::as_str).ok_or_else(|| {
+            ArmError::bad_request("BadParameter", "The property 'value' is required.")
+        })?;
+        self.with_vault(|vault| {
+            let key = name.to_ascii_lowercase();
+            if vault.deleted.contains_key(&key) {
+                return Err(ArmError::conflict(
+                    "Conflict",
+                    format!("Secret {name} is currently in a deleted but recoverable state, and its name cannot be reused; in this state, the secret can only be recovered or purged."),
+                ));
+            }
+            let created = now();
+            let mut version = SecretVersion {
+                version: uuid::Uuid::new_v4().simple().to_string(),
+                value: value.to_string(),
+                content_type: None,
+                tags: None,
+                enabled: true,
+                not_before: None,
+                expires: None,
+                created,
+                updated: created,
+            };
+            version.apply(self.body);
+            let secret = vault.secrets.entry(key).or_insert_with(|| Secret {
+                name: name.to_string(),
+                versions: Vec::new(),
+            });
+            secret.versions.push(version);
+            Ok(self.bundle(&secret.name, secret.versions.last().expect("just pushed"), true, true))
+        })
+    }
+
+    fn get(&self, name: &str, version: Option<&str>) -> Result<Value, ArmError> {
+        self.with_vault(|vault| {
+            let secret = vault
+                .secrets
+                .get(&name.to_ascii_lowercase())
+                .ok_or_else(|| not_found(name))?;
+            let found = match version {
+                None => secret.versions.last(),
+                Some(wanted) => secret.versions.iter().find(|v| v.version == wanted),
+            }
+            .ok_or_else(|| not_found(&format!("{name}/{}", version.unwrap_or(""))))?;
+            if !found.enabled {
+                return Err(ArmError::new(
+                    StatusCode::FORBIDDEN,
+                    "Forbidden",
+                    "Operation get is not allowed on a disabled secret.",
+                ));
+            }
+            Ok(self.bundle(&secret.name, found, true, true))
+        })
+    }
+
+    fn update(&self, name: &str, version: Option<&str>) -> Result<Value, ArmError> {
+        self.with_vault(|vault| {
+            let secret = vault
+                .secrets
+                .get_mut(&name.to_ascii_lowercase())
+                .ok_or_else(|| not_found(name))?;
+            let secret_name = secret.name.clone();
+            let found = match version {
+                None => secret.versions.last_mut(),
+                Some(wanted) => secret.versions.iter_mut().find(|v| v.version == wanted),
+            }
+            .ok_or_else(|| not_found(&format!("{name}/{}", version.unwrap_or(""))))?;
+            found.apply(self.body);
+            found.updated = now();
+            Ok(self.bundle(&secret_name, found, true, false))
+        })
+    }
+
+    fn list(&self) -> Result<Value, ArmError> {
+        self.with_vault(|vault| {
+            let items: Vec<Value> = vault
+                .secrets
+                .values()
+                .filter_map(|s| Some(self.bundle(&s.name, s.versions.last()?, false, false)))
+                .collect();
+            Ok(json!({"value": items, "nextLink": null}))
+        })
+    }
+
+    fn versions(&self, name: &str) -> Result<Value, ArmError> {
+        self.with_vault(|vault| {
+            // Listing the versions of a missing secret is an empty list, not a 404.
+            let items: Vec<Value> = vault
+                .secrets
+                .get(&name.to_ascii_lowercase())
+                .map(|s| s.versions.iter().map(|v| self.bundle(&s.name, v, true, false)).collect())
+                .unwrap_or_default();
+            Ok(json!({"value": items, "nextLink": null}))
+        })
+    }
+
+    fn delete(&self, name: &str) -> Result<Value, ArmError> {
+        self.with_vault(|vault| {
+            let key = name.to_ascii_lowercase();
+            let secret = vault.secrets.remove(&key).ok_or_else(|| not_found(name))?;
+            let deleted = DeletedSecret {
+                secret,
+                deleted_date: now(),
+            };
+            let body = self.deleted_bundle(&deleted, false);
+            vault.deleted.insert(key, deleted);
+            Ok(body)
+        })
+    }
+
+    fn deleted_not_found(name: &str) -> ArmError {
+        ArmError::not_found("SecretNotFound", format!("Deleted Secret not found: {name}"))
+    }
+
+    fn get_deleted(&self, name: &str) -> Result<Value, ArmError> {
+        self.with_vault(|vault| {
+            vault
+                .deleted
+                .get(&name.to_ascii_lowercase())
+                .map(|d| self.deleted_bundle(d, false))
+                .ok_or_else(|| Self::deleted_not_found(name))
+        })
+    }
+
+    fn list_deleted(&self) -> Result<Value, ArmError> {
+        self.with_vault(|vault| {
+            let items: Vec<Value> = vault
+                .deleted
+                .values()
+                .map(|d| {
+                    let mut item = self.deleted_bundle(d, false);
+                    // Deleted items are identified by name, like live list items.
+                    item["id"] = json!(format!("{}secrets/{}", self.base(), d.secret.name));
+                    item
+                })
+                .collect();
+            Ok(json!({"value": items, "nextLink": null}))
+        })
+    }
+
+    fn purge(&self, name: &str) -> Result<(), ArmError> {
+        self.with_vault(|vault| {
+            vault
+                .deleted
+                .remove(&name.to_ascii_lowercase())
+                .map(|_| ())
+                .ok_or_else(|| Self::deleted_not_found(name))
+        })
+    }
+
+    fn recover(&self, name: &str) -> Result<Value, ArmError> {
+        self.with_vault(|vault| {
+            let key = name.to_ascii_lowercase();
+            let deleted = vault
+                .deleted
+                .remove(&key)
+                .ok_or_else(|| Self::deleted_not_found(name))?;
+            let secret = deleted.secret;
+            let body = self.bundle(&secret.name, secret.versions.last().expect("has a version"), true, false);
+            vault.secrets.insert(key, secret);
+            Ok(body)
+        })
+    }
+}
+
+fn unauthorized(engine: &Engine, message: &str) -> Response {
+    let config = engine.config();
+    let challenge = format!(
+        "Bearer authorization=\"{}/{}\", resource=\"{}\"",
+        config.management_endpoint(),
+        config.tenant_id,
+        config.vault_resource()
+    );
+    let mut response = ArmError::new(StatusCode::UNAUTHORIZED, "Unauthorized", message).into_response();
+    if let Ok(value) = HeaderValue::from_str(&challenge) {
+        response.headers_mut().insert(header::WWW_AUTHENTICATE, value);
+    }
+    response
+}
+
+/// Serves one Key Vault data-plane request addressed to `vault`.
+pub async fn handle(engine: Arc<Engine>, vault: String, request: Request<Body>) -> Response {
+    let (parts, body) = request.into_parts();
+    let mut response = match serve(&engine, &vault.to_ascii_lowercase(), &parts, body).await {
+        Ok(response) => response,
+        Err(response) => response,
+    };
+    if let Ok(value) = HeaderValue::from_str(&request_id()) {
+        response.headers_mut().insert("x-ms-request-id", value);
+    }
+    response
+}
+
+async fn serve(
+    engine: &Engine,
+    vault: &str,
+    parts: &http::request::Parts,
+    body: Body,
+) -> Result<Response, Response> {
+    let audiences = [engine.config().vault_resource(), "https://vault.azure.net".to_string()];
+    // SDKs send their first request without a token (and without a body) to learn
+    // from this challenge which authority and resource to ask a token for.
+    auth::authorize(&parts.headers, &audiences).map_err(|failure| {
+        let message = match failure {
+            AuthFailure::Missing => "AKV10000: Request is missing a Bearer or PoP token.",
+            AuthFailure::Invalid => "AKV10001: Unable to parse JWT token.",
+            AuthFailure::WrongAudience => "AKV10022: Invalid audience.",
+        };
+        unauthorized(engine, message)
+    })?;
+
+    let fail = |error: ArmError| error.into_response();
+    if !engine.state::<KeyVaultState>().lock().vaults.contains_key(vault) {
+        // A real request for a missing vault fails in DNS; this is the nearest answer.
+        return Err(fail(ArmError::not_found("VaultNotFound", "The vault was not found.")));
+    }
+    let query = parse_query(parts.uri.query());
+    if !query.contains_key("api-version") {
+        return Err(fail(ArmError::bad_request("BadParameter", "api-version must be specified")));
+    }
+    let bytes = read_body(body).await?;
+    let body: Value = if bytes.iter().all(u8::is_ascii_whitespace) {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).map_err(|_| {
+            fail(ArmError::bad_request("BadParameter", "The request body is not valid JSON."))
+        })?
+    };
+
+    let segments: Vec<String> = parts
+        .uri
+        .path()
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(|s| percent_decode(s, false))
+        .collect();
+    let collection = segments.first().map(|s| s.to_ascii_lowercase()).unwrap_or_default();
+    let rest: Vec<&str> = segments.iter().skip(1).map(String::as_str).collect();
+    if let Some(name) = rest.first() {
+        if !is_valid_secret_name(name) {
+            return Err(fail(ArmError::bad_request(
+                "BadParameter",
+                format!("The request URI contains an invalid name: {name}"),
+            )));
+        }
+    }
+
+    let request = SecretRequest {
+        engine,
+        vault,
+        body: &body,
+    };
+    let method = &parts.method;
+    let result = match (collection.as_str(), rest.as_slice()) {
+        ("secrets", []) if method == Method::GET => request.list(),
+        ("secrets", [name]) => match method.as_str() {
+            "PUT" => request.set(name),
+            "GET" => request.get(name, None),
+            "PATCH" => request.update(name, None),
+            "DELETE" => request.delete(name),
+            _ => Err(ArmError::not_implemented("this Key Vault operation")),
+        },
+        ("secrets", [name, "versions"]) if method == Method::GET => request.versions(name),
+        ("secrets", [name, version]) if method == Method::GET => request.get(name, Some(version)),
+        ("secrets", [name, version]) if method == Method::PATCH => request.update(name, Some(version)),
+        ("deletedsecrets", []) if method == Method::GET => request.list_deleted(),
+        ("deletedsecrets", [name]) if method == Method::GET => request.get_deleted(name),
+        ("deletedsecrets", [name]) if method == Method::DELETE => {
+            return request
+                .purge(name)
+                .map(|()| StatusCode::NO_CONTENT.into_response())
+                .map_err(fail);
+        }
+        ("deletedsecrets", [name, "recover"]) if method == Method::POST => request.recover(name),
+        _ => Err(ArmError::not_implemented("this Key Vault operation")),
+    };
+    result
+        .map(|body| json_response(StatusCode::OK, &body))
+        .map_err(fail)
+}

@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = [
+    "core/emulator-core",
+    "core/router",
+    "services/entra",
+    "services/storage",
+    "services/keyvault",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+emulator-core = { path = "core/emulator-core" }
+service-entra = { path = "services/entra" }
+service-storage = { path = "services/storage" }
+service-keyvault = { path = "services/keyvault" }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+hmac = "0.12"
+http = "1"
+httpdate = "1"
+jsonwebtoken = "9"
+md-5 = "0.10"
+percent-encoding = "2"
+rand = "0.8"
+rcgen = { version = "0.13", features = ["pem", "x509-parser"] }
+rsa = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
+tower = { version = "0.5", features = ["util"] }
+uuid = { version = "1", features = ["v4"] }
+
+# RSA key generation is unusably slow unoptimized; optimize dependencies in dev/test.
+[profile.dev.package."*"]
+opt-level = 2
