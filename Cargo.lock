@@ -177,6 +177,8 @@ dependencies = [
  "serde_json",
  "service-entra",
  "service-keyvault",
+ "service-managedidentity",
+ "service-servicebus",
  "service-storage",
  "sha2",
  "tokio",
@@ -364,6 +366,13 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "emulator-scaffold"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
@@ -1130,6 +1139,22 @@ dependencies = [
  "http",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "service-managedidentity"
+version = "0.1.0"
+dependencies = [
+ "emulator-core",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "service-servicebus"
+version = "0.1.0"
+dependencies = [
+ "emulator-core",
 ]
 
 [[package]]

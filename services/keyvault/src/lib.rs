@@ -4,6 +4,7 @@
 //! Not implemented yet: keys, certificates, vault soft-delete, and data-plane
 //! authorization (access policies and RBAC are stored but not enforced).
 
+pub mod scaffold;
 pub mod secrets;
 
 use std::collections::BTreeMap;
@@ -30,6 +31,8 @@ pub fn register(registry: &mut ArmRegistry) {
         "Microsoft.KeyVault/checkNameAvailability",
         Arc::new(check_name_availability),
     );
+    // Everything else in the specification is mounted as a 501 stub.
+    registry.register_scaffold(&scaffold::PROVIDER);
 }
 
 fn is_valid_vault_name(name: &str) -> bool {

@@ -6,6 +6,9 @@ members = [
     "services/entra",
     "services/storage",
     "services/keyvault",
+    "services/managedidentity",
+    "services/servicebus",
+    "tools/scaffold",
 ]
 
 [workspace.package]
@@ -14,6 +17,8 @@ edition = "2021"
 
 [workspace.dependencies]
 emulator-core = { path = "core/emulator-core" }
+service-servicebus = { path = "services/servicebus" }
+service-managedidentity = { path = "services/managedidentity" }
 service-entra = { path = "services/entra" }
 service-storage = { path = "services/storage" }
 service-keyvault = { path = "services/keyvault" }

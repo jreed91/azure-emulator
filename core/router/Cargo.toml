@@ -5,6 +5,8 @@ edition.workspace = true
 
 [dependencies]
 emulator-core = { workspace = true }
+service-servicebus = { workspace = true }
+service-managedidentity = { workspace = true }
 service-entra = { workspace = true }
 service-storage = { workspace = true }
 service-keyvault = { workspace = true }

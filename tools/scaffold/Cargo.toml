@@ -1,0 +1,11 @@
+[package]
+name = "emulator-scaffold"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

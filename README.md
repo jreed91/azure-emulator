@@ -20,9 +20,27 @@ workloads or to test security.
 | `Microsoft.Storage` | Storage accounts: create, get, update, delete, list, `listKeys`, `regenerateKey`, `checkNameAvailability` |
 | Blob service | Containers: create, delete, properties, list. Block blobs: upload (single request), download with ranges, properties, metadata, delete, list with prefix, delimiter and paging. Authorization by Entra token or verified Shared Key |
 | `Microsoft.KeyVault` | Vaults: create, get, update, delete, list, `checkNameAvailability` |
+| `Microsoft.ManagedIdentity` | User-assigned identities: create, get, update, delete, list |
 | Key Vault secrets | Set, get (latest or by version), update attributes, list, list versions, soft delete, get and list deleted, recover, purge |
 
-`tests/sdk/python_smoke.py` exercises all of the above through the official Azure
+Beyond these, every resource type in the Storage, Key Vault, Managed Identity and
+Service Bus specifications is mounted from a generated scaffold and answers `501`
+until someone implements it. `azure-emulator coverage` prints the current score:
+
+```
+Provider                                  Types     Operations
+Microsoft.KeyVault                         1/16           7/51
+Microsoft.ManagedIdentity                   1/2           6/14
+Microsoft.ServiceBus                       0/21           0/91
+Microsoft.Storage                          1/32          9/153
+Total                                      3/71         22/309
+```
+
+That score counts control-plane (Resource Manager) operations only; data planes
+such as Blob and Key Vault secrets are not in it. Add `--operations` to list every
+operation with its status.
+
+`tests/sdk/python_smoke.py` exercises the implemented control planes, Blob and secrets through the official Azure
 SDKs for Python and passes. No other SDK, the Azure CLI or Terraform has been
 tried yet.
 
@@ -33,7 +51,11 @@ tried yet.
   token for the right audience is allowed everything.
 - There is no application registry: the token service accepts any client id that
   presents a credential.
-- `api-version` is checked for shape only; every version gets the same behaviour.
+- A scaffolded type accepts exactly the `api-version`s in the specification
+  repository, so a version Azure still serves but the repository has dropped is
+  refused. Every accepted version gets the same behaviour.
+- Operations the ARM layer cannot route yet (tenant-, location- and
+  extension-scoped ones) are listed by `coverage` as `501`.
 - Blob: block lists (large uploads), page and append blobs, leases, snapshots,
   shared access signatures, copy, and conditional headers other than
   `If-None-Match: *`.
@@ -132,16 +154,40 @@ Each `Emulator` is fully isolated. `core/router/tests/` shows how to drive it.
 │   ├── entra/           # token service
 │   ├── storage/         # Microsoft.Storage + Blob data plane
 │   └── keyvault/        # Microsoft.KeyVault + secrets data plane
+├── tools/scaffold/      # emulator-scaffold: OpenAPI specification → service scaffold
 └── tests/sdk/           # checks that run real Azure SDKs against the emulator
 ```
 
+Each service crate also holds two generated files: `src/scaffold.rs`, the table of
+resource types, `api-version`s and operations that gets mounted, and `CONTRACT.md`,
+what the specification says about each type (operations, name rules, properties).
+
 ### Adding a resource provider
 
+Providers are scaffolded from their OpenAPI documents in
+[Azure/azure-rest-api-specs](https://github.com/Azure/azure-rest-api-specs):
+
+```bash
+cargo run -p emulator-scaffold -- \
+    --namespace Microsoft.ServiceBus --service servicebus \
+    --spec /path/to/azure-rest-api-specs/specification/servicebus/resource-manager
+```
+
+The first run creates `services/servicebus/`, adds it to the workspace and
+registers it in the router. Every run rewrites `src/scaffold.rs` and
+`CONTRACT.md`; nothing hand-written is touched, so it is safe to rerun when the
+specification changes. From then on every type in the provider is routable and
+answers `501`.
+
+### Implementing a resource type
+
 Resource Manager is implemented once in `core/emulator-core/src/arm.rs`:
-authentication, the resource envelope, storage, listing, deletion and cascade. A
-provider implements `ResourceTypeHandler` for each resource type (validation,
-`properties`, actions) and registers it in `core/router/src/lib.rs`. See
-`services/keyvault/src/lib.rs` for a small complete example.
+authentication, `api-version` checks, the resource envelope, storage, listing,
+deletion and cascade. To implement a type, write a `ResourceTypeHandler` for it
+(validation, `properties`, actions) and register it in the crate's `register`
+before the scaffold. `CONTRACT.md` says what the type's body and name must look
+like. `services/managedidentity/src/lib.rs` is a small complete example, and
+`azure-emulator coverage` shows the operations move from `501` to `ok`.
 
 A data plane is a function from a request to a response, selected by hostname in
 `core/router/src/lib.rs`.
