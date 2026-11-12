@@ -16,3 +16,6 @@ md-5 = { workspace = true }
 percent-encoding = { workspace = true }
 rand = { workspace = true }
 sha2 = { workspace = true }
+
+[lints]
+workspace = true
