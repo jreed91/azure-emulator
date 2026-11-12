@@ -37,6 +37,9 @@ impl Emulator {
         let mut registry = ArmRegistry::new();
         service_storage::register(&mut registry);
         service_keyvault::register(&mut registry);
+        service_managedidentity::register(&mut registry);
+        service_servicebus::register(&mut registry);
+        // emulator-scaffold: new services are registered above this line.
         Self {
             engine: Arc::new(Engine::new(config)),
             registry: Arc::new(registry),
@@ -45,6 +48,12 @@ impl Emulator {
 
     pub fn config(&self) -> &Config {
         self.engine.config()
+    }
+
+    /// Every operation in the mounted providers' specifications, and whether this
+    /// emulator implements it.
+    pub fn coverage(&self) -> Vec<arm::OperationCoverage> {
+        self.registry.coverage()
     }
 
     /// The HTTP service for this instance.

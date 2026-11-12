@@ -9,6 +9,11 @@ azure-emulator — a local emulator of the Azure APIs
 
 USAGE:
     azure-emulator [OPTIONS]
+    azure-emulator coverage [--operations]
+
+COMMANDS:
+    coverage               Print how much of each provider's API specification is
+                           implemented; --operations lists every operation
 
 OPTIONS:
     -p, --port <PORT>      Port to listen on [env: AZURE_EMULATOR_PORT] [default: 10443]
@@ -24,8 +29,76 @@ fn fail(message: impl std::fmt::Display) -> ! {
     std::process::exit(2);
 }
 
+/// Prints, per provider, how many modeled resource types and operations are
+/// implemented rather than answered with 501.
+fn print_coverage(list_operations: bool) {
+    use std::collections::{BTreeMap, BTreeSet};
+    let coverage = Emulator::new(Config::default()).coverage();
+    #[derive(Default)]
+    struct Totals<'a> {
+        types: BTreeSet<&'a str>,
+        implemented_types: BTreeSet<&'a str>,
+        operations: usize,
+        implemented: usize,
+    }
+    let mut providers: BTreeMap<&str, Totals> = BTreeMap::new();
+    for entry in &coverage {
+        let totals = providers.entry(entry.namespace).or_default();
+        totals.operations += 1;
+        totals.implemented += usize::from(entry.implemented);
+        if let Some(kind) = entry.resource_type {
+            totals.types.insert(kind);
+            // A type counts once any of its operations works.
+            if entry.implemented {
+                totals.implemented_types.insert(kind);
+            }
+        }
+    }
+    println!("{:<34} {:>12} {:>14}", "Provider", "Types", "Operations");
+    let (mut types, mut done_types, mut operations, mut done) = (0, 0, 0, 0);
+    for (namespace, totals) in &providers {
+        println!(
+            "{:<34} {:>12} {:>14}",
+            namespace,
+            format!("{}/{}", totals.implemented_types.len(), totals.types.len()),
+            format!("{}/{}", totals.implemented, totals.operations)
+        );
+        types += totals.types.len();
+        done_types += totals.implemented_types.len();
+        operations += totals.operations;
+        done += totals.implemented;
+    }
+    println!(
+        "{:<34} {:>12} {:>14}",
+        "Total",
+        format!("{done_types}/{types}"),
+        format!("{done}/{operations}")
+    );
+    if list_operations {
+        println!();
+        for entry in &coverage {
+            println!(
+                "{}  {:<6} {}  ({})",
+                if entry.implemented { "ok  " } else { "501 " },
+                entry.operation.method,
+                entry.operation.path,
+                entry.operation.id
+            );
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if arguments.first().is_some_and(|a| a == "coverage") {
+        match &arguments[1..] {
+            [] => print_coverage(false),
+            [flag] if flag == "--operations" => print_coverage(true),
+            _ => fail("coverage takes only --operations"),
+        }
+        return;
+    }
     let mut config = Config::default();
     let mut bind = "127.0.0.1".to_string();
     if let Ok(port) = std::env::var("AZURE_EMULATOR_PORT") {

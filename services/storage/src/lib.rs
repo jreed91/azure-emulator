@@ -2,6 +2,7 @@
 //! Manager and the Blob service data plane on `{account}.blob.core.<suffix>`.
 
 pub mod blob;
+pub mod scaffold;
 mod shared_key;
 mod state;
 
@@ -25,6 +26,8 @@ pub fn register(registry: &mut ArmRegistry) {
         "Microsoft.Storage/checkNameAvailability",
         Arc::new(check_name_availability),
     );
+    // Everything else in the specification is mounted as a 501 stub.
+    registry.register_scaffold(&scaffold::PROVIDER);
 }
 
 fn now_iso() -> String {
@@ -134,6 +137,10 @@ impl ResourceTypeHandler for StorageAccounts {
         // Only the services the emulator serves are advertised.
         properties["primaryEndpoints"] = json!({"blob": ctx.engine.config().blob_endpoint(name)});
         Ok(properties)
+    }
+
+    fn actions(&self) -> &'static [&'static str] {
+        &["listKeys", "regenerateKey"]
     }
 
     fn deleted(&self, ctx: &ArmContext<'_>, resource: &Resource) {

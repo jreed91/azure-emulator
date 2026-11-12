@@ -7,6 +7,8 @@ mod support;
 mod arm;
 #[path = "all/entra.rs"]
 mod entra;
+#[path = "all/scaffold.rs"]
+mod scaffold;
 #[path = "all/keyvault.rs"]
 mod keyvault;
 #[path = "all/storage.rs"]
