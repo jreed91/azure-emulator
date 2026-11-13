@@ -90,7 +90,8 @@ fn purge_deleted(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Reply 
     }
     // The vault's contents are dropped with it, and the name becomes free.
     state.deleted.remove(&key);
-    Ok((StatusCode::OK, Value::Null))
+    // A long-running operation: 202 with a status URL, which reports it done.
+    Ok((StatusCode::ACCEPTED, Value::Null))
 }
 
 // ---- access policies ----------------------------------------------------------

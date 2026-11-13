@@ -30,6 +30,8 @@ pub(crate) struct Vault {
     pub(crate) keys: crate::keys::KeyStore,
     /// Soft-deleted keys, keyed the same way.
     pub(crate) deleted_keys: BTreeMap<String, crate::keys::DeletedKey>,
+    /// The certificate contacts, as last set.
+    certificate_contacts: Option<Value>,
 }
 
 #[derive(Clone)]
@@ -427,6 +429,13 @@ fn permission_for(method: &Method, collection: &str, rest: &[&str]) -> Option<Ne
     if matches!(collection, "keys" | "deletedkeys") {
         return key_permission_for(method, collection, rest);
     }
+    if collection == "certificates" && rest.first().is_some_and(|r| r.eq_ignore_ascii_case("contacts")) {
+        let action = match method.as_str() {
+            "GET" => "Microsoft.KeyVault/vaults/certificates/read",
+            _ => "Microsoft.KeyVault/vaults/certificatecontacts/write",
+        };
+        return Some(Needed { kind: "certificates", action, policy: "managecontacts" });
+    }
     let needed = |action, policy| Some(Needed { kind: "secrets", action, policy });
     const READ_METADATA: &str = "Microsoft.KeyVault/vaults/secrets/readMetadata/action";
     match (collection, rest, method.as_str()) {
@@ -460,6 +469,8 @@ fn key_permission_for(method: &Method, collection: &str, rest: &[&str]) -> Optio
         ("keys", [], "GET") | ("keys", [_, "versions"], "GET") => needed(READ, "list"),
         ("keys", [_, "create"], "POST") => needed("Microsoft.KeyVault/vaults/keys/create/action", "create"),
         ("keys", [_, "rotate"], "POST") => needed("Microsoft.KeyVault/vaults/keys/rotate/action", "rotate"),
+        ("keys", [_, "rotationpolicy"], "GET") => needed("Microsoft.KeyVault/vaults/keyrotationpolicies/read", "getrotationpolicy"),
+        ("keys", [_, "rotationpolicy"], "PUT") => needed("Microsoft.KeyVault/vaults/keyrotationpolicies/write", "setrotationpolicy"),
         ("keys", [_, op], "POST") | ("keys", [_, _, op], "POST") => crypto(op),
         ("keys", [_], "PUT") => needed("Microsoft.KeyVault/vaults/keys/import/action", "import"),
         ("keys", [_] | [_, _], "GET") => needed(READ, "get"),
@@ -540,6 +551,31 @@ fn check_access(engine: &Engine, vault: &str, claims: &auth::Claims, needed: &Ne
     ))
 }
 
+/// The vault's certificate contacts: get, set and delete.
+fn certificate_contacts(engine: &Engine, vault: &str, method: &Method, body: &Value) -> Result<Response, ArmError> {
+    let state = engine.state::<KeyVaultState>();
+    let mut state = state.lock();
+    let data = state.vaults.get_mut(vault).ok_or_else(|| ArmError::not_found("VaultNotFound", "The vault was not found."))?;
+    let id = format!("{}certificates/contacts", engine.config().vault_uri(vault));
+    let document = |contacts: &Value| json!({"id": id, "contacts": contacts});
+    // Unverified against Azure: the code and message when no contacts are set.
+    let none = || ArmError::not_found("ContactsNotFound", "Contacts not found");
+    let reply = match method.as_str() {
+        "GET" => document(data.certificate_contacts.as_ref().ok_or_else(none)?),
+        "PUT" => {
+            let contacts = body
+                .get("contacts")
+                .filter(|c| c.is_array())
+                .ok_or_else(|| ArmError::bad_request("BadParameter", "The property 'contacts' must be an array."))?;
+            data.certificate_contacts = Some(contacts.clone());
+            document(contacts)
+        }
+        "DELETE" => document(&data.certificate_contacts.take().ok_or_else(none)?),
+        _ => return Err(ArmError::not_implemented("this Key Vault operation")),
+    };
+    Ok(json_response(StatusCode::OK, &reply))
+}
+
 /// Serves one Key Vault data-plane request addressed to `vault`.
 pub async fn handle(engine: Arc<Engine>, vault: String, request: Request<Body>) -> Response {
     let (parts, body) = request.into_parts();
@@ -610,6 +646,9 @@ async fn serve(
     let method = &parts.method;
     if let Some(needed) = permission_for(method, &collection, &rest) {
         check_access(engine, vault, &claims, &needed, rest.first().copied())?;
+    }
+    if collection == "certificates" && matches!(rest.as_slice(), [contacts] if contacts.eq_ignore_ascii_case("contacts")) {
+        return certificate_contacts(engine, vault, method, &body).map_err(fail);
     }
     if matches!(collection.as_str(), "keys" | "deletedkeys" | "rng") {
         return crate::keys_data::serve(engine, vault, method, &collection, &rest, &body)

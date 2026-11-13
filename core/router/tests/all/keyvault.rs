@@ -203,7 +203,10 @@ async fn vaults_are_soft_deleted_and_recoverable() {
     // Purging frees the name and drops the contents for good.
     client.arm(Method::DELETE, &vault_path("demo-vault"), None).await;
     let purge = one("eastus").replace("?", "/purge?");
-    assert_eq!(client.arm(Method::POST, &purge, None).await.status, StatusCode::OK);
+    // A long-running operation: 202 with a status URL.
+    let reply = client.arm(Method::POST, &purge, None).await;
+    assert_eq!(reply.status, StatusCode::ACCEPTED);
+    assert!(reply.header("location").contains("/operationresults/"));
     assert_eq!(client.arm(Method::POST, &purge, None).await.status, StatusCode::NOT_FOUND);
     let reply = client.arm(Method::POST, &check, Some(json!({"name": "demo-vault"}))).await;
     assert_eq!(reply.json()["nameAvailable"], true);
@@ -436,4 +439,34 @@ async fn managed_hsm_keys() {
     let body = json!({"location": "eastus", "properties": {"tenantId": client.config().tenant_id, "initialAdminObjectIds": ["a"]}});
     client.arm(Method::PUT, &hsm_path("keys-hsm"), Some(body)).await;
     assert_eq!(client.arm(Method::GET, &key(""), None).await.json(), json!({"value": []}));
+}
+
+#[tokio::test]
+async fn certificate_contacts_and_key_rotation_policies() {
+    let (client, authorization) = vault_client().await;
+    let reply = call(&client, &authorization, Method::GET, "/certificates/contacts", None).await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+    let contacts = json!({"contacts": [{"email": "ops@example.com", "name": "Ops"}]});
+    let reply = call(&client, &authorization, Method::PUT, "/certificates/contacts", Some(contacts.clone())).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    let reply = call(&client, &authorization, Method::GET, "/certificates/contacts", None).await;
+    assert_eq!(reply.json()["contacts"], contacts["contacts"]);
+    assert_eq!(reply.json()["id"], "https://demo-vault.vault.azure.localhost:10443/certificates/contacts");
+    let reply = call(&client, &authorization, Method::DELETE, "/certificates/contacts", None).await;
+    assert_eq!(reply.status, StatusCode::OK);
+    let reply = call(&client, &authorization, Method::GET, "/certificates/contacts", None).await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+
+    let reply = call(&client, &authorization, Method::POST, "/keys/signing/create", Some(json!({"kty": "EC"}))).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    // Not a version named "rotationpolicy": the default policy.
+    let reply = call(&client, &authorization, Method::GET, "/keys/signing/rotationpolicy", None).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(reply.json()["lifetimeActions"][0]["action"]["type"], "Notify");
+    let policy = json!({"lifetimeActions": [{"trigger": {"timeAfterCreate": "P90D"}, "action": {"type": "Rotate"}}], "attributes": {"expiryTime": "P1Y"}});
+    let reply = call(&client, &authorization, Method::PUT, "/keys/signing/rotationpolicy", Some(policy)).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    let reply = call(&client, &authorization, Method::GET, "/keys/signing/rotationpolicy", None).await;
+    assert_eq!(reply.json()["lifetimeActions"][0]["action"]["type"], "Rotate");
+    assert_eq!(reply.json()["attributes"]["expiryTime"], "P1Y");
 }

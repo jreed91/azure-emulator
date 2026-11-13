@@ -71,6 +71,7 @@ pub(crate) fn register(registry: &mut ArmRegistry) {
     registry.register_operation("BlobContainers_Create", Arc::new(put_container));
     registry.register_operation("BlobContainers_Update", Arc::new(patch_container));
     registry.register_operation("BlobContainers_Delete", Arc::new(delete_container));
+    registry.register_operation("StorageAccounts_GetCustomerInitiatedMigration", Arc::new(get_migration));
 }
 
 fn invalid(message: impl Into<String>) -> ArmError {
@@ -601,6 +602,39 @@ pub(crate) fn require_account(ctx: &ArmContext<'_>, name: &str) -> Result<String
 
 /// The sub-resources of an account a private endpoint can target: one per
 /// service, plus the secondary endpoints of a read-access geo-redundant account.
+/// Get Customer Initiated Migration. The emulator never migrates an account, so
+/// the one migration (`default`) targets the account's own SKU and has no
+/// status. Clients read this for every account (Terraform's azurerm provider
+/// refuses a 404). Unverified against Azure: the body for an account that was
+/// never migrated; the specification only gives examples of migrations.
+fn get_migration(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Reply {
+    let id = require_account(ctx, request.param("accountName"))?;
+    let name = request.param("migrationName");
+    if name != "default" {
+        return Err(ArmError::not_found("ResourceNotFound", format!("The migration '{name}' was not found.")));
+    }
+    let sku = {
+        let state = ctx.engine.state::<ArmState>();
+        let state = state.lock();
+        let sku = state
+            .resource(&id)
+            .and_then(|account| account.sku.as_ref())
+            .and_then(|sku| sku.get("name"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        sku
+    };
+    Ok((
+        StatusCode::OK,
+        json!({
+            "id": format!("{id}/accountMigrations/default"),
+            "name": "default",
+            "type": "Microsoft.Storage/storageAccounts/accountMigrations",
+            "properties": {"targetSkuName": sku},
+        }),
+    ))
+}
+
 fn private_link_resources(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Reply {
     let id = require_account(ctx, request.param("accountName"))?;
     let has_secondary = {

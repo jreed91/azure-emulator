@@ -41,9 +41,14 @@ async fn subscription_and_metadata() {
         .send(Method::GET, "localhost:10443", "/metadata/endpoints?api-version=2022-09-01", &[], "")
         .await;
     assert_eq!(reply.status, StatusCode::OK);
-    let cloud = &reply.json()[0];
+    // An object for this version: what Terraform's azurerm provider reads.
+    let cloud = &reply.json();
     assert_eq!(cloud["resourceManager"], "https://localhost:10443/");
     assert_eq!(cloud["suffixes"]["storage"], "core.azure.localhost:10443");
+    let reply = client
+        .send(Method::GET, "localhost:10443", "/metadata/endpoints?api-version=2020-06-01", &[], "")
+        .await;
+    assert_eq!(reply.json()[0]["resourceManager"], "https://localhost:10443/");
 }
 
 #[tokio::test]
@@ -117,4 +122,40 @@ async fn unknown_providers_and_types_are_refused() {
     // Anything unimplemented is an honest 501, never a made-up success.
     let reply = client.arm(Method::GET, &format!("{SUB}/locations?api-version=2022-12-01"), None).await;
     assert_eq!(reply.status, StatusCode::NOT_IMPLEMENTED);
+}
+
+
+#[tokio::test]
+async fn generic_listing_filters() {
+    let client = Client::new();
+    client.create_group("filtered").await;
+    client.create_group("other").await;
+    let identity = |group: &str, name: &str| {
+        format!("{SUB}/resourceGroups/{group}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{name}?api-version=2023-01-31")
+    };
+    client.arm(Method::PUT, &identity("filtered", "alpha"), Some(json!({"location": "eastus", "tags": {"team": "a"}}))).await;
+    client.arm(Method::PUT, &identity("other", "beta"), Some(json!({"location": "westus", "tags": {"team": "b"}}))).await;
+    let vault = json!({"location": "eastus", "properties": {"tenantId": client.config().tenant_id, "sku": {"family": "A", "name": "standard"}}});
+    client
+        .arm(Method::PUT, &format!("{SUB}/resourceGroups/filtered/providers/Microsoft.KeyVault/vaults/filtered-kv?api-version=2023-07-01"), Some(vault))
+        .await;
+    let names = |filter: &str| {
+        let client = &client;
+        let path = format!("{SUB}/resources?api-version=2021-04-01&$filter={}", filter.replace(' ', "%20").replace('\'', "%27"));
+        async move {
+            let reply = client.arm(Method::GET, &path, None).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+            let mut names: Vec<String> = reply.json()["value"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap().to_string()).collect();
+            names.sort();
+            names
+        }
+    };
+    assert_eq!(names("resourceType eq 'Microsoft.KeyVault/vaults'").await, ["filtered-kv"]);
+    assert_eq!(names("resourceType eq 'microsoft.managedidentity/userassignedidentities'").await, ["alpha", "beta"]);
+    assert_eq!(names("location eq 'westus' or name eq 'alpha'").await, ["alpha", "beta"]);
+    assert_eq!(names("tagName eq 'team' and tagValue eq 'b'").await, ["beta"]);
+    assert_eq!(names("substringof('lph', name)").await, ["alpha"]);
+    assert_eq!(names("resourceGroup eq 'filtered' and resourceType eq 'Microsoft.ManagedIdentity/userAssignedIdentities'").await, ["alpha"]);
+    let reply = client.arm(Method::GET, &format!("{SUB}/resources?api-version=2021-04-01&$filter=bogus"), None).await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST);
 }

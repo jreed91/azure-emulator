@@ -70,6 +70,8 @@ pub(crate) fn serve(
         ("keys", "PUT", [_]) => keys.import(rest[0]).map(Some),
         ("keys", "POST", [_, "rotate"]) => keys.rotate(rest[0]).map(Some),
         ("keys", "GET", [_, "versions"]) => keys.versions(rest[0]).map(Some),
+        ("keys", "GET", [_, "rotationpolicy"]) => keys.rotation_policy(rest[0], None).map(Some),
+        ("keys", "PUT", [_, "rotationpolicy"]) => keys.rotation_policy(rest[0], Some(body)).map(Some),
         ("keys", "POST", [_, op]) if crypto_op(op).is_some() => keys.crypto(rest[0], None, crypto_op(op).expect("checked")).map(Some),
         ("keys", "POST", [_, _, op]) if crypto_op(op).is_some() => {
             keys.crypto(rest[0], Some(rest[1]), crypto_op(op).expect("checked")).map(Some)
@@ -203,7 +205,7 @@ impl Keys<'_> {
                     format!("Key {name} is currently in a deleted but recoverable state, and its name cannot be reused; in this state, the key can only be recovered or purged."),
                 ));
             }
-            let key = vault.keys.entry(lower).or_insert_with(|| Key { name: name.to_string(), versions: Vec::new() });
+            let key = vault.keys.entry(lower).or_insert_with(|| Key { name: name.to_string(), versions: Vec::new(), rotation_policy: None });
             key.versions.push(version);
             Ok(self.bundle(key, key.versions.last().expect("just pushed")))
         })
@@ -463,6 +465,40 @@ impl Keys<'_> {
         }
         .map_err(bad)?;
         Ok(json!({"kid": kid, "value": crypto::encode(&result)}))
+    }
+
+    /// Get or set a key's rotation policy. Policies are stored and returned but
+    /// not acted on: keys rotate only when asked to.
+    fn rotation_policy(&self, name: &str, given: Option<&Value>) -> Result<Value, ArmError> {
+        let id = format!("{}keys/{name}/rotationpolicy", self.base());
+        self.with_vault(|vault| {
+            let key = vault.keys.get_mut(&name.to_ascii_lowercase()).ok_or_else(|| key_not_found(name))?;
+            if let Some(given) = given {
+                let actions = given.get("lifetimeActions").cloned().unwrap_or_else(|| json!([]));
+                if !actions.is_array() {
+                    return Err(bad("The property 'lifetimeActions' must be an array."));
+                }
+                let stamp = now();
+                let created = key
+                    .rotation_policy
+                    .as_ref()
+                    .and_then(|p| p.pointer("/attributes/created").cloned())
+                    .unwrap_or(json!(stamp));
+                let mut attributes = json!({"created": created, "updated": stamp});
+                if let Some(expiry) = given.pointer("/attributes/expiryTime").filter(|v| !v.is_null()) {
+                    attributes["expiryTime"] = expiry.clone();
+                }
+                key.rotation_policy = Some(json!({"id": id, "lifetimeActions": actions, "attributes": attributes}));
+            }
+            // Without one, a key has the default policy: notify 30 days before expiry.
+            Ok(key.rotation_policy.clone().unwrap_or_else(|| {
+                json!({
+                    "id": id,
+                    "lifetimeActions": [{"trigger": {"timeBeforeExpiry": "P30D"}, "action": {"type": "Notify"}}],
+                    "attributes": {},
+                })
+            }))
+        })
     }
 
     /// Get Random Bytes: `count` bytes from the system's generator.

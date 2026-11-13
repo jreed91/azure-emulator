@@ -119,3 +119,15 @@ def test_management_and_data_plane_share_keys(keyvault, keys, group, vault):
     created = keys.create_rsa_key("shared")
     from_arm = keyvault.keys.get(group, vault.name, "shared")
     assert from_arm.key_uri_with_version == created.id
+
+
+def test_rotation_policy(keys):
+    from azure.keyvault.keys import KeyRotationLifetimeAction, KeyRotationPolicyAction
+
+    keys.create_rsa_key("rotating")
+    default = keys.get_key_rotation_policy("rotating")
+    assert [a.action for a in default.lifetime_actions] == [KeyRotationPolicyAction.notify]
+    action = KeyRotationLifetimeAction(KeyRotationPolicyAction.rotate, time_after_create="P90D")
+    updated = keys.update_key_rotation_policy("rotating", default, lifetime_actions=[action], expires_in="P1Y")
+    assert updated.expires_in == "P1Y"
+    assert keys.get_key_rotation_policy("rotating").lifetime_actions[0].action == KeyRotationPolicyAction.rotate

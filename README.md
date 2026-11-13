@@ -17,7 +17,7 @@ rely on it as a security boundary.
 | Area | Implemented |
 |---|---|
 | Entra ID (login) | OpenID Connect discovery, instance discovery, signing keys, client-credentials tokens (v1 and v2 endpoints), managed-identity (IMDS) tokens |
-| Resource Manager | Bearer-token verification, `api-version` checks, subscriptions, tenants, resource groups (create, get, exists, tag, list, delete with cascade), providers, generic resource listing, cloud metadata document |
+| Resource Manager | Bearer-token verification, `api-version` checks, subscriptions, tenants, resource groups (create, get, exists, tag, list, delete with cascade), providers, generic resource listing (with `$filter` on type, name, location, group and tags), cloud metadata document |
 | Role-based access control | All 506 built-in role definitions with Azure's ids and permissions; custom roles; role assignments at subscription, resource group and resource scope (create, get, get by id, delete, list with `atScope()` and `principalId` filters), removed with the scope they are on. Enforcement on requests inside the subscription, deployments' resources included, and on the Blob, Key Vault and Service Bus data planes, when started with `--enforce-rbac`; see [Role-based access control](#role-based-access-control) |
 | Template deployments | ARM templates and compiled Bicep at resource-group and subscription scope: create, get, list, delete, `validate`, `whatIf`, `exportTemplate`, deployment operations, `calculateTemplateHash`. Parameters (types, allowed values, bounds, defaults, user-defined types), variables and variable loops, resource, property and output `copy` loops, conditions, child resources, `dependsOn` ordering, nested deployments (Bicep modules, inner and outer scope, other resource groups), `existing` resources, symbolic names (`languageVersion` 2.0), user-defined functions, lambdas, outputs, and complete mode. About 100 template functions plus every `list*` action, with `uniqueString` and `guid` giving the values Azure gives. See [Template deployments](#template-deployments) |
 | `Microsoft.Storage` | Storage accounts with `listKeys`, `regenerateKey` and `checkNameAvailability`; blob, file, queue and table service properties; blob containers (the same store as the data plane); file shares (Resource Manager only); encryption scopes; lifecycle-management and inventory policies; local users; `listAccountSas` and `listServiceSas`; container legal holds, immutability policies (lock, extend, `If-Match`) and leases, enforced on the Blob data plane; file share leases; object replication policies, with blobs copied between accounts on write; the Queue data plane (queues, metadata, access policies, and messages with visibility timeouts, pop receipts and time to live; Shared Key, SAS and Entra ID) on `<account>.queue.core.azure.localhost`, sharing its queues with Resource Manager; the Table data plane (tables, entities with typed properties, OData `$filter`, `$select` and `$top` queries with continuation, insert, replace, merge and upsert with `If-Match`, and entity group transactions; Shared Key, Shared Key Lite, SAS and Entra ID) on `<account>.table.core.azure.localhost`, sharing its tables with Resource Manager |
@@ -28,19 +28,20 @@ rely on it as a security boundary.
 | `Microsoft.EventHub` | Namespaces (names shared with Service Bus), event hubs, consumer groups, authorization rules with `listKeys` and `regenerateKeys`, network rule sets, `checkNameAvailability`; events over AMQP (see [Event Hubs](#event-hubs)) |
 | `Microsoft.DocumentDB` | Database accounts with `listKeys`, `readonlykeys`, `listConnectionStrings` and `regenerateKey`; SQL databases and containers (the same store as the data plane); the Cosmos DB for NoSQL data plane (see [Cosmos DB](#cosmos-db)) |
 | Key Vault secrets | Set, get (latest or by version), update attributes, list, list versions, soft delete, get and list deleted, recover, purge |
-| Key Vault keys | RSA (2048, 3072, 4096) and EC (P-256, P-384, P-521, P-256K) keys, `-HSM` types in Premium vaults: create, import (JSON Web Key), get (latest or by version), update (operations, attributes, tags), list, list versions, rotate, soft delete with get and list deleted, recover and purge. Encrypt, decrypt, wrap and unwrap with `RSA1_5`, `RSA-OAEP` and `RSA-OAEP-256`; sign and verify with `RS256`–`RS512`, `PS256`–`PS512`, `ES256`, `ES384`, `ES512` and `ES256K` over a digest; random bytes. A key's permitted operations and `enabled` are enforced |
+| Key Vault keys | RSA (2048, 3072, 4096) and EC (P-256, P-384, P-521, P-256K) keys, `-HSM` types in Premium vaults: create, import (JSON Web Key), get (latest or by version), update (operations, attributes, tags), list, list versions, rotate, soft delete with get and list deleted, recover and purge. Encrypt, decrypt, wrap and unwrap with `RSA1_5`, `RSA-OAEP` and `RSA-OAEP-256`; sign and verify with `RS256`–`RS512`, `PS256`–`PS512`, `ES256`, `ES384`, `ES512` and `ES256K` over a digest; rotation policies (stored, not acted on); random bytes; and the vault's certificate contacts. A key's permitted operations and `enabled` are enforced |
 
-Beyond these, every resource type in the Storage, Key Vault, Managed Identity and
-Service Bus specifications is mounted from a generated scaffold and answers `501`
+Beyond these, every resource type in the mounted providers' specifications is mounted from a generated scaffold and answers `501`
 until someone implements it. `azure-emulator coverage` prints the current score:
 
 ```
 Provider                           Types   Operations   Generic
+Microsoft.DocumentDB                4/98       19/387         0
+Microsoft.EventHub                  9/22        37/91         0
 Microsoft.KeyVault                 16/16        50/51         0
 Microsoft.ManagedIdentity            2/2        12/14         0
 Microsoft.ServiceBus               19/21        83/91         0
-Microsoft.Storage                  18/32       93/153        30
-Total                              55/71      238/309        30
+Microsoft.Storage                  19/32       94/153        30
+Total                             69/191      295/787        30
 ```
 
 Private endpoint connections and network security perimeter configurations
@@ -56,9 +57,11 @@ That score counts control-plane (Resource Manager) operations only; data planes
 such as Blob and Key Vault secrets are not in it. Add `--operations` to list every
 operation with its status.
 
-`tests/sdk/` is a pytest suite that exercises the implemented control planes,
-template deployments, Blob and secrets through the official Azure SDKs for Python, and runs in CI. No other SDK, the Azure CLI or Terraform has been
-tried yet.
+`tests/sdk/` and `tests/sdk-js/` exercise the emulator through the official
+Azure SDKs for Python and JavaScript, and `tests/terraform/` applies, re-plans
+and destroys a Terraform configuration with the `azurerm` provider (see
+[Terraform](#terraform)); all three run in CI. The Azure CLI has not been tried
+yet.
 
 ### Not implemented, and why
 
@@ -68,7 +71,7 @@ tried yet.
 | Group | Operations | Why |
 |---|---|---|
 | Fixed service catalogues | `Operations_List` (all four providers), Storage `Skus_List`, `Usages_List`, `Usages_ListByLocation`, `FileServices_ListServiceUsages` / `GetServiceUsage`; Service Bus `PremiumMessagingRegions_List`, `Regions_ListBySku`, `MessagingPlan_Get` / `CreateOrUpdate` | The answer is data about Azure itself (SKUs, regions, quotas, limits, the operation catalogue) that the specification does not contain. Any answer would be invented. |
-| Infrastructure the emulator does not have | Storage `Failover`, `HierarchicalNamespaceMigration`, `AbortHierarchicalNamespaceMigration`, `CustomerInitiatedMigration` / `GetCustomerInitiatedMigration`, `RestoreBlobRanges`, `FileShares_Restore`, `BlobContainers_ObjectLevelWorm`, `DeletedAccounts_List` / `Get`; Service Bus `Namespaces_Failover`, `Namespaces_Migrate`, `MigrationConfigs_CompleteMigration` | Regions to fail over between, migrations of storage layout or DNS names, blob version history, and recovery of deleted accounts and shares. Each needs a model the emulator does not have yet. |
+| Infrastructure the emulator does not have | Storage `Failover`, `HierarchicalNamespaceMigration`, `AbortHierarchicalNamespaceMigration`, `CustomerInitiatedMigration`, `RestoreBlobRanges`, `FileShares_Restore`, `BlobContainers_ObjectLevelWorm`, `DeletedAccounts_List` / `Get`; Service Bus `Namespaces_Failover`, `Namespaces_Migrate`, `MigrationConfigs_CompleteMigration` | Regions to fail over between, migrations of storage layout or DNS names, blob version history, and recovery of deleted accounts and shares. Each needs a model the emulator does not have yet. |
 | Other resource providers | Storage `StorageTaskAssignments_*` and their reports (Microsoft.StorageActions), the three `TestExistingConnection` / `TestProposedConnection` actions (external data sources) | They depend on services outside these four providers. |
 | Not yet built | `UserAssignedIdentities_RevokeTokens`, `ContextCaches_CheckNameAvailability` | Revocation needs per-instance token revocation in the auth layer; context cache name availability needs the names' scope of uniqueness, which the specification does not state. |
 
@@ -81,7 +84,9 @@ tried yet.
   Assignment conditions and deny assignments are not evaluated. Principal ids
   are not checked against a directory, since there is none.
 - There is no application registry: the token service accepts any client id that
-  presents a credential.
+  presents a credential. There is no Microsoft Graph; the cloud metadata
+  document names the emulator as its Graph resource, so clients that require
+  one stay local.
 - A scaffolded type accepts exactly the `api-version`s in the specification
   repository, so a version Azure still serves but the repository has dropped is
   refused. Every accepted version gets the same behaviour.
@@ -118,9 +123,11 @@ tried yet.
   the response, and do not check `x-ms-copy-source-authorization`. Shared access
   signatures that name a stored access policy or use a user delegation key are
   not verified, and a token's IP and protocol restrictions are not enforced.
-- Key Vault: certificates, the managed HSM data plane (and with it symmetric
-  keys and AES algorithms), key backup and restore, key rotation policies and
-  key release, private endpoints, and listing pages. Purge protection is
+- Key Vault: certificates (only the vault's certificate contacts are
+  implemented), the managed HSM data plane (and with it symmetric keys and AES
+  algorithms), key backup and restore, key release, private endpoints, and
+  listing pages. Key rotation policies are stored and returned (a key without
+  one has the default, notify 30 days before expiry) but never rotate a key. Purge protection is
   stored but does not block a purge, and a key's `nbf` and `exp` are stored
   but not enforced.
 - Some error codes and messages are best-effort and have not been compared with
@@ -441,6 +448,34 @@ against it.
 
 The broker is built on `fe2o3-amqp`, vendored with small patches listed in
 `vendor/fe2o3-amqp/PATCHED.md`.
+
+### Terraform
+
+The `azurerm` provider finds the emulator through `metadata_host`, which reads
+the same cloud metadata document Azure serves:
+
+```hcl
+provider "azurerm" {
+  features {}
+  metadata_host                   = "localhost:10443"
+  subscription_id                 = "00000000-0000-0000-0000-000000000000"
+  tenant_id                       = "11111111-1111-1111-1111-111111111111"
+  client_id                       = "terraform"
+  client_secret                   = "any-secret"
+  resource_provider_registrations = "none"
+}
+```
+
+Terraform is a Go program, so it needs the emulator's CA in the bundle Go
+reads (`SSL_CERT_FILE`, together with the system's roots so the provider can
+still be downloaded), and the hostnames of vaults and storage accounts in the
+hosts file, since Go does not resolve `*.localhost` itself.
+`tests/terraform/run.sh` does all of this for its configuration: a resource
+group, managed identity, storage account and container, role assignment, Key
+Vault with a secret and a key, Service Bus namespace and queue, and Event Hubs
+namespace and hub. It applies them, checks that a second plan finds nothing to
+change, and destroys them. The provider waits about two minutes after creating
+a Key Vault and 20 seconds after a resource group, as it does on Azure.
 
 ### Template deployments
 
