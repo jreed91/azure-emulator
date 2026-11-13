@@ -18,7 +18,7 @@ rely on it as a security boundary.
 |---|---|
 | Entra ID (login) | OpenID Connect discovery, instance discovery, signing keys, client-credentials tokens (v1 and v2 endpoints), managed-identity (IMDS) tokens |
 | Resource Manager | Bearer-token verification, `api-version` checks, subscriptions, tenants, resource groups (create, get, exists, tag, list, delete with cascade), providers, generic resource listing, cloud metadata document |
-| Role-based access control | All 506 built-in role definitions with Azure's ids and permissions; custom roles; role assignments at subscription, resource group and resource scope (create, get, get by id, delete, list with `atScope()` and `principalId` filters), removed with the scope they are on. Enforcement on requests inside the subscription, deployments' resources included, when started with `--enforce-rbac`; see [Role-based access control](#role-based-access-control) |
+| Role-based access control | All 506 built-in role definitions with Azure's ids and permissions; custom roles; role assignments at subscription, resource group and resource scope (create, get, get by id, delete, list with `atScope()` and `principalId` filters), removed with the scope they are on. Enforcement on requests inside the subscription, deployments' resources included, and on the Blob, Key Vault and Service Bus data planes, when started with `--enforce-rbac`; see [Role-based access control](#role-based-access-control) |
 | Template deployments | ARM templates and compiled Bicep at resource-group and subscription scope: create, get, list, delete, `validate`, `whatIf`, `exportTemplate`, deployment operations, `calculateTemplateHash`. Parameters (types, allowed values, bounds, defaults, user-defined types), variables and variable loops, resource, property and output `copy` loops, conditions, child resources, `dependsOn` ordering, nested deployments (Bicep modules, inner and outer scope, other resource groups), `existing` resources, symbolic names (`languageVersion` 2.0), user-defined functions, lambdas, outputs, and complete mode. About 100 template functions plus every `list*` action, with `uniqueString` and `guid` giving the values Azure gives. See [Template deployments](#template-deployments) |
 | `Microsoft.Storage` | Storage accounts with `listKeys`, `regenerateKey` and `checkNameAvailability`; blob, file, queue and table service properties; blob containers (the same store as the data plane); queues, tables and file shares (Resource Manager only); encryption scopes; lifecycle-management and inventory policies; local users; `listAccountSas` and `listServiceSas`; container legal holds, immutability policies (lock, extend, `If-Match`) and leases, enforced on the Blob data plane; file share leases; object replication policies, with blobs copied between accounts on write |
 | Blob service | Containers: create, delete, properties, list. Block blobs: upload (single request), download with ranges, properties, metadata, delete, list with prefix, delimiter and paging. Authorization by Entra token, verified Shared Key, or shared access signature (account SAS and container or blob service SAS signed with an account key) |
@@ -73,11 +73,11 @@ tried yet.
 ### Known gaps
 
 - Every other Azure service and resource type.
-- Role assignments are enforced only on Resource Manager, and only with
-  `--enforce-rbac`. Data planes (Blob, Key Vault, Service Bus) still allow any
-  valid token for their audience, and Key Vault access policies are not
-  enforced. Assignment conditions and deny assignments are not evaluated.
-  Principal ids are not checked against a directory, since there is none.
+- Role assignments and Key Vault access policies are enforced only with
+  `--enforce-rbac`. Cosmos DB's own data-plane role assignments
+  (`sqlRoleAssignments`) are not implemented, so Cosmos accepts any valid token.
+  Assignment conditions and deny assignments are not evaluated. Principal ids
+  are not checked against a directory, since there is none.
 - There is no application registry: the token service accepts any client id that
   presents a credential.
 - A scaffolded type accepts exactly the `api-version`s in the specification
@@ -270,7 +270,9 @@ Supported: databases and containers (with partition keys, hierarchical keys,
 unique keys and time to live); items with create, read, replace, upsert,
 delete and patch (`add`, `set`, `replace`, `remove`, `incr`, `move`, with a
 condition); `If-Match` and `If-None-Match`; read feeds and the incremental
-change feed; transactional batches; throughput offers; and queries.
+change feed; transactional batches, and bulk requests whose operations each
+carry their own partition key and succeed or fail independently (the SDKs'
+`executeBulkOperations` and `bulk`); throughput offers; and queries.
 The query language covers `SELECT` with `VALUE`, `DISTINCT` and `TOP`; `JOIN … IN`;
 `WHERE` with comparison, `AND`/`OR`/`NOT`, `IN`, `BETWEEN`, `LIKE`, `??`
 and `?:`; `ORDER BY`, `OFFSET … LIMIT` and `GROUP BY`; the aggregates; `EXISTS`
@@ -420,6 +422,19 @@ inside the subscription against the caller's assignments, as Azure does
 resources are each checked as its caller. Someone has to be able to create
 the first assignments: each `--rbac-owner <id>` (or the comma-separated
 `AZURE_EMULATOR_RBAC_OWNERS`) is treated as Owner of the subscription.
+
+Data planes are checked too, for requests signed with an Entra token. Shared
+Key, shared access signatures and Service Bus SAS tokens are not subject to
+role assignments, as in Azure.
+
+| Data plane | Checked against | Refused with |
+|---|---|---|
+| Blob | Data actions (`.../containers/blobs/read`, `write`, `add/action`, `delete`) at the container; creating, deleting and listing containers are control-plane actions (`.../containers/write`, `delete`, `read`), as in Azure | `403 AuthorizationPermissionMismatch` |
+| Key Vault secrets | For a vault with `enableRbacAuthorization`, data actions (`.../secrets/getSecret/action`, `setSecret`, `readMetadata`, `update`, `delete`, `recover`, `purge`) at the secret; otherwise the vault's access policies (`get`, `list`, `set`, `delete`, `recover`, `purge`, `all`) | `403 Forbidden` (`ForbiddenByRbac` or `AccessDenied`) |
+| Service Bus | `.../messages/send/action` and `receive/action` at the queue, topic or subscription | the link is refused for want of the `Send` or `Listen` claim |
+
+Owner, Contributor and Reader have no data actions, so an `--rbac-owner`
+cannot read blobs or secrets until it is given a data role, as in Azure.
 
 A token's principal is its object id: the client id for the emulator's
 client-credentials tokens, and for a managed identity's token, that

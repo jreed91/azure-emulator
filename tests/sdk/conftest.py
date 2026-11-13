@@ -83,7 +83,7 @@ class Emulator:
 
 
 @contextlib.contextmanager
-def run_emulator(home, amqps_port=None):
+def run_emulator(home, amqps_port=None, extra_args=()):
     """Runs an emulator process with its state and CA in `home`, on free
     ports (and TLS for Service Bus on `amqps_port`, if given)."""
     binary = pathlib.Path(os.environ.get("AZURE_EMULATOR_BIN", REPO / "target/debug/azure-emulator"))
@@ -95,7 +95,7 @@ def run_emulator(home, amqps_port=None):
     base = f"https://localhost:{port}"
     log = open(home / f"emulator-{port}.log", "w")
     process = subprocess.Popen(
-        [str(binary), "--port", str(port), "--amqp-port", str(amqp_port), "--amqps-port", str(amqps_port)],
+        [str(binary), "--port", str(port), "--amqp-port", str(amqp_port), "--amqps-port", str(amqps_port), *extra_args],
         env={**os.environ, "AZURE_EMULATOR_HOME": str(home)},
         stdout=log,
         stderr=subprocess.STDOUT,

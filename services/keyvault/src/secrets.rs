@@ -411,6 +411,96 @@ fn unauthorized(engine: &Engine, message: &str) -> Response {
     response
 }
 
+/// What a secrets operation needs: its data action under role-based access
+/// control, and its permission under an access policy.
+struct Needed {
+    action: &'static str,
+    policy: &'static str,
+}
+
+fn permission_for(method: &Method, collection: &str, rest: &[&str]) -> Option<Needed> {
+    let needed = |action, policy| Some(Needed { action, policy });
+    const READ_METADATA: &str = "Microsoft.KeyVault/vaults/secrets/readMetadata/action";
+    match (collection, rest, method.as_str()) {
+        ("secrets", [], "GET") | ("secrets", [_, "versions"], "GET") => needed(READ_METADATA, "list"),
+        ("secrets", [_], "PUT") => needed("Microsoft.KeyVault/vaults/secrets/setSecret/action", "set"),
+        ("secrets", [_] | [_, _], "GET") => needed("Microsoft.KeyVault/vaults/secrets/getSecret/action", "get"),
+        ("secrets", [_] | [_, _], "PATCH") => needed("Microsoft.KeyVault/vaults/secrets/update/action", "set"),
+        ("secrets", [_], "DELETE") => needed("Microsoft.KeyVault/vaults/secrets/delete", "delete"),
+        ("deletedsecrets", [] | [_], "GET") => needed(READ_METADATA, "list"),
+        ("deletedsecrets", [_], "DELETE") => needed("Microsoft.KeyVault/vaults/secrets/purge/action", "purge"),
+        ("deletedsecrets", [_, "recover"], "POST") => needed("Microsoft.KeyVault/vaults/secrets/recover/action", "recover"),
+        _ => None,
+    }
+}
+
+/// With role assignments enforced, checks the caller against the vault's
+/// permission model: role assignments for a vault with
+/// `enableRbacAuthorization`, its access policies otherwise.
+fn check_access(engine: &Engine, vault: &str, claims: &auth::Claims, needed: &Needed, secret: Option<&str>) -> Result<(), Response> {
+    use emulator_core::arm::{data_access, principal_ids, ArmState, Permission};
+    if !engine.config().enforce_rbac {
+        return Ok(());
+    }
+    let (vault_id, location, properties) = {
+        let state = engine.state::<ArmState>();
+        let state = state.lock();
+        let found = state
+            .resources()
+            .find(|r| r.resource_type.eq_ignore_ascii_case("Microsoft.KeyVault/vaults") && r.name.eq_ignore_ascii_case(vault))
+            .map(|r| (r.id.clone(), r.location.clone().unwrap_or_default(), r.properties.clone()));
+        found.unwrap_or_default()
+    };
+    let caller = format!("appid={};oid={};iss={}", claims.appid, claims.oid, claims.iss);
+    let forbidden = |message: String, inner: &str| {
+        json_response(
+            StatusCode::FORBIDDEN,
+            &json!({"error": {"code": "Forbidden", "message": message, "innererror": {"code": inner}}}),
+        )
+    };
+    if properties.get("enableRbacAuthorization").and_then(Value::as_bool) == Some(true) {
+        let scope = match secret {
+            Some(name) => format!("{vault_id}/secrets/{name}"),
+            None => vault_id.clone(),
+        };
+        if data_access(engine, &claims.oid, &[Permission::Data(needed.action)], &scope) {
+            return Ok(());
+        }
+        return Err(forbidden(
+            format!(
+                "Caller is not authorized to perform action on resource.\r\nIf role assignments, deny assignments or role definitions were changed recently, please observe propagation time.\r\nCaller: {caller}\r\nAction: '{}'\r\nResource: '{}'\r\nAssignment: (not found)\r\nDenyAssignmentId: null\r\nDecisionReason: null \r\nVault: {vault};location={}\r\n",
+                needed.action,
+                scope.to_ascii_lowercase(),
+                location,
+            ),
+            "ForbiddenByRbac",
+        ));
+    }
+    let ids = principal_ids(engine, &claims.oid);
+    let tenant = &engine.config().tenant_id;
+    let allowed = properties
+        .get("accessPolicies")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|p| p.get("tenantId").and_then(Value::as_str).is_none_or(|t| t.eq_ignore_ascii_case(tenant)))
+        .filter(|p| p.get("objectId").and_then(Value::as_str).is_some_and(|o| ids.iter().any(|id| id.eq_ignore_ascii_case(o))))
+        .flat_map(|p| p.pointer("/permissions/secrets").and_then(Value::as_array).cloned().unwrap_or_default())
+        .filter_map(|p| p.as_str().map(str::to_ascii_lowercase))
+        .any(|p| p == needed.policy || p == "all");
+    if allowed {
+        return Ok(());
+    }
+    Err(forbidden(
+        format!(
+            "The user, group or application '{caller}' does not have secrets {} permission on key vault '{vault};location={}'. For help resolving this issue, please see https://go.microsoft.com/fwlink/?linkid=2125287",
+            needed.policy,
+            location,
+        ),
+        "AccessDenied",
+    ))
+}
+
 /// Serves one Key Vault data-plane request addressed to `vault`.
 pub async fn handle(engine: Arc<Engine>, vault: String, request: Request<Body>) -> Response {
     let (parts, body) = request.into_parts();
@@ -433,7 +523,7 @@ async fn serve(
     let audiences = [engine.config().vault_resource(), "https://vault.azure.net".to_string()];
     // SDKs send their first request without a token (and without a body) to learn
     // from this challenge which authority and resource to ask a token for.
-    auth::authorize(&parts.headers, &audiences).map_err(|failure| {
+    let claims = auth::authorize(&parts.headers, &audiences).map_err(|failure| {
         let message = match failure {
             AuthFailure::Missing => "AKV10000: Request is missing a Bearer or PoP token.",
             AuthFailure::Invalid => "AKV10001: Unable to parse JWT token.",
@@ -478,12 +568,15 @@ async fn serve(
         }
     }
 
+    let method = &parts.method;
+    if let Some(needed) = permission_for(method, &collection, &rest) {
+        check_access(engine, vault, &claims, &needed, rest.first().copied())?;
+    }
     let request = SecretRequest {
         engine,
         vault,
         body: &body,
     };
-    let method = &parts.method;
     let result = match (collection.as_str(), rest.as_slice()) {
         ("secrets", []) if method == Method::GET => request.list(),
         ("secrets", [name]) => match method.as_str() {

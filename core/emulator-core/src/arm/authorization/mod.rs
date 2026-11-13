@@ -114,6 +114,104 @@ fn permits(permissions: &Value, action: &str) -> bool {
     })
 }
 
+/// Whether a role's permissions allow a data action.
+fn permits_data(permissions: &Value, action: &str) -> bool {
+    permissions.as_array().into_iter().flatten().any(|block| {
+        let list = |key: &str| block.get(key).and_then(Value::as_array).cloned().unwrap_or_default();
+        let matches = |key: &str| list(key).iter().filter_map(Value::as_str).any(|p| action_matches(p, action));
+        matches("dataActions") && !matches("notDataActions")
+    })
+}
+
+/// A permission a data-plane request needs. Most are data actions; a few data
+/// operations (creating or listing blob containers) are checked as
+/// control-plane actions, as Azure does.
+#[derive(Clone, Copy, Debug)]
+pub enum Permission<'a> {
+    Action(&'a str),
+    Data(&'a str),
+}
+
+impl Permission<'_> {
+    fn allowed_by(&self, permissions: &Value) -> bool {
+        match self {
+            Permission::Action(action) => permits(permissions, action),
+            Permission::Data(action) => permits_data(permissions, action),
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            Permission::Action(action) | Permission::Data(action) => action,
+        }
+    }
+}
+
+const OWNER_ROLE: &str = "8e3af657-a8ff-443c-a75c-2fe8c4bcb635";
+
+/// The ids a caller's role assignments may name: the token's object id, and
+/// for a managed identity's token (whose object id is its client id) the
+/// identity's principal id.
+pub fn principal_ids(engine: &Engine, oid: &str) -> Vec<String> {
+    let mut ids = vec![oid.to_string()];
+    let state = engine.state::<ArmState>();
+    let state = state.lock();
+    for resource in state.resources() {
+        if resource.resource_type.eq_ignore_ascii_case("Microsoft.ManagedIdentity/userAssignedIdentities")
+            && resource.properties.get("clientId").and_then(Value::as_str) == Some(oid)
+        {
+            if let Some(principal) = resource.properties.get("principalId").and_then(Value::as_str) {
+                ids.push(principal.to_string());
+            }
+        }
+    }
+    for (principal, client) in &state.system_identity_clients {
+        if client == oid {
+            ids.push(principal.clone());
+        }
+    }
+    ids
+}
+
+/// The permissions of every role `oid` holds at `scope`, including Owner of the
+/// subscription for a configured `--rbac-owner`.
+fn roles_at(engine: &Engine, oid: &str, scope: &str) -> Vec<Value> {
+    let config = engine.config();
+    let ids = principal_ids(engine, oid);
+    let mut roles: Vec<String> = Vec::new();
+    if config.rbac_owners.iter().any(|o| o == oid) {
+        roles.push(OWNER_ROLE.to_string());
+    }
+    let state = engine.state::<AuthorizationState>();
+    let state = state.lock();
+    roles.extend(
+        state
+            .assignments
+            .values()
+            .filter(|a| ids.iter().any(|id| id.eq_ignore_ascii_case(&a.principal_id)) && covers(&a.scope, scope))
+            .map(|a| a.role.clone()),
+    );
+    roles
+        .iter()
+        .filter_map(|role| {
+            match builtin_roles().iter().find(|r| r["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(role))) {
+                Some(builtin) => Some(builtin["permissions"].clone()),
+                None => state.custom.get(&role.to_ascii_lowercase()).map(|r| r.permissions.clone()),
+            }
+        })
+        .collect()
+}
+
+/// Whether `oid`'s role assignments allow any of `needed` at `scope`. Always
+/// true unless the emulator enforces role assignments.
+pub fn data_access(engine: &Engine, oid: &str, needed: &[Permission<'_>], scope: &str) -> bool {
+    if !engine.config().enforce_rbac {
+        return true;
+    }
+    let roles = roles_at(engine, oid, scope);
+    needed.iter().any(|permission| roles.iter().any(|permissions| permission.allowed_by(permissions)))
+}
+
 fn role_guid(role_definition_id: &str) -> &str {
     role_definition_id.trim_end_matches('/').rsplit('/').next().unwrap_or("")
 }
@@ -317,57 +415,19 @@ fn provider_permission(method: &Method, base: &str, namespace: &str, rest: &[Str
 }
 
 impl ArmRequest<'_> {
-    /// The ids a caller's role assignments may name: the token's object id, and
-    /// for a managed identity's token (whose object id is its client id) the
-    /// identity's principal id.
-    fn principal_ids(&self, oid: &str) -> Vec<String> {
-        let mut ids = vec![oid.to_string()];
-        let state = self.engine.state::<ArmState>();
-        let state = state.lock();
-        for resource in state.resources() {
-            if resource.resource_type.eq_ignore_ascii_case("Microsoft.ManagedIdentity/userAssignedIdentities")
-                && resource.properties.get("clientId").and_then(Value::as_str) == Some(oid)
-            {
-                if let Some(principal) = resource.properties.get("principalId").and_then(Value::as_str) {
-                    ids.push(principal.to_string());
-                }
-            }
-        }
-        for (principal, client) in &state.system_identity_clients {
-            if client == oid {
-                ids.push(principal.clone());
-            }
-        }
-        ids
-    }
-
     /// Refuses the request unless the caller holds a role that permits it.
     pub(super) fn check_access(&self, segments: &[String]) -> Result<(), ArmError> {
         let config = self.engine.config();
         let Some(oid) = self.principal else {
             return Ok(());
         };
-        if !config.enforce_rbac || oid == crate::auth::PROVISIONING_CLIENT || config.rbac_owners.iter().any(|o| o == oid) {
+        if !config.enforce_rbac || oid == crate::auth::PROVISIONING_CLIENT {
             return Ok(());
         }
         let Some((action, scope)) = required_permission(self.method, segments) else {
             return Ok(());
         };
-        let ids = self.principal_ids(oid);
-        let state = self.engine.state::<AuthorizationState>();
-        let state = state.lock();
-        let allowed = state
-            .assignments
-            .values()
-            .filter(|a| ids.iter().any(|id| id.eq_ignore_ascii_case(&a.principal_id)) && covers(&a.scope, &scope))
-            .any(|a| {
-                let builtin = builtin_roles().iter().find(|r| r["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(&a.role)));
-                match builtin {
-                    Some(role) => permits(&role["permissions"], &action),
-                    None => state.custom.get(&a.role.to_ascii_lowercase()).is_some_and(|r| permits(&r.permissions, &action)),
-                }
-            });
-        if allowed {
+        if roles_at(self.engine, oid, &scope).iter().any(|permissions| permits(permissions, &action)) {
             return Ok(());
         }
         Err(ArmError::new(
@@ -408,9 +468,18 @@ impl ArmRequest<'_> {
                 match rest {
                     [] => Ok(()),
                     [group_word, group] if group_word.eq_ignore_ascii_case("resourceGroups") => self.require_group(group).map(|_| ()),
-                    [group_word, group, ..] if group_word.eq_ignore_ascii_case("resourceGroups") => {
+                    [group_word, group, rest @ ..] if group_word.eq_ignore_ascii_case("resourceGroups") => {
                         self.require_group(group)?;
-                        let exists = self.engine.state::<ArmState>().lock().resource(scope).is_some();
+                        // The top-level resource must exist. Its children may live in a
+                        // service's own state (blob containers made through the data
+                        // plane, Key Vault secrets), so they are not looked up.
+                        let top = match rest {
+                            [providers, namespace, kind, name, ..] if providers.eq_ignore_ascii_case("providers") => {
+                                format!("/subscriptions/{subscription}/resourceGroups/{group}/providers/{namespace}/{kind}/{name}")
+                            }
+                            _ => return Err(invalid_scope(scope)),
+                        };
+                        let exists = self.engine.state::<ArmState>().lock().resource(&top).is_some();
                         if exists {
                             Ok(())
                         } else {

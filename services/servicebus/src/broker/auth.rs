@@ -114,6 +114,34 @@ fn percent_decode(text: &str) -> String {
     emulator_core::http_util::percent_decode(text, true)
 }
 
+/// The resource id role assignments for an entity path are checked at: the
+/// queue, topic or subscription, or the namespace for an empty path.
+fn entity_scope(engine: &Engine, namespace: &str, path: &str) -> String {
+    let state = engine.state::<ArmState>();
+    let state = state.lock();
+    let namespace_id = state
+        .resources()
+        .find(|r| r.resource_type.eq_ignore_ascii_case("Microsoft.ServiceBus/namespaces") && r.name.eq_ignore_ascii_case(namespace))
+        .map(|r| r.id.clone())
+        .unwrap_or_default();
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    match segments.as_slice() {
+        [] => namespace_id,
+        [entity, rest @ ..] => {
+            let queue = format!("{namespace_id}/queues/{entity}");
+            if state.resource(&queue).is_some() {
+                return queue;
+            }
+            match rest {
+                [word, subscription, ..] if word.eq_ignore_ascii_case("subscriptions") => {
+                    format!("{namespace_id}/topics/{entity}/subscriptions/{subscription}")
+                }
+                _ => format!("{namespace_id}/topics/{entity}"),
+            }
+        }
+    }
+}
+
 /// Verifies a CBS token for `audience`. `kind` is the token type the client
 /// declared (`servicebus.windows.net:sastoken` or `jwt`).
 pub(crate) fn verify(engine: &Engine, kind: &str, token: &str, audience: &str) -> Result<Grant, String> {
@@ -125,7 +153,15 @@ pub(crate) fn verify(engine: &Engine, kind: &str, token: &str, audience: &str) -
     if !token.starts_with("SharedAccessSignature ") {
         let audiences = ["https://servicebus.azure.net".to_string(), format!("sb://{namespace}")];
         let claims = emulator_core::auth::verify_token(token, &audiences).map_err(|_| "The token is not valid for Service Bus.".to_string())?;
-        return Ok(Grant { namespace, path: String::new(), send: true, listen: true, expires: claims.exp });
+        if !engine.config().enforce_rbac {
+            return Ok(Grant { namespace, path: String::new(), send: true, listen: true, expires: claims.exp });
+        }
+        // Role assignments decide what an Entra token may do with the entity.
+        use emulator_core::arm::{data_access, Permission};
+        let scope = entity_scope(engine, &namespace, &audience_path);
+        let send = data_access(engine, &claims.oid, &[Permission::Data("Microsoft.ServiceBus/namespaces/messages/send/action")], &scope);
+        let listen = data_access(engine, &claims.oid, &[Permission::Data("Microsoft.ServiceBus/namespaces/messages/receive/action")], &scope);
+        return Ok(Grant { namespace, path: audience_path.to_ascii_lowercase(), send, listen, expires: claims.exp });
     }
     let fields = token.strip_prefix("SharedAccessSignature ").ok_or("The token is not a shared access signature.")?;
     let mut raw_resource = None;
