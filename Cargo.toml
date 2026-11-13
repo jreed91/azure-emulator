@@ -39,6 +39,11 @@ fe2o3-amqp = { version = "0.18", default-features = false, features = ["acceptor
 fe2o3-amqp-types = "0.18"
 serde_amqp = { version = "0.18", features = ["derive"] }
 hmac = "0.12"
+k256 = { version = "0.13", features = ["ecdsa"] }
+p256 = { version = "0.13", features = ["ecdsa"] }
+p384 = { version = "0.13", features = ["ecdsa"] }
+p521 = { version = "0.13", features = ["ecdsa"] }
+sha1 = "0.10"
 http = "1"
 httpdate = "1"
 jsonwebtoken = "9"

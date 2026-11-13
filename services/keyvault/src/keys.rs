@@ -2,8 +2,8 @@
 //! key does not exist), get, list, and their versions.
 //!
 //! Resource Manager only ever shows a key's metadata: its type, size or curve,
-//! permitted operations, attributes and URIs. There is no keys data plane yet,
-//! so no key material is generated; nothing could observe it.
+//! permitted operations, attributes and URIs. Every version has real key
+//! material, which the keys data plane (`keys_data`) uses.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -19,25 +19,37 @@ use crate::KeyVaultState;
 /// Keys by lowercased name.
 pub(crate) type KeyStore = BTreeMap<String, Key>;
 
+#[derive(Clone)]
 pub(crate) struct Key {
     /// The name as first created; ids keep this casing.
-    name: String,
+    pub(crate) name: String,
     /// Oldest first; the last one is the current version.
-    versions: Vec<KeyVersion>,
+    pub(crate) versions: Vec<KeyVersion>,
 }
 
-struct KeyVersion {
-    version: String,
-    kty: String,
-    key_size: Option<i64>,
-    curve: Option<String>,
-    ops: Vec<String>,
+#[derive(Clone)]
+pub(crate) struct KeyVersion {
+    pub(crate) version: String,
+    pub(crate) kty: String,
+    pub(crate) key_size: Option<i64>,
+    pub(crate) curve: Option<String>,
+    pub(crate) ops: Vec<String>,
     /// What the caller set: `enabled`, `nbf`, `exp`, `exportable`.
-    attributes: serde_json::Map<String, Value>,
-    tags: Option<Value>,
-    rotation_policy: Option<Value>,
-    release_policy: Option<Value>,
-    created: i64,
+    pub(crate) attributes: serde_json::Map<String, Value>,
+    pub(crate) tags: Option<Value>,
+    pub(crate) rotation_policy: Option<Value>,
+    pub(crate) release_policy: Option<Value>,
+    pub(crate) created: i64,
+    pub(crate) updated: i64,
+    /// `None` only for symmetric (`oct-HSM`) keys in managed HSMs, which have no
+    /// data plane here.
+    pub(crate) material: Option<crate::crypto::Material>,
+}
+
+/// A soft-deleted key.
+pub(crate) struct DeletedKey {
+    pub(crate) key: Key,
+    pub(crate) deleted_date: i64,
 }
 
 pub(crate) fn register(registry: &mut ArmRegistry) {
@@ -68,7 +80,7 @@ fn invalid(message: impl Into<String>) -> ArmError {
     ArmError::bad_request("BadRequest", message)
 }
 
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
@@ -114,7 +126,7 @@ fn key_json(ctx: &ArmContext<'_>, resource: &Resource, holder: Holder, key: &Key
     let mut attributes = Value::Object(version.attributes.clone());
     attributes["enabled"] = version.attributes.get("enabled").cloned().unwrap_or(json!(true));
     attributes["created"] = json!(version.created);
-    attributes["updated"] = json!(version.created);
+    attributes["updated"] = json!(version.updated);
     // Vaults and HSMs are always soft-deleted here, and purge is not blocked.
     attributes["recoveryLevel"] = json!("Recoverable+Purgeable");
     let mut properties = json!({
@@ -165,7 +177,7 @@ fn key_not_found(name: &str) -> ArmError {
 }
 
 /// The operations a key of this type can be used for.
-fn applicable_ops(kty: &str) -> &'static [&'static str] {
+pub(crate) fn applicable_ops(kty: &str) -> &'static [&'static str] {
     match kty.trim_end_matches("-HSM") {
         "RSA" => &["encrypt", "decrypt", "sign", "verify", "wrapKey", "unwrapKey"],
         "EC" => &["sign", "verify"],
@@ -261,17 +273,24 @@ fn create(ctx: &ArmContext<'_>, request: &OperationRequest<'_>, holder: Holder) 
             attributes.insert(member.into(), value.clone());
         }
     }
+    let material = match kty.as_str() {
+        "oct-HSM" => None,
+        _ => Some(crate::crypto::Material::generate(&kty, key_size, curve.as_deref(), None).map_err(invalid)?),
+    };
+    let created = now();
     let version = KeyVersion {
         version: uuid::Uuid::new_v4().simple().to_string(),
         kty,
         key_size,
         curve,
         ops,
+        material,
+        updated: created,
         attributes,
         tags: request.body.get("tags").filter(|t| !t.is_null()).cloned(),
         rotation_policy: given.get("rotationPolicy").filter(|v| !v.is_null()).cloned(),
         release_policy: given.get("release_policy").filter(|v| !v.is_null()).cloned(),
-        created: now(),
+        created,
     };
     let body = with_keys(ctx, &resource, holder, |store| {
         let key = store.entry(name.to_ascii_lowercase()).or_insert_with(|| Key { name: name.to_string(), versions: Vec::new() });
