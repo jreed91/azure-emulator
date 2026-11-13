@@ -119,3 +119,39 @@ def test_management_and_data_plane_share_keys(keyvault, keys, group, vault):
     created = keys.create_rsa_key("shared")
     from_arm = keyvault.keys.get(group, vault.name, "shared")
     assert from_arm.key_uri_with_version == created.id
+
+
+def test_backup_and_restore(keys):
+    original = keys.create_ec_key("portable", curve=KeyCurveName.p_256)
+    second = keys.create_ec_key("portable", curve=KeyCurveName.p_256)
+    backup = keys.backup_key("portable")
+    keys.begin_delete_key("portable").wait()
+    with pytest.raises(HttpResponseError) as conflict:
+        keys.restore_key_backup(backup)
+    assert conflict.value.status_code == 409, "a deleted key's name is still taken"
+    keys.purge_deleted_key("portable")
+    restored = keys.restore_key_backup(backup)
+    assert (restored.name, restored.key.x, restored.properties.version) == ("portable", second.key.x, second.properties.version)
+    assert keys.get_key("portable", original.properties.version).key.x == original.key.x
+    with pytest.raises(HttpResponseError) as conflict:
+        keys.restore_key_backup(backup)
+    assert conflict.value.status_code == 409
+    with pytest.raises(HttpResponseError):
+        keys.restore_key_backup(b"not a backup")
+
+
+def test_rotation_policy(keys):
+    from azure.keyvault.keys import KeyRotationLifetimeAction, KeyRotationPolicy, KeyRotationPolicyAction
+
+    keys.create_rsa_key("rotated")
+    default = keys.get_key_rotation_policy("rotated")
+    assert [(a.action, a.time_before_expiry) for a in default.lifetime_actions] == [(KeyRotationPolicyAction.notify, "P30D")]
+    policy = keys.update_key_rotation_policy(
+        "rotated",
+        KeyRotationPolicy(lifetime_actions=[KeyRotationLifetimeAction(KeyRotationPolicyAction.rotate, time_after_create="P90D")], expires_in="P1Y"),
+    )
+    assert (policy.expires_in, policy.lifetime_actions[0].time_after_create) == ("P1Y", "P90D")
+    stored = keys.get_key_rotation_policy("rotated")
+    assert (stored.expires_in, stored.lifetime_actions[0].action) == ("P1Y", KeyRotationPolicyAction.rotate)
+    with pytest.raises(ResourceNotFoundError):
+        keys.get_key_rotation_policy("missing")
