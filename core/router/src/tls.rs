@@ -77,6 +77,7 @@ pub fn identity(config: &Config, bind_address: &str) -> Result<TlsIdentity, Erro
         "127.0.0.1".to_string(),
         format!("*{}", config.blob_host_suffix()),
         format!("*{}", config.vault_host_suffix()),
+        format!("*.servicebus.{}", config.dns_suffix),
     ];
     if bind_address.parse::<std::net::IpAddr>().is_ok_and(|ip| !ip.is_unspecified()) {
         names.push(bind_address.to_string());
@@ -96,4 +97,12 @@ pub fn identity(config: &Config, bind_address: &str) -> Result<TlsIdentity, Erro
         private_key_pem: key.serialize_pem(),
         ca_path: dir.join("ca.pem"),
     })
+}
+
+/// A TLS acceptor serving `identity`, for the AMQP-over-TLS listener.
+pub fn acceptor(identity: &TlsIdentity) -> Result<tokio_rustls::TlsAcceptor, Box<dyn std::error::Error + Send + Sync>> {
+    let chain = rustls_pemfile::certs(&mut identity.certificate_chain_pem.as_bytes()).collect::<Result<Vec<_>, _>>()?;
+    let key = rustls_pemfile::private_key(&mut identity.private_key_pem.as_bytes())?.ok_or("the private key PEM holds no key")?;
+    let config = tokio_rustls::rustls::ServerConfig::builder().with_no_client_auth().with_single_cert(chain, key)?;
+    Ok(tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config)))
 }

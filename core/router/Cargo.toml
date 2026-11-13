@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+tokio-rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
 emulator-core = { workspace = true }
 service-servicebus = { workspace = true }
 service-managedidentity = { workspace = true }

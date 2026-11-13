@@ -1,7 +1,7 @@
 # The emulator as a container image: one binary, no other dependencies.
 #
 #   docker build -t azure-emulator .
-#   docker run -p 10443:10443 -p 5672:5672 azure-emulator
+#   docker run -p 10443:10443 -p 5672:5672 -p 5671:5671 azure-emulator
 #
 # Configure it with the AZURE_EMULATOR_* environment variables (see
 # `azure-emulator --help`), and mount a provisioning file with
@@ -23,5 +23,5 @@ USER emulator
 # generated CA certificate where a volume can share it with clients.
 ENV AZURE_EMULATOR_BIND=0.0.0.0 \
     AZURE_EMULATOR_HOME=/data
-EXPOSE 10443 5672
+EXPOSE 10443 5672 5671
 ENTRYPOINT ["azure-emulator"]

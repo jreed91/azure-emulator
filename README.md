@@ -81,9 +81,9 @@ tried yet.
   extension-scoped ones) are listed by `coverage` as `501`.
 - Service Bus messaging does not forward to topics, does not list sessions
   (`get-message-sessions`), and answers `501` to the rule management
-  operations over AMQP (rules are managed through Resource Manager). Plain
-  AMQP only (no TLS, no WebSockets). Tier restrictions (such as topics on a
-  Basic namespace) are not enforced.
+  operations over AMQP (rules are managed through Resource Manager). AMQP over
+  WebSockets is not served. Tier restrictions (such as topics on a Basic
+  namespace) are not enforced.
 - Storage queues, tables and file shares have no data plane. Version-level
   immutability (`migrate`), and the data-plane lease operations themselves, are
   not implemented; a lease taken through Resource Manager is honoured by both.
@@ -113,7 +113,7 @@ it refuses some, such as `10080`.)
 
 ```bash
 docker build -t azure-emulator .
-docker run -p 10443:10443 -p 5672:5672 azure-emulator
+docker run -p 10443:10443 -p 5672:5672 -p 5671:5671 azure-emulator
 ```
 
 Pushes to `main` publish `ghcr.io/<owner>/azure-emulator:edge` (and a
@@ -130,7 +130,7 @@ services:
       AZURE_EMULATOR_CONFIG: /config.json
     volumes:
       - ./azure-emulator.json:/config.json:ro
-    ports: ["10443:10443", "5672:5672"]
+    ports: ["10443:10443", "5672:5672", "5671:5671"]
 ```
 
 ### Provisioning at startup
@@ -236,6 +236,17 @@ Data-plane endpoints come back from the control plane (`primaryEndpoints.blob`,
 The emulator also runs an AMQP 1.0 broker (plain AMQP, port `5672`; change it
 with `--amqp-port`). The connection strings `listKeys` returns point at it and
 carry `UseDevelopmentEmulator=true`, which tells the SDKs to use plain AMQP.
+
+The same broker listens over TLS on port `5671` (`--amqps-port`) with the
+emulator's certificate, which is what a client uses when it connects by
+namespace name, for example with an Entra ID credential from the emulator's
+token service, or with a connection string without `UseDevelopmentEmulator`.
+Trust the emulator's CA (`connection_verify` in Python) and resolve
+`*.servicebus.azure.localhost` to the emulator:
+
+```python
+client = ServiceBusClient("orders.servicebus.azure.localhost", credential, connection_verify=ca_path)
+```
 
 A connection string does not have to use the namespace's own hostname
 (`<namespace>.servicebus.azure.localhost`): any name that reaches the

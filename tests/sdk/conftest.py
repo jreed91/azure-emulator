@@ -9,6 +9,7 @@ The emulator binary is ``$AZURE_EMULATOR_BIN``, or ``target/debug/azure-emulator
 in the repository; build it first with ``cargo build -p azure-emulator``.
 """
 
+import contextlib
 import os
 import pathlib
 import socket
@@ -65,10 +66,13 @@ def _wait_until_ready(base, ca_path, process, timeout=30):
 
 
 class Emulator:
-    def __init__(self, base, port, amqp_port):
+    def __init__(self, base, port, amqp_port, amqps_port, home):
         self.base = base
         self.port = port
         self.amqp_port = amqp_port
+        self.amqps_port = amqps_port
+        self.home = home
+        self.ca = str(home / "ca.pem")
         self.tenant = TENANT
         self.subscription = SUBSCRIPTION
 
@@ -78,35 +82,44 @@ class Emulator:
         return {"base_url": self.base, "credential_scopes": [self.base + "/.default"]}
 
 
-@pytest.fixture(scope="session")
-def emulator(tmp_path_factory):
+@contextlib.contextmanager
+def run_emulator(home, amqps_port=None):
+    """Runs an emulator process with its state and CA in `home`, on free
+    ports (and TLS for Service Bus on `amqps_port`, if given)."""
     binary = pathlib.Path(os.environ.get("AZURE_EMULATOR_BIN", REPO / "target/debug/azure-emulator"))
     if not binary.exists():
         pytest.exit(f"emulator binary not found at {binary}; run `cargo build -p azure-emulator` first", 2)
-    home = tmp_path_factory.mktemp("emulator-home")
     port = _free_port()
     amqp_port = _free_port()
+    amqps_port = amqps_port or _free_port()
     base = f"https://localhost:{port}"
-    log = open(home / "emulator.log", "w")
+    log = open(home / f"emulator-{port}.log", "w")
     process = subprocess.Popen(
-        [str(binary), "--port", str(port), "--amqp-port", str(amqp_port)],
+        [str(binary), "--port", str(port), "--amqp-port", str(amqp_port), "--amqps-port", str(amqps_port)],
         env={**os.environ, "AZURE_EMULATOR_HOME": str(home)},
         stdout=log,
         stderr=subprocess.STDOUT,
     )
     try:
         _wait_until_ready(base, home / "ca.pem", process)
-        # The SDKs read these when their first client is built.
-        os.environ["REQUESTS_CA_BUNDLE"] = str(home / "ca.pem")
-        no_proxy = os.environ.get("NO_PROXY", "")
-        os.environ["NO_PROXY"] = os.environ["no_proxy"] = ",".join(
-            part for part in [no_proxy, "localhost", "127.0.0.1", ".localhost"] if part
-        )
-        yield Emulator(base, port, amqp_port)
+        yield Emulator(base, port, amqp_port, amqps_port, home)
     finally:
         process.terminate()
         process.wait(timeout=10)
         log.close()
+
+
+@pytest.fixture(scope="session")
+def emulator(tmp_path_factory):
+    home = tmp_path_factory.mktemp("emulator-home")
+    with run_emulator(home) as running:
+        # The SDKs read these when their first client is built.
+        os.environ["REQUESTS_CA_BUNDLE"] = running.ca
+        no_proxy = os.environ.get("NO_PROXY", "")
+        os.environ["NO_PROXY"] = os.environ["no_proxy"] = ",".join(
+            part for part in [no_proxy, "localhost", "127.0.0.1", ".localhost"] if part
+        )
+        yield running
 
 
 @pytest.fixture(scope="session")
