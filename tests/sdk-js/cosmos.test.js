@@ -125,3 +125,25 @@ test("a provisioned account takes a hand-written localhost connection string", a
     provisioned.stop();
   }
 });
+
+test("bulk operations across partitions, each succeeding or failing on its own", async () => {
+  const { database } = await client.databases.createIfNotExists({ id: "app" });
+  const { container } = await database.containers.createIfNotExists({ id: "stock", partitionKey: { paths: ["/warehouse"] } });
+  await container.items.create({ id: "s0", warehouse: "w2", count: 1 });
+  const results = await container.items.executeBulkOperations([
+    { operationType: BulkOperationType.Create, partitionKey: "w1", resourceBody: { id: "s1", warehouse: "w1", count: 5 } },
+    { operationType: BulkOperationType.Upsert, partitionKey: "w2", resourceBody: { id: "s2", warehouse: "w2", count: 7 } },
+    // Already there: this one fails, and the others still apply.
+    { operationType: BulkOperationType.Create, partitionKey: "w2", resourceBody: { id: "s0", warehouse: "w2", count: 9 } },
+    { operationType: BulkOperationType.Read, id: "s0", partitionKey: "w2" },
+    { operationType: BulkOperationType.Delete, id: "s0", partitionKey: "w2" },
+  ]);
+  assert.deepEqual(results.map((r) => r.response?.statusCode ?? r.error?.code), [201, 201, 409, 200, 204]);
+  assert.equal(results[3].response.resourceBody.count, 1);
+  const { resource: s1 } = await container.item("s1", "w1").read();
+  assert.equal(s1.count, 5);
+  const { resource: s2 } = await container.item("s2", "w2").read();
+  assert.equal(s2.count, 7);
+  const { statusCode } = await container.item("s0", "w2").read();
+  assert.equal(statusCode, 404);
+});
