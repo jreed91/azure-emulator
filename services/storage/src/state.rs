@@ -33,6 +33,10 @@ pub(crate) struct Account {
     pub containers: BTreeMap<String, Container>,
     /// Object replication policies installed on this account, by policy id.
     pub replication: BTreeMap<String, crate::replication::Policy>,
+    /// Queues by name: the Queue data plane's, and Resource Manager's.
+    pub queues: BTreeMap<String, crate::queue::Queue>,
+    /// Tables by lowercased name: the Table data plane's, and Resource Manager's.
+    pub tables: BTreeMap<String, crate::table::Table>,
 }
 
 pub(crate) struct Container {
