@@ -25,7 +25,7 @@ use crate::{ArmError, Engine};
 mod authorization;
 mod deployments;
 
-pub use authorization::AuthorizationState;
+pub use authorization::{data_access, principal_ids, AuthorizationState, Permission};
 
 /// A stored ARM resource.
 #[derive(Clone, Debug)]

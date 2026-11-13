@@ -277,7 +277,10 @@ fn authorize(
         config.blob_endpoint(account),
     ];
     match auth::authorize(&parts.headers, &audiences) {
-        Ok(_) => Ok(()),
+        Ok(claims) => match route {
+            Some(route) => check_roles(engine, account, &claims.oid, container, blob, route),
+            None => Ok(()),
+        },
         Err(AuthFailure::Missing) => {
             let mut failure = error(
                 StatusCode::UNAUTHORIZED,
@@ -305,6 +308,62 @@ fn authorize(
             "Authentication information is not given in the correct format. Check the value of Authorization header.",
         )),
     }
+}
+
+/// With role assignments enforced, refuses an Entra-authorized request the
+/// caller's roles do not allow. Shared Key and SAS requests are not subject to
+/// role assignments, as in Azure.
+fn check_roles(engine: &Engine, account: &str, oid: &str, container: &str, blob: &str, route: Route) -> Result<(), BlobError> {
+    use emulator_core::arm::{data_access, ArmState, Permission};
+    if !engine.config().enforce_rbac {
+        return Ok(());
+    }
+    const CONTAINERS: &str = "Microsoft.Storage/storageAccounts/blobServices/containers";
+    let (read, write, delete) = (format!("{CONTAINERS}/read"), format!("{CONTAINERS}/write"), format!("{CONTAINERS}/delete"));
+    let blobs = |verb: &str| format!("{CONTAINERS}/blobs/{verb}");
+    let (blob_read, blob_write, blob_add, blob_delete) = (blobs("read"), blobs("write"), blobs("add/action"), blobs("delete"));
+    // Writing a blob that does not exist yet is also allowed by `add`.
+    let is_new = || {
+        let state = engine.state::<StorageState>();
+        let state = state.lock();
+        !state
+            .accounts
+            .get(account)
+            .and_then(|a| a.containers.get(container))
+            .is_some_and(|c| c.blobs.contains_key(blob))
+    };
+    let needed: Vec<Permission<'_>> = match route {
+        Route::ListContainers | Route::ContainerProperties => vec![Permission::Action(&read)],
+        Route::CreateContainer => vec![Permission::Action(&write)],
+        Route::DeleteContainer => vec![Permission::Action(&delete)],
+        Route::ListBlobs | Route::GetBlob | Route::HeadBlob => vec![Permission::Data(&blob_read)],
+        Route::PutBlob if is_new() => vec![Permission::Data(&blob_write), Permission::Data(&blob_add)],
+        Route::PutBlob => vec![Permission::Data(&blob_write)],
+        Route::DeleteBlob => vec![Permission::Data(&blob_delete)],
+    };
+    let account_id = {
+        let state = engine.state::<ArmState>();
+        let state = state.lock();
+        let id = state
+            .resources()
+            .find(|r| r.resource_type.eq_ignore_ascii_case("Microsoft.Storage/storageAccounts") && r.name.eq_ignore_ascii_case(account))
+            .map(|r| r.id.clone())
+            .unwrap_or_default();
+        id
+    };
+    // Role assignments reach down to a container; a blob is checked there.
+    let scope = match container {
+        "" => account_id,
+        container => format!("{account_id}/blobServices/default/containers/{container}"),
+    };
+    if data_access(engine, oid, &needed, &scope) {
+        return Ok(());
+    }
+    Err(error(
+        StatusCode::FORBIDDEN,
+        "AuthorizationPermissionMismatch",
+        "This request is not authorized to perform this operation using this permission.",
+    ))
 }
 
 async fn serve(

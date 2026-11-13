@@ -941,7 +941,120 @@ fn query_plan(req: &Req) -> Result<Response2, Failure> {
 /// One batch operation's status and resulting item.
 type BatchResult = (u16, Option<Map<String, Value>>);
 
-/// A transactional batch: every operation applies, or none does.
+/// The partition key a bulk operation carries: the JSON text of the key
+/// (`"[\"a\"]"`, as the SDKs send it) or the key itself.
+fn operation_key(operation: &Value) -> Option<Value> {
+    let raw = operation.get("partitionKey")?;
+    let value = match raw {
+        Value::String(text) => serde_json::from_str(text).unwrap_or_else(|_| raw.clone()),
+        other => other.clone(),
+    };
+    Some(match value {
+        Value::Array(items) if items.is_empty() => json!([{}]),
+        Value::Array(_) => value,
+        other => json!([other]),
+    })
+}
+
+/// One operation's outcome, with the partition key it ran in.
+type Outcome = (String, Result<BatchResult, (u16, String)>);
+
+/// Staged writes, by partition key and id; `None` is a delete.
+type Staged = std::collections::BTreeMap<(String, String), Option<Map<String, Value>>>;
+
+/// Applies one batch operation to `staged`, reading through it to the container.
+fn batch_operation(c: &Container, staged: &mut Staged, key_text: &str, operation: &Value) -> Result<BatchResult, (u16, String)> {
+    let op = operation.get("operationType").and_then(Value::as_str).unwrap_or_default();
+    let resource = operation.get("resourceBody").and_then(Value::as_object).cloned().map(store::user_body);
+    let body_id = resource.as_ref().and_then(|b| b.get("id")).and_then(Value::as_str).map(str::to_string);
+    let id = operation
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or(body_id)
+        .ok_or((400, "The operation needs an id.".to_string()))?;
+    let slot = (key_text.to_string(), id.clone());
+    let existing = match staged.get(&slot) {
+        Some(value) => value.clone(),
+        None => c.items.get(&slot).map(|i| i.body.clone()),
+    };
+    if let (Some(expected), Some(_)) = (operation.get("ifMatch").and_then(Value::as_str), &existing) {
+        let etag = c.items.get(&slot).map(|i| i.system.etag.clone()).unwrap_or_default();
+        if expected != etag {
+            return Err((412, "Precondition failed.".into()));
+        }
+    }
+    let checked = |body: &Map<String, Value>| {
+        if store::key_string(&c.key_of(body)) == key_text {
+            Ok(())
+        } else {
+            Err((400, "The partition key does not match the operation's.".to_string()))
+        }
+    };
+    match op {
+        "Create" => {
+            let body = resource.ok_or((400, "Create needs a body.".to_string()))?;
+            checked(&body)?;
+            if existing.is_some() {
+                return Err((409, "Conflict.".into()));
+            }
+            staged.insert(slot, Some(body.clone()));
+            Ok((201, Some(body)))
+        }
+        "Upsert" => {
+            let body = resource.ok_or((400, "Upsert needs a body.".to_string()))?;
+            checked(&body)?;
+            let status = if existing.is_some() { 200 } else { 201 };
+            staged.insert(slot, Some(body.clone()));
+            Ok((status, Some(body)))
+        }
+        "Replace" => {
+            let body = resource.ok_or((400, "Replace needs a body.".to_string()))?;
+            checked(&body)?;
+            existing.ok_or((404, "Not found.".to_string()))?;
+            staged.insert(slot, Some(body.clone()));
+            Ok((200, Some(body)))
+        }
+        "Read" => Ok((200, Some(existing.ok_or((404, "Not found.".to_string()))?))),
+        "Delete" => {
+            existing.ok_or((404, "Not found.".to_string()))?;
+            staged.insert(slot, None);
+            Ok((204, None))
+        }
+        "Patch" => {
+            let mut body = Value::Object(existing.ok_or((404, "Not found.".to_string()))?);
+            let ops = operation.get("resourceBody").and_then(|b| b.get("operations")).and_then(Value::as_array).cloned().unwrap_or_default();
+            for patch in ops {
+                let patch = patch.as_object().cloned().unwrap_or_default();
+                apply_patch(&mut body, &patch).map_err(|f| (f.status.as_u16(), f.message))?;
+            }
+            let Value::Object(body) = body else { unreachable!() };
+            checked(&body)?;
+            staged.insert(slot, Some(body.clone()));
+            Ok((200, Some(body)))
+        }
+        other => Err((400, format!("'{other}' is not a batch operation."))),
+    }
+}
+
+fn commit(lsn: u64, c: &mut Container, staged: Staged) {
+    for ((key, id), body) in staged {
+        match body {
+            Some(body) => {
+                write_item(lsn, c, key, id, body);
+            }
+            None => {
+                c.items.remove(&(key, id));
+            }
+        }
+    }
+}
+
+/// A batch of item operations. A transactional batch (the default) is in one
+/// partition, named by the request's partition key header, and every
+/// operation applies or none does. A bulk request
+/// (`x-ms-cosmos-batch-atomic: false`, as the SDKs' bulk APIs send) gives each
+/// operation its own partition key, and each succeeds or fails on its own.
 fn batch(engine: &Engine, req: &Req, db: &str, coll: &str) -> Result<Response2, Failure> {
     let operations = match &req.body {
         Some(Value::Array(ops)) => ops.clone(),
@@ -950,132 +1063,74 @@ fn batch(engine: &Engine, req: &Req, db: &str, coll: &str) -> Result<Response2, 
     if operations.is_empty() || operations.len() > 100 {
         return Err(bad_request("A batch takes between 1 and 100 operations."));
     }
-    let key = header_key(req)?.ok_or_else(|| bad_request("A batch needs a partition key."))?;
-    let key_text = store::key_string(&key);
+    let atomic = !req.header("x-ms-cosmos-batch-atomic").is_some_and(|v| v.eq_ignore_ascii_case("false"));
+    let header = header_key(req)?;
+    if atomic && header.is_none() {
+        return Err(bad_request("A batch needs a partition key."));
+    }
     with_account(engine, req, |a| {
         let lsn = a.bump();
         let database = a.databases.get_mut(db).ok_or_else(|| not_found(db))?;
         let db_rid = database.system.rid.clone();
         let c = database.containers.get_mut(coll).ok_or_else(|| not_found(coll))?;
         c.expire();
-        // Work on a copy; keep it only if every operation succeeds.
-        let mut staged: std::collections::BTreeMap<String, Option<Map<String, Value>>> = Default::default();
-        let current = |staged: &std::collections::BTreeMap<String, Option<Map<String, Value>>>, c: &Container, id: &str| -> Option<Map<String, Value>> {
-            match staged.get(id) {
-                Some(value) => value.clone(),
-                None => c.items.get(&(key_text.clone(), id.to_string())).map(|i| i.body.clone()),
-            }
-        };
-        let mut results = Vec::new();
-        let mut failed: Option<usize> = None;
-        for (index, operation) in operations.iter().enumerate() {
-            let op = operation.get("operationType").and_then(Value::as_str).unwrap_or_default().to_string();
-            let id = operation.get("id").and_then(Value::as_str).map(str::to_string);
-            let resource = operation.get("resourceBody").and_then(Value::as_object).cloned().map(store::user_body);
-            let if_match = operation.get("ifMatch").and_then(Value::as_str);
-            let outcome: Result<BatchResult, (u16, String)> = (|| {
-                let body_id = resource.as_ref().and_then(|b| b.get("id")).and_then(Value::as_str).map(str::to_string);
-                let id = id.clone().or(body_id).ok_or((400, "The operation needs an id.".to_string()))?;
-                let existing = current(&staged, c, &id);
-                if let (Some(expected), Some(_)) = (if_match, &existing) {
-                    let etag = c.items.get(&(key_text.clone(), id.clone())).map(|i| i.system.etag.clone()).unwrap_or_default();
-                    if expected != etag {
-                        return Err((412, "Precondition failed.".into()));
-                    }
+        let mut results: Vec<Outcome> = Vec::new();
+        if atomic {
+            let key_text = store::key_string(header.as_ref().expect("checked above"));
+            // Work on a copy; keep it only if every operation succeeds.
+            let mut staged = Staged::new();
+            for (index, operation) in operations.iter().enumerate() {
+                let outcome = batch_operation(c, &mut staged, &key_text, operation);
+                if let Err((status, _)) = outcome {
+                    // Every other operation answers 424 Failed Dependency.
+                    let entries: Vec<Value> = (0..operations.len())
+                        .map(|i| json!({"statusCode": if i == index { status } else { 424 }, "requestCharge": 0}))
+                        .collect();
+                    return Ok(ok(StatusCode::MULTI_STATUS, Value::Array(entries)));
                 }
-                let checked = |body: &Map<String, Value>| {
-                    if store::key_string(&c.key_of(body)) == key_text { Ok(()) } else { Err((400, "The partition key does not match the batch's.".to_string())) }
+                results.push((key_text.clone(), outcome));
+            }
+            commit(lsn, c, staged);
+        } else {
+            for operation in &operations {
+                let outcome = match operation_key(operation).or_else(|| header.clone()) {
+                    None => Err((400, "The operation needs a partition key.".to_string())),
+                    Some(key) => {
+                        let key_text = store::key_string(&key);
+                        let mut staged = Staged::new();
+                        let outcome = batch_operation(c, &mut staged, &key_text, operation);
+                        if outcome.is_ok() {
+                            commit(lsn, c, staged);
+                        }
+                        results.push((key_text, outcome));
+                        continue;
+                    }
                 };
-                match op.as_str() {
-                    "Create" => {
-                        let body = resource.clone().ok_or((400, "Create needs a body.".to_string()))?;
-                        checked(&body)?;
-                        if existing.is_some() {
-                            return Err((409, "Conflict.".into()));
-                        }
-                        staged.insert(id, Some(body.clone()));
-                        Ok((201, Some(body)))
-                    }
-                    "Upsert" => {
-                        let body = resource.clone().ok_or((400, "Upsert needs a body.".to_string()))?;
-                        checked(&body)?;
-                        let status = if existing.is_some() { 200 } else { 201 };
-                        staged.insert(id, Some(body.clone()));
-                        Ok((status, Some(body)))
-                    }
-                    "Replace" => {
-                        let body = resource.clone().ok_or((400, "Replace needs a body.".to_string()))?;
-                        checked(&body)?;
-                        existing.ok_or((404, "Not found.".to_string()))?;
-                        staged.insert(id, Some(body.clone()));
-                        Ok((200, Some(body)))
-                    }
-                    "Read" => Ok((200, Some(existing.ok_or((404, "Not found.".to_string()))?))),
-                    "Delete" => {
-                        existing.ok_or((404, "Not found.".to_string()))?;
-                        staged.insert(id, None);
-                        Ok((204, None))
-                    }
-                    "Patch" => {
-                        let mut body = Value::Object(existing.ok_or((404, "Not found.".to_string()))?);
-                        let ops = operation.get("resourceBody").and_then(|b| b.get("operations")).and_then(Value::as_array).cloned().unwrap_or_default();
-                        for patch in ops {
-                            let patch = patch.as_object().cloned().unwrap_or_default();
-                            apply_patch(&mut body, &patch).map_err(|f| (f.status.as_u16(), f.message))?;
-                        }
-                        let Value::Object(body) = body else { unreachable!() };
-                        checked(&body)?;
-                        staged.insert(id, Some(body.clone()));
-                        Ok((200, Some(body)))
-                    }
-                    other => Err((400, format!("'{other}' is not a batch operation."))),
-                }
-            })();
-            match outcome {
-                Ok((status, body)) => results.push((status, body)),
-                Err((status, _)) => {
-                    failed = Some(index);
-                    results.push((status, None));
-                    break;
-                }
+                results.push((String::new(), outcome));
             }
         }
-        if let Some(index) = failed {
-            // Everything before the failure answers 424 Failed Dependency.
-            let mut entries = Vec::new();
-            for i in 0..operations.len() {
-                let status = if i == index { results[index].0 } else { 424 };
-                entries.push(json!({"statusCode": status, "requestCharge": 0}));
-            }
-            return Ok(ok(StatusCode::MULTI_STATUS, Value::Array(entries)));
-        }
-        for (id, body) in staged {
-            match body {
-                Some(body) => {
-                    write_item(lsn, c, key_text.clone(), id, body);
-                }
-                None => {
-                    c.items.remove(&(key_text.clone(), id));
-                }
-            }
-        }
+        let any_failed = results.iter().any(|(_, r)| r.is_err());
         let entries: Vec<Value> = results
             .into_iter()
-            .map(|(status, body)| {
-                let mut entry = json!({"statusCode": status, "requestCharge": 1});
-                if let Some(body) = body {
-                    let id = body.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
-                    if let Some(item) = c.items.get(&(key_text.clone(), id)) {
-                        entry["resourceBody"] = item.json(&db_rid, &c.system.rid);
-                        entry["eTag"] = json!(item.system.etag);
-                    } else {
-                        entry["resourceBody"] = Value::Object(body);
+            .map(|(key_text, outcome)| match outcome {
+                Err((status, message)) => json!({"statusCode": status, "requestCharge": 0, "message": message}),
+                Ok((status, body)) => {
+                    let mut entry = json!({"statusCode": status, "requestCharge": 1});
+                    if let Some(body) = body {
+                        let id = body.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
+                        if let Some(item) = c.items.get(&(key_text, id)) {
+                            entry["resourceBody"] = item.json(&db_rid, &c.system.rid);
+                            entry["eTag"] = json!(item.system.etag);
+                        } else {
+                            entry["resourceBody"] = Value::Object(body);
+                        }
                     }
+                    entry
                 }
-                entry
             })
             .collect();
-        Ok(ok(StatusCode::OK, Value::Array(entries)))
+        let status = if any_failed { StatusCode::MULTI_STATUS } else { StatusCode::OK };
+        Ok(ok(status, Value::Array(entries)))
     })
 }
 
