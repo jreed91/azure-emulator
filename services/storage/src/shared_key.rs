@@ -80,3 +80,55 @@ pub(crate) fn verify(string_to_sign: &str, key: &str, signature: &str) -> bool {
     mac.update(string_to_sign.as_bytes());
     mac.verify_slice(&signature).is_ok()
 }
+
+fn table_resource(uri: &Uri, account: &str) -> String {
+    let mut resource = format!("/{account}{}", uri.path());
+    for pair in uri.query().unwrap_or("").split('&') {
+        if let Some(value) = pair.strip_prefix("comp=") {
+            resource.push_str(&format!("?comp={}", percent_decode(value, true)));
+        }
+    }
+    resource
+}
+
+/// The string a client signs for a Table request with `SharedKey`.
+pub(crate) fn table_string_to_sign(
+    method: &Method,
+    uri: &Uri,
+    headers: &HeaderMap,
+    account: &str,
+) -> String {
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+    };
+    let date = match header("x-ms-date") {
+        "" => header("date"),
+        date => date,
+    };
+    format!(
+        "{}\n{}\n{}\n{}\n{}",
+        method.as_str(),
+        header("content-md5"),
+        header("content-type"),
+        date,
+        table_resource(uri, account)
+    )
+}
+
+/// The string a client signs for a Table request with `SharedKeyLite`.
+pub(crate) fn table_lite_string_to_sign(uri: &Uri, headers: &HeaderMap, account: &str) -> String {
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+    };
+    let date = match header("x-ms-date") {
+        "" => header("date"),
+        date => date,
+    };
+    format!("{date}\n{}", table_resource(uri, account))
+}

@@ -81,6 +81,15 @@ impl Config {
         format!("{}://{}{}{}/", self.scheme, account, self.queue_host_suffix(), self.port_suffix())
     }
 
+    /// `.table.core.<suffix>` — what a table service hostname ends with.
+    pub fn table_host_suffix(&self) -> String {
+        format!(".table.core.{}", self.dns_suffix)
+    }
+
+    pub fn table_endpoint(&self, account: &str) -> String {
+        format!("{}://{}{}{}/", self.scheme, account, self.table_host_suffix(), self.port_suffix())
+    }
+
     /// `.vault.<suffix>` — what a vault hostname ends with.
     pub fn vault_host_suffix(&self) -> String {
         format!(".vault.{}", self.dns_suffix)
