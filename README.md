@@ -28,7 +28,7 @@ rely on it as a security boundary.
 | `Microsoft.EventHub` | Namespaces (names shared with Service Bus), event hubs, consumer groups, authorization rules with `listKeys` and `regenerateKeys`, network rule sets, `checkNameAvailability`; events over AMQP (see [Event Hubs](#event-hubs)) |
 | `Microsoft.DocumentDB` | Database accounts with `listKeys`, `readonlykeys`, `listConnectionStrings` and `regenerateKey`; SQL databases and containers (the same store as the data plane); the Cosmos DB for NoSQL data plane (see [Cosmos DB](#cosmos-db)) |
 | Key Vault secrets | Set, get (latest or by version), update attributes, list, list versions, soft delete, get and list deleted, recover, purge |
-| Key Vault keys | RSA (2048, 3072, 4096) and EC (P-256, P-384, P-521, P-256K) keys, `-HSM` types in Premium vaults: create, import (JSON Web Key), get (latest or by version), update (operations, attributes, tags), list, list versions, rotate, soft delete with get and list deleted, recover and purge. Encrypt, decrypt, wrap and unwrap with `RSA1_5`, `RSA-OAEP` and `RSA-OAEP-256`; sign and verify with `RS256`–`RS512`, `PS256`–`PS512`, `ES256`, `ES384`, `ES512` and `ES256K` over a digest; random bytes. A key's permitted operations and `enabled` are enforced |
+| Key Vault keys | RSA (2048, 3072, 4096) and EC (P-256, P-384, P-521, P-256K) keys, `-HSM` types in Premium vaults: create, import (JSON Web Key), get (latest or by version), update (operations, attributes, tags), list, list versions, rotate, rotation policy (stored; rotation is not automatic), backup and restore, soft delete with get and list deleted, recover and purge. Encrypt, decrypt, wrap and unwrap with `RSA1_5`, `RSA-OAEP` and `RSA-OAEP-256`; sign and verify with `RS256`–`RS512`, `PS256`–`PS512`, `ES256`, `ES384`, `ES512` and `ES256K` over a digest; random bytes. A key's permitted operations and `enabled` are enforced |
 
 Beyond these, every resource type in the Storage, Key Vault, Managed Identity and
 Service Bus specifications is mounted from a generated scaffold and answers `501`
@@ -119,8 +119,8 @@ tried yet.
   signatures that name a stored access policy or use a user delegation key are
   not verified, and a token's IP and protocol restrictions are not enforced.
 - Key Vault: certificates, the managed HSM data plane (and with it symmetric
-  keys and AES algorithms), key backup and restore, key rotation policies and
-  key release, private endpoints, and listing pages. Purge protection is
+  keys and AES algorithms), automatic rotation on a key rotation policy's
+  schedule, key release, private endpoints, and listing pages. Purge protection is
   stored but does not block a purge, and a key's `nbf` and `exp` are stored
   but not enforced.
 - Some error codes and messages are best-effort and have not been compared with

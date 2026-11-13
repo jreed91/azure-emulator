@@ -18,6 +18,8 @@ use emulator_core::{ArmError, Engine};
 
 /// Days a deleted key stays recoverable.
 const RECOVERABLE_DAYS: i64 = 90;
+/// What a backup blob starts with, so a restore can tell one from noise.
+const BACKUP_MARKER: &str = "azure-emulator-key-backup-v1";
 
 fn bad(message: impl Into<String>) -> ArmError {
     ArmError::bad_request("BadParameter", message)
@@ -69,6 +71,10 @@ pub(crate) fn serve(
         ("keys", "POST", [_, "create"]) => keys.create(rest[0]).map(Some),
         ("keys", "PUT", [_]) => keys.import(rest[0]).map(Some),
         ("keys", "POST", [_, "rotate"]) => keys.rotate(rest[0]).map(Some),
+        ("keys", "POST", ["restore"]) => keys.restore().map(Some),
+        ("keys", "POST", [_, "backup"]) => keys.backup(rest[0]).map(Some),
+        ("keys", "GET", [_, "rotationpolicy"]) => keys.rotation_policy(rest[0]).map(Some),
+        ("keys", "PUT", [_, "rotationpolicy"]) => keys.set_rotation_policy(rest[0]).map(Some),
         ("keys", "GET", [_, "versions"]) => keys.versions(rest[0]).map(Some),
         ("keys", "POST", [_, op]) if crypto_op(op).is_some() => keys.crypto(rest[0], None, crypto_op(op).expect("checked")).map(Some),
         ("keys", "POST", [_, _, op]) if crypto_op(op).is_some() => {
@@ -311,6 +317,118 @@ impl Keys<'_> {
             ..current
         };
         self.add_version(name, version)
+    }
+
+    /// Backup Key: every version, private material included, in one opaque value.
+    fn backup(&self, name: &str) -> Result<Value, ArmError> {
+        self.with_vault(|vault| {
+            let key = vault.keys.get(&name.to_ascii_lowercase()).ok_or_else(|| key_not_found(name))?;
+            let versions: Vec<Value> = key
+                .versions
+                .iter()
+                .map(|v| {
+                    json!({
+                        "version": v.version, "kty": v.kty, "key_size": v.key_size, "curve": v.curve, "ops": v.ops,
+                        "attributes": v.attributes, "tags": v.tags, "rotation_policy": v.rotation_policy,
+                        "release_policy": v.release_policy, "created": v.created, "updated": v.updated,
+                        "jwk": v.material.as_ref().map(Material::private_jwk),
+                    })
+                })
+                .collect();
+            let blob = json!({"format": BACKUP_MARKER, "name": key.name, "versions": versions});
+            Ok(json!({"value": crypto::encode(blob.to_string().as_bytes())}))
+        })
+    }
+
+    /// Restore Key: the key a backup holds, under its name, versions and ids.
+    fn restore(&self) -> Result<Value, ArmError> {
+        let malformed = || bad("Backup blob contains invalid or corrupt version.");
+        let blob: Value = self
+            .body
+            .get("value")
+            .and_then(Value::as_str)
+            .and_then(|text| crypto::unb64(text).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .filter(|b: &Value| b.get("format").and_then(Value::as_str) == Some(BACKUP_MARKER))
+            .ok_or_else(malformed)?;
+        let name = blob.get("name").and_then(Value::as_str).ok_or_else(malformed)?.to_string();
+        let mut versions = Vec::new();
+        for v in blob.get("versions").and_then(Value::as_array).ok_or_else(malformed)? {
+            let text = |member: &str| v.get(member).and_then(Value::as_str).map(str::to_string);
+            let material = match v.get("jwk").filter(|j| !j.is_null()) {
+                Some(jwk) => Some(Material::from_jwk(jwk).map_err(|_| malformed())?),
+                None => None,
+            };
+            versions.push(KeyVersion {
+                version: text("version").ok_or_else(malformed)?,
+                kty: text("kty").ok_or_else(malformed)?,
+                key_size: v.get("key_size").and_then(Value::as_i64),
+                curve: text("curve"),
+                ops: serde_json::from_value(v.get("ops").cloned().unwrap_or_default()).map_err(|_| malformed())?,
+                attributes: v.get("attributes").and_then(Value::as_object).cloned().unwrap_or_default(),
+                tags: v.get("tags").filter(|t| !t.is_null()).cloned(),
+                rotation_policy: v.get("rotation_policy").filter(|t| !t.is_null()).cloned(),
+                release_policy: v.get("release_policy").filter(|t| !t.is_null()).cloned(),
+                created: v.get("created").and_then(Value::as_i64).unwrap_or_else(now),
+                updated: v.get("updated").and_then(Value::as_i64).unwrap_or_else(now),
+                material,
+            });
+        }
+        if versions.is_empty() {
+            return Err(malformed());
+        }
+        self.with_vault(|vault| {
+            let lower = name.to_ascii_lowercase();
+            if vault.keys.contains_key(&lower) {
+                return Err(ArmError::conflict("Conflict", format!("Key {name} already exists. Restore is not allowed over an existing key.")));
+            }
+            if vault.deleted_keys.contains_key(&lower) {
+                return Err(ArmError::conflict(
+                    "Conflict",
+                    format!("Key {name} is currently in a deleted but recoverable state, and its name cannot be reused; in this state, the key can only be recovered or purged."),
+                ));
+            }
+            let key = Key { name, versions };
+            let body = self.bundle(&key, key.versions.last().expect("checked above"));
+            vault.keys.insert(lower, key);
+            Ok(body)
+        })
+    }
+
+    /// The key's rotation policy, or the one every key has until one is set:
+    /// notify 30 days before expiry.
+    fn rotation_policy(&self, name: &str) -> Result<Value, ArmError> {
+        let id = format!("{}keys/{name}/rotationpolicy", self.base());
+        self.with_vault(|vault| {
+            let key = vault.keys.get(&name.to_ascii_lowercase()).ok_or_else(|| key_not_found(name))?;
+            let current = key.versions.last().expect("a key has a version");
+            Ok(current.rotation_policy.clone().unwrap_or_else(|| {
+                json!({
+                    "id": id,
+                    "lifetimeActions": [{"trigger": {"timeBeforeExpiry": "P30D"}, "action": {"type": "Notify"}}],
+                    "attributes": {"created": current.created, "updated": current.created},
+                })
+            }))
+        })
+    }
+
+    /// Stores a rotation policy. The emulator keeps it but never rotates on its schedule.
+    fn set_rotation_policy(&self, name: &str) -> Result<Value, ArmError> {
+        let mut policy = json!({
+            "id": format!("{}keys/{name}/rotationpolicy", self.base()),
+            "lifetimeActions": self.body.get("lifetimeActions").cloned().unwrap_or(json!([])),
+            "attributes": self.body.get("attributes").cloned().filter(Value::is_object).unwrap_or(json!({})),
+        });
+        let stamp = now();
+        self.with_vault(|vault| {
+            let key = vault.keys.get_mut(&name.to_ascii_lowercase()).ok_or_else(|| key_not_found(name))?;
+            let current = key.versions.last_mut().expect("a key has a version");
+            let created = current.rotation_policy.as_ref().and_then(|p| p.pointer("/attributes/created")).cloned().unwrap_or(json!(stamp));
+            policy["attributes"]["created"] = created;
+            policy["attributes"]["updated"] = json!(stamp);
+            current.rotation_policy = Some(policy.clone());
+            Ok(policy)
+        })
     }
 
     fn get(&self, name: &str, version: Option<&str>) -> Result<Value, ArmError> {
