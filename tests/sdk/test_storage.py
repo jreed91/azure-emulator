@@ -4,6 +4,7 @@ access signatures."""
 import datetime
 
 import pytest
+from azure.core import MatchConditions
 from azure.core.exceptions import HttpResponseError, ResourceExistsError, ResourceNotFoundError
 from azure.storage.blob import (
     AccountSasPermissions,
@@ -180,3 +181,65 @@ def test_token_issued_by_resource_manager(storage, group, signed):
         },
     ).account_sas_token
     assert BlobClient(signed.blob_url, "sas", "a.txt", credential=token).download_blob().readall() == b"signed"
+
+
+def test_legal_hold_is_enforced_on_the_data_plane(storage, credential, group, account):
+    storage.blob_containers.create(group, account.name, "records", {})
+    container = BlobServiceClient(account.blob_url, credential=credential).get_container_client("records")
+    container.upload_blob("a.txt", b"v1")
+
+    hold = storage.blob_containers.set_legal_hold(group, account.name, "records", {"tags": ["case123"]})
+    assert hold.has_legal_hold and hold.tags == ["case123"]
+    assert container.get_container_properties().has_legal_hold
+    with pytest.raises(HttpResponseError) as refused:
+        container.delete_blob("a.txt")
+    assert refused.value.error_code == "BlobImmutableDueToLegalHold"
+    with pytest.raises(HttpResponseError):
+        container.upload_blob("a.txt", b"v2", overwrite=True)
+
+    cleared = storage.blob_containers.clear_legal_hold(group, account.name, "records", {"tags": ["case123"]})
+    assert not cleared.has_legal_hold
+    container.delete_blob("a.txt")
+
+
+def test_immutability_policy_lock_and_extend(storage, credential, group, account):
+    storage.blob_containers.create(group, account.name, "retained", {})
+    container = BlobServiceClient(account.blob_url, credential=credential).get_container_client("retained")
+    container.upload_blob("a.txt", b"kept")
+
+    policy = storage.blob_containers.create_or_update_immutability_policy(
+        group, account.name, "retained", parameters={"properties": {"immutabilityPeriodSinceCreationInDays": 3}}
+    )
+    assert policy.state == "Unlocked"
+    with pytest.raises(HttpResponseError) as refused:
+        container.delete_blob("a.txt")
+    assert refused.value.error_code == "BlobImmutableDueToPolicy"
+
+    locked = storage.blob_containers.lock_immutability_policy(
+        group, account.name, "retained", etag=policy.etag, match_condition=MatchConditions.IfNotModified
+    )
+    assert locked.state == "Locked"
+    extended = storage.blob_containers.extend_immutability_policy(
+        group, account.name, "retained", etag=locked.etag, match_condition=MatchConditions.IfNotModified,
+        parameters={"properties": {"immutabilityPeriodSinceCreationInDays": 10}},
+    )
+    assert extended.immutability_period_since_creation_in_days == 10
+    with pytest.raises(HttpResponseError):
+        storage.blob_containers.delete_immutability_policy(
+            group, account.name, "retained", etag=extended.etag, match_condition=MatchConditions.IfNotModified
+        )
+    assert storage.blob_containers.get(group, account.name, "retained").has_immutability_policy
+
+
+def test_container_lease(storage, credential, group, account):
+    storage.blob_containers.create(group, account.name, "leased", {})
+    acquired = storage.blob_containers.lease(group, account.name, "leased", {"action": "Acquire", "leaseDuration": -1})
+    assert storage.blob_containers.get(group, account.name, "leased").lease_state == "Leased"
+
+    container = BlobServiceClient(account.blob_url, credential=credential).get_container_client("leased")
+    with pytest.raises(HttpResponseError) as refused:
+        container.delete_container()
+    assert refused.value.status_code == 412
+
+    storage.blob_containers.lease(group, account.name, "leased", {"action": "Release", "leaseId": acquired.lease_id})
+    container.delete_container()

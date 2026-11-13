@@ -17,7 +17,7 @@ workloads or to test security.
 |---|---|
 | Entra ID (login) | OpenID Connect discovery, instance discovery, signing keys, client-credentials tokens (v1 and v2 endpoints), managed-identity (IMDS) tokens |
 | Resource Manager | Bearer-token verification, `api-version` checks, subscriptions, tenants, resource groups (create, get, exists, tag, list, delete with cascade), providers, generic resource listing, cloud metadata document |
-| `Microsoft.Storage` | Storage accounts with `listKeys`, `regenerateKey` and `checkNameAvailability`; blob, file, queue and table service properties; blob containers (the same store as the data plane); queues, tables and file shares (Resource Manager only); encryption scopes; lifecycle-management and inventory policies; local users; `listAccountSas` and `listServiceSas` |
+| `Microsoft.Storage` | Storage accounts with `listKeys`, `regenerateKey` and `checkNameAvailability`; blob, file, queue and table service properties; blob containers (the same store as the data plane); queues, tables and file shares (Resource Manager only); encryption scopes; lifecycle-management and inventory policies; local users; `listAccountSas` and `listServiceSas`; container legal holds, immutability policies (lock, extend, `If-Match`) and leases, enforced on the Blob data plane |
 | Blob service | Containers: create, delete, properties, list. Block blobs: upload (single request), download with ranges, properties, metadata, delete, list with prefix, delimiter and paging. Authorization by Entra token, verified Shared Key, or shared access signature (account SAS and container or blob service SAS signed with an account key) |
 | `Microsoft.KeyVault` | Vaults: create, get, update, delete, list, `checkNameAvailability`; soft delete with list, get, recover and purge of deleted vaults; access-policy updates; secrets through Resource Manager (the same store as the data plane); managed HSMs with soft delete, regions and name availability (no HSM data plane) |
 | `Microsoft.ManagedIdentity` | User-assigned identities and federated identity credentials |
@@ -33,8 +33,8 @@ Provider                                  Types     Operations
 Microsoft.KeyVault                        12/16          39/51
 Microsoft.ManagedIdentity                   2/2          10/14
 Microsoft.ServiceBus                      16/21          70/91
-Microsoft.Storage                         16/32         75/153
-Total                                     46/71        194/309
+Microsoft.Storage                         17/32         86/153
+Total                                     47/71        205/309
 ```
 
 Private endpoint connections and network security perimeter configurations
@@ -65,8 +65,9 @@ tried yet.
 - Service Bus has no data plane: the endpoint and connection strings a namespace
   reports point at the emulator's domain, but nothing accepts AMQP there. Tier
   restrictions (such as topics on a Basic namespace) are not enforced.
-- Storage queues, tables and file shares have no data plane. Container legal
-  holds, immutability policies and leases through Resource Manager are stubs.
+- Storage queues, tables and file shares have no data plane. Version-level
+  immutability (`migrate`), and the data-plane lease operations themselves, are
+  not implemented; a lease taken through Resource Manager is honoured by both.
 - Blob: block lists (large uploads), page and append blobs, leases, snapshots,
   copy, and conditional headers other than `If-None-Match: *`. Shared access
   signatures that name a stored access policy or use a user delegation key are

@@ -19,7 +19,7 @@ use md5::{Digest, Md5};
 
 use crate::sas::{self, Level, Needed, SasFailure};
 use crate::shared_key;
-use crate::state::{Blob, Container, StorageState};
+use crate::state::{Blob, Container, Protection, StorageState};
 
 /// Service version reported when the request names none.
 const DEFAULT_VERSION: &str = "2021-08-06";
@@ -385,6 +385,33 @@ fn lease_headers(headers: &mut Headers) {
     headers.push((name("x-ms-lease-state"), "available".into()));
 }
 
+fn container_lease_headers(headers: &mut Headers, container: &Container) {
+    let state = container.lease_state(SystemTime::now());
+    let status = if state.blocks() { "locked" } else { "unlocked" };
+    headers.push((name("x-ms-lease-status"), status.into()));
+    headers.push((name("x-ms-lease-state"), state.as_str().to_ascii_lowercase()));
+    if state.blocks() {
+        let infinite = container.lease.as_ref().is_some_and(|l| l.duration.is_none());
+        headers.push((name("x-ms-lease-duration"), if infinite { "infinite" } else { "fixed" }.into()));
+    }
+}
+
+/// The refusal for overwriting or deleting a protected blob.
+fn immutable(protection: Protection) -> BlobError {
+    match protection {
+        Protection::LegalHold => error(
+            StatusCode::CONFLICT,
+            "BlobImmutableDueToLegalHold",
+            "This operation is not permitted as the blob is immutable due to one or more legal holds.",
+        ),
+        Protection::Retention => error(
+            StatusCode::CONFLICT,
+            "BlobImmutableDueToPolicy",
+            "This operation is not permitted as the blob is immutable due to a policy.",
+        ),
+    }
+}
+
 /// The range a request asks for, as inclusive byte offsets into a blob of `len`.
 /// `Ok(None)` means the whole blob; `Err` means the range cannot be satisfied.
 fn requested_range(headers: &HeaderMap, len: usize) -> Result<Option<(usize, usize)>, ()> {
@@ -467,10 +494,10 @@ impl BlobRequest<'_> {
         let mut headers = vec![
             (header::ETAG, found.etag.clone()),
             (header::LAST_MODIFIED, http_date(found.last_modified)),
-            (name("x-ms-has-immutability-policy"), "false".into()),
-            (name("x-ms-has-legal-hold"), "false".into()),
+            (name("x-ms-has-immutability-policy"), found.immutability.is_some().to_string()),
+            (name("x-ms-has-legal-hold"), (!found.legal_hold.is_empty()).to_string()),
         ];
-        lease_headers(&mut headers);
+        container_lease_headers(&mut headers, found);
         for (key, value) in &found.metadata {
             if let Ok(key) = HeaderName::try_from(format!("x-ms-meta-{key}")) {
                 headers.push((key, value.clone()));
@@ -483,7 +510,33 @@ impl BlobRequest<'_> {
         let handle = self.engine.state::<StorageState>();
         let mut state = handle.lock();
         let account = state.accounts.get_mut(self.account).expect("account checked");
-        account.containers.remove(container).ok_or_else(container_not_found)?;
+        let found = account.containers.get(container).ok_or_else(container_not_found)?;
+        let now = SystemTime::now();
+        if let Some(protection) = found.deletion_blocker(now) {
+            let (code, message) = crate::protection::protected(protection);
+            return Err(error(StatusCode::CONFLICT, code, message));
+        }
+        if found.lease_state(now).blocks() {
+            let current = found.lease.as_ref().map(|l| l.id.as_str());
+            match self.header("x-ms-lease-id") {
+                None => {
+                    return Err(error(
+                        StatusCode::PRECONDITION_FAILED,
+                        "LeaseIdMissing",
+                        "There is currently a lease on the container and no lease ID was specified in the request.",
+                    ))
+                }
+                Some(sent) if Some(sent) != current => {
+                    return Err(error(
+                        StatusCode::PRECONDITION_FAILED,
+                        "LeaseIdMismatchWithContainerOperation",
+                        "The lease ID specified did not match the lease ID for the container.",
+                    ))
+                }
+                Some(_) => {}
+            }
+        }
+        account.containers.remove(container);
         Ok(respond(StatusCode::ACCEPTED, Vec::new(), Body::empty()))
     }
 
@@ -503,11 +556,16 @@ impl BlobRequest<'_> {
             if !container.starts_with(prefix) {
                 continue;
             }
+            let lease = found.lease_state(SystemTime::now());
             out.push_str(&format!(
-                "<Container><Name>{}</Name><Properties><Last-Modified>{}</Last-Modified><Etag>{}</Etag><LeaseStatus>unlocked</LeaseStatus><LeaseState>available</LeaseState><HasImmutabilityPolicy>false</HasImmutabilityPolicy><HasLegalHold>false</HasLegalHold></Properties></Container>",
+                "<Container><Name>{}</Name><Properties><Last-Modified>{}</Last-Modified><Etag>{}</Etag><LeaseStatus>{}</LeaseStatus><LeaseState>{}</LeaseState><HasImmutabilityPolicy>{}</HasImmutabilityPolicy><HasLegalHold>{}</HasLegalHold></Properties></Container>",
                 xml_escape(container),
                 http_date(found.last_modified),
                 xml_escape(&found.etag),
+                if lease.blocks() { "locked" } else { "unlocked" },
+                lease.as_str().to_ascii_lowercase(),
+                found.immutability.is_some(),
+                !found.legal_hold.is_empty(),
             ));
         }
         out.push_str("</Containers><NextMarker /></EnumerationResults>");
@@ -540,6 +598,9 @@ impl BlobRequest<'_> {
         let account = state.accounts.get_mut(self.account).expect("account checked");
         let found = account.containers.get_mut(container).ok_or_else(container_not_found)?;
         let existing = found.blobs.get(blob);
+        if let Some(protection) = existing.and_then(|b| found.protection(b, SystemTime::now())) {
+            return Err(immutable(protection));
+        }
         if existing.is_some() && self.header("if-none-match") == Some("*") {
             return Err(error(
                 StatusCode::CONFLICT,
@@ -640,7 +701,11 @@ impl BlobRequest<'_> {
         let mut state = handle.lock();
         let account = state.accounts.get_mut(self.account).expect("account checked");
         let found = account.containers.get_mut(container).ok_or_else(container_not_found)?;
-        found.blobs.remove(blob).ok_or_else(blob_not_found)?;
+        let existing = found.blobs.get(blob).ok_or_else(blob_not_found)?;
+        if let Some(protection) = found.protection(existing, SystemTime::now()) {
+            return Err(immutable(protection));
+        }
+        found.blobs.remove(blob);
         Ok(respond(
             StatusCode::ACCEPTED,
             vec![(name("x-ms-delete-type-permanent"), "true".into())],

@@ -3,6 +3,7 @@
 
 pub mod blob;
 mod management;
+mod protection;
 mod sas;
 pub mod scaffold;
 mod shared_key;
@@ -29,6 +30,7 @@ pub fn register(registry: &mut ArmRegistry) {
         Arc::new(check_name_availability),
     );
     management::register(registry);
+    protection::register(registry);
     // Everything else in the specification is mounted as a 501 stub.
     registry.register_type(emulator_core::arm::CreatedByNetwork("Microsoft.Storage/storageAccounts/privateEndpointConnections"));
     registry.register_type(emulator_core::arm::CreatedByNetwork("Microsoft.Storage/storageAccounts/networkSecurityPerimeterConfigurations"));
