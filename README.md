@@ -41,8 +41,8 @@ That score counts control-plane (Resource Manager) operations only; data planes
 such as Blob and Key Vault secrets are not in it. Add `--operations` to list every
 operation with its status.
 
-`tests/sdk/python_smoke.py` exercises the implemented control planes, Blob and secrets through the official Azure
-SDKs for Python and passes. No other SDK, the Azure CLI or Terraform has been
+`tests/sdk/` is a pytest suite that exercises the implemented control planes,
+Blob and secrets through the official Azure SDKs for Python, and runs in CI. No other SDK, the Azure CLI or Terraform has been
 tried yet.
 
 ### Known gaps
@@ -214,5 +214,17 @@ Rules carried over from the AWS emulator: never fabricate a result, never
 cargo test                      # in-process tests through the full router
 ```
 
-To run the SDK check, start the emulator, then follow the instructions at the top
-of `tests/sdk/python_smoke.py`.
+The SDK suite drives a real emulator process with the official Azure SDKs for
+Python. Each test creates its own resource group and uniquely named resources,
+so tests are independent and run in parallel; each pytest worker starts its own
+emulator on a free port.
+
+```bash
+cargo build -p azure-emulator
+pip install -r tests/sdk/requirements.txt
+cd tests/sdk && python -m pytest -n auto
+```
+
+No hosts-file entries or certificate setup are needed: the suite resolves
+`*.localhost` itself and trusts the emulator's CA. Set `AZURE_EMULATOR_BIN` to
+test a binary other than `target/debug/azure-emulator`.
