@@ -22,6 +22,8 @@ use crate::auth::{self, AuthFailure};
 use crate::http_util::{json_response, parse_query, percent_decode, read_body, request_id};
 use crate::{ArmError, Engine};
 
+mod deployments;
+
 /// A stored ARM resource.
 #[derive(Clone, Debug)]
 pub struct Resource {
@@ -876,6 +878,9 @@ impl ArmRequest<'_> {
                 list(vec![json!({"id": format!("/tenants/{tenant}"), "tenantId": tenant})])
             }
             ["providers", _] if get => self.provider(&segments[1]),
+            ["providers", "microsoft.resources", "calculatetemplatehash"] if self.method == Method::POST => {
+                self.calculate_template_hash()
+            }
             ["subscriptions", subscription, rest @ ..] => {
                 let config = self.engine.config();
                 if !subscription.eq_ignore_ascii_case(&config.subscription_id) {
@@ -896,6 +901,16 @@ impl ArmRequest<'_> {
             [] if get => ok(self.subscription_json()),
             ["resourcegroups"] if get => self.list_groups(),
             ["resourcegroups", _] => self.resource_group(&segments[1]),
+            ["resourcegroups", _, "providers", "microsoft.resources", "deployments", rest @ ..] => {
+                self.deployments(Some(&segments[1]), &segments[5..], rest)
+            }
+            ["providers", "microsoft.resources", "deployments", rest @ ..] => {
+                self.deployments(None, &segments[3..], rest)
+            }
+            // Deployment operations also answer on the older path without the
+            // provider namespace, which is the one the SDKs use.
+            ["resourcegroups", _, "deployments", rest @ ..] => self.deployments(Some(&segments[1]), &segments[3..], rest),
+            ["deployments", rest @ ..] => self.deployments(None, &segments[1..], rest),
             ["resourcegroups", _, "resources"] if get => {
                 let group = self.require_group(&segments[1])?;
                 self.list_generic(Some(&group.name))
@@ -1051,6 +1066,7 @@ impl ArmRequest<'_> {
                     ids.iter().filter_map(|id| state.resources.remove(id)).collect()
                 };
                 self.notify_deleted(name, &removed);
+                deployments::forget_group(self.engine, &self.group_id(name));
                 let location = format!(
                     "{}/subscriptions/{}/operationresults/{}?api-version={}",
                     self.engine.config().management_endpoint(),

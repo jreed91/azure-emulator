@@ -5,6 +5,7 @@ azure-keyvault-secrets==4.12.0
 azure-mgmt-keyvault==14.1.0
 azure-mgmt-msi==7.1.0
 azure-mgmt-resource==26.0.0
+azure-mgmt-resource-deployments==2.0.0
 azure-mgmt-servicebus==10.0.0
 azure-mgmt-storage==25.3.0
 azure-servicebus==7.15.0
