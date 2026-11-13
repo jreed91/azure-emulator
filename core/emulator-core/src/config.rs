@@ -29,6 +29,12 @@ pub struct Config {
     pub amqps_port: u16,
     /// Suffix under which per-resource data-plane hostnames live.
     pub dns_suffix: String,
+    /// Whether Resource Manager requests need a role assignment that permits
+    /// them. Off by default: any valid token is allowed everything.
+    pub enforce_rbac: bool,
+    /// Object ids (for the emulator's tokens, client ids) treated as Owner of the
+    /// subscription when role assignments are enforced.
+    pub rbac_owners: Vec<String>,
 }
 
 impl Default for Config {
@@ -42,6 +48,8 @@ impl Default for Config {
             amqp_port: 5672,
             amqps_port: 5671,
             dns_suffix: "azure.localhost".into(),
+            enforce_rbac: false,
+            rbac_owners: Vec::new(),
         }
     }
 }

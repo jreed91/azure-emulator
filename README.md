@@ -18,6 +18,7 @@ rely on it as a security boundary.
 |---|---|
 | Entra ID (login) | OpenID Connect discovery, instance discovery, signing keys, client-credentials tokens (v1 and v2 endpoints), managed-identity (IMDS) tokens |
 | Resource Manager | Bearer-token verification, `api-version` checks, subscriptions, tenants, resource groups (create, get, exists, tag, list, delete with cascade), providers, generic resource listing, cloud metadata document |
+| Role-based access control | All 506 built-in role definitions with Azure's ids and permissions; custom roles; role assignments at subscription, resource group and resource scope (create, get, get by id, delete, list with `atScope()` and `principalId` filters), removed with the scope they are on. Enforcement on requests inside the subscription, deployments' resources included, when started with `--enforce-rbac`; see [Role-based access control](#role-based-access-control) |
 | Template deployments | ARM templates and compiled Bicep at resource-group and subscription scope: create, get, list, delete, `validate`, `whatIf`, `exportTemplate`, deployment operations, `calculateTemplateHash`. Parameters (types, allowed values, bounds, defaults, user-defined types), variables and variable loops, resource, property and output `copy` loops, conditions, child resources, `dependsOn` ordering, nested deployments (Bicep modules, inner and outer scope, other resource groups), `existing` resources, symbolic names (`languageVersion` 2.0), user-defined functions, lambdas, outputs, and complete mode. About 100 template functions plus every `list*` action, with `uniqueString` and `guid` giving the values Azure gives. See [Template deployments](#template-deployments) |
 | `Microsoft.Storage` | Storage accounts with `listKeys`, `regenerateKey` and `checkNameAvailability`; blob, file, queue and table service properties; blob containers (the same store as the data plane); queues, tables and file shares (Resource Manager only); encryption scopes; lifecycle-management and inventory policies; local users; `listAccountSas` and `listServiceSas`; container legal holds, immutability policies (lock, extend, `If-Match`) and leases, enforced on the Blob data plane; file share leases; object replication policies, with blobs copied between accounts on write |
 | Blob service | Containers: create, delete, properties, list. Block blobs: upload (single request), download with ranges, properties, metadata, delete, list with prefix, delimiter and paging. Authorization by Entra token, verified Shared Key, or shared access signature (account SAS and container or blob service SAS signed with an account key) |
@@ -71,8 +72,11 @@ tried yet.
 ### Known gaps
 
 - Every other Azure service and resource type.
-- Role assignments and Key Vault access policies are not enforced: any valid
-  token for the right audience is allowed everything.
+- Role assignments are enforced only on Resource Manager, and only with
+  `--enforce-rbac`. Data planes (Blob, Key Vault, Service Bus) still allow any
+  valid token for their audience, and Key Vault access policies are not
+  enforced. Assignment conditions and deny assignments are not evaluated.
+  Principal ids are not checked against a directory, since there is none.
 - There is no application registry: the token service accepts any client id that
   presents a credential.
 - A scaffolded type accepts exactly the `api-version`s in the specification
@@ -109,7 +113,8 @@ cargo run -p azure-emulator
 
 The emulator serves HTTPS on `127.0.0.1:10443` and prints its endpoints. Options:
 `--port`, `--bind`, `--host`, `--dns-suffix`, `--amqp-port`, `--http`,
-`--config`; each also has an `AZURE_EMULATOR_*` environment variable. Run with
+`--config`, `--enforce-rbac`, `--rbac-owner`; each also has an
+`AZURE_EMULATOR_*` environment variable. Run with
 `--help` for details. (Pick ports Node's `fetch` allows if you change them:
 it refuses some, such as `10080`.)
 
@@ -345,6 +350,29 @@ endpoint URLs from them reach the emulator.
 
 `core/router/tests/templates/` holds Bicep files and the templates the Bicep CLI
 compiled from them; the Rust and SDK suites deploy both.
+
+### Role-based access control
+
+Role assignments are always stored and served. By default they are not
+enforced, so a test can sign in with any client id and do anything.
+`--enforce-rbac` (or `AZURE_EMULATOR_ENFORCE_RBAC=1`) checks every request
+inside the subscription against the caller's assignments, as Azure does
+(tenant-level reads and provider listings are left open), answering
+`403 AuthorizationFailed` with the action and scope it needed. A deployment's
+resources are each checked as its caller. Someone has to be able to create
+the first assignments: each `--rbac-owner <id>` (or the comma-separated
+`AZURE_EMULATOR_RBAC_OWNERS`) is treated as Owner of the subscription.
+
+A token's principal is its object id: the client id for the emulator's
+client-credentials tokens, and for a managed identity's token, that
+identity's principal id, which is what a role assignment names.
+
+```bash
+azure-emulator --enforce-rbac --rbac-owner my-admin-app
+```
+
+The built-in roles come from Microsoft's published definitions;
+`tools/builtin-roles/generate.py` regenerates them.
 
 ### Embedded mode (Rust tests)
 

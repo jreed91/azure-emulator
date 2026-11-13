@@ -1,6 +1,7 @@
 # The Azure SDKs for Python the suite drives the emulator with. Pinned so that a
 # new SDK release changes the suite only when this file changes.
 azure-identity==1.27.0
+azure-mgmt-authorization==4.0.0
 azure-keyvault-secrets==4.12.0
 azure-mgmt-keyvault==14.1.0
 azure-mgmt-msi==7.1.0

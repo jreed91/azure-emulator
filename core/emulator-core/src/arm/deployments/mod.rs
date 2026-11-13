@@ -94,6 +94,8 @@ impl Dispatch for ArmRequest<'_> {
             headers: &headers,
             api_version,
             body,
+            principal: self.principal,
+            filter: None,
         };
         let response = request.route(&segments, &lower)?;
         let status = response.status();

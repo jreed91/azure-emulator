@@ -27,11 +27,17 @@ OPTIONS:
         --http             Serve plain HTTP instead of HTTPS
         --config <FILE>    Provision resources from a JSON file at startup
                            (see the README)
+        --enforce-rbac     Require a role assignment for every Resource Manager
+                           request (by default any valid token may do anything)
+        --rbac-owner <ID>  With --enforce-rbac, treat this object id (for the
+                           emulator's tokens, the client id) as subscription
+                           Owner; repeatable
 
 Every option can also be set in the environment: AZURE_EMULATOR_PORT,
 AZURE_EMULATOR_AMQP_PORT, AZURE_EMULATOR_AMQPS_PORT,
 AZURE_EMULATOR_BIND, AZURE_EMULATOR_HOST,
-AZURE_EMULATOR_DNS_SUFFIX, AZURE_EMULATOR_HTTP=1, AZURE_EMULATOR_CONFIG.
+AZURE_EMULATOR_DNS_SUFFIX, AZURE_EMULATOR_HTTP=1, AZURE_EMULATOR_CONFIG,
+AZURE_EMULATOR_ENFORCE_RBAC=1, AZURE_EMULATOR_RBAC_OWNERS (comma-separated).
     -h, --help             Print this help
 ";
 
@@ -144,6 +150,12 @@ async fn main() {
     if env("AZURE_EMULATOR_HTTP").is_some_and(|v| v != "0" && !v.eq_ignore_ascii_case("false")) {
         config.scheme = "http".into();
     }
+    if env("AZURE_EMULATOR_ENFORCE_RBAC").is_some_and(|v| v != "0" && !v.eq_ignore_ascii_case("false")) {
+        config.enforce_rbac = true;
+    }
+    if let Some(value) = env("AZURE_EMULATOR_RBAC_OWNERS") {
+        config.rbac_owners.extend(value.split(',').map(str::trim).filter(|v| !v.is_empty()).map(String::from));
+    }
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         let mut value = |name: &str| args.next().unwrap_or_else(|| fail(format!("{name} needs a value")));
@@ -162,6 +174,8 @@ async fn main() {
             }
             "--http" => config.scheme = "http".into(),
             "--config" => config_file = Some(value("--config")),
+            "--enforce-rbac" => config.enforce_rbac = true,
+            "--rbac-owner" => config.rbac_owners.push(value("--rbac-owner")),
             "-h" | "--help" => {
                 print!("{USAGE}");
                 return;
@@ -189,6 +203,9 @@ async fn main() {
     println!("  Key Vault:                {}", config.vault_uri("<vault>"));
     println!("  Subscription:             {}", config.subscription_id);
     println!("  Tenant:                   {}", config.tenant_id);
+    if config.enforce_rbac {
+        println!("  Role assignments:         enforced (owners: {})", config.rbac_owners.join(", "));
+    }
 
     let amqp_address = format!("{bind}:{}", config.amqp_port);
     let amqp = tokio::net::TcpListener::bind(&amqp_address)
