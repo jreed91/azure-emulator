@@ -4,7 +4,7 @@ use serde_json::json;
 use crate::support::{Client, SUB};
 
 /// A type that is modeled but not implemented.
-const NAMESPACES: &str = "/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/acct/encryptionScopes";
+const NAMESPACES: &str = "/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/acct/localUsers";
 
 #[tokio::test]
 async fn scaffolded_types_are_mounted_as_honest_stubs() {
@@ -63,7 +63,7 @@ async fn coverage_separates_implemented_from_stubbed() {
     assert!(implemented("StorageAccounts_CheckNameAvailability"));
     assert!(implemented("Vaults_CreateOrUpdate"));
     assert!(!implemented("StorageAccounts_Failover"), "an action nobody wrote");
-    assert!(!implemented("BlobContainers_Create"), "a stubbed nested type");
+    assert!(!implemented("LocalUsers_CreateOrUpdate"), "a stubbed nested type");
     assert!(!implemented("MigrationConfigs_CreateAndStartMigration"), "a stubbed type");
     assert!(!implemented("Operations_List"), "not routed yet");
 }

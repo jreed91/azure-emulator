@@ -2,6 +2,7 @@
 //! Manager and the Blob service data plane on `{account}.blob.core.<suffix>`.
 
 pub mod blob;
+mod management;
 pub mod scaffold;
 mod shared_key;
 mod state;
@@ -26,6 +27,7 @@ pub fn register(registry: &mut ArmRegistry) {
         "Microsoft.Storage/checkNameAvailability",
         Arc::new(check_name_availability),
     );
+    management::register(registry);
     // Everything else in the specification is mounted as a 501 stub.
     registry.register_scaffold(&scaffold::PROVIDER);
 }
@@ -141,6 +143,10 @@ impl ResourceTypeHandler for StorageAccounts {
 
     fn actions(&self) -> &'static [&'static str] {
         &["listKeys", "regenerateKey"]
+    }
+
+    fn created(&self, ctx: &ArmContext<'_>, resource: &Resource) {
+        management::create_services(ctx, resource);
     }
 
     fn deleted(&self, ctx: &ArmContext<'_>, resource: &Resource) {

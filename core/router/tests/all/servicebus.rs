@@ -143,6 +143,13 @@ async fn queues_topics_subscriptions_and_rules() {
     let reply = put(&client, "orders-bus/queues/bad", json!({"properties": {"maxDeliveryCount": 0}})).await;
     assert_eq!(reply.status, StatusCode::BAD_REQUEST);
 
+    let reply = client
+        .arm(Method::PATCH, &path("orders-bus/queues/incoming"), Some(json!({"properties": {"messageCount": 99, "maxDeliveryCount": 7}})))
+        .await
+        .json();
+    assert_eq!(reply["properties"]["messageCount"], 0, "an update cannot set service-owned properties");
+    assert_eq!(reply["properties"]["maxDeliveryCount"], 7);
+
     put(&client, "orders-bus/topics/events", json!({})).await;
     assert_eq!(get(&client, "orders-bus/topics/events").await["properties"]["subscriptionCount"], 0);
     let subscription = put(&client, "orders-bus/topics/events/subscriptions/audit", json!({"properties": {"maxDeliveryCount": 5}})).await;

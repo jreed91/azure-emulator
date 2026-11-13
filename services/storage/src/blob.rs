@@ -292,7 +292,7 @@ struct BlobRequest<'a> {
     query: &'a std::collections::BTreeMap<String, String>,
 }
 
-fn is_valid_container_name(name: &str) -> bool {
+pub(crate) fn is_valid_container_name(name: &str) -> bool {
     let bytes = name.as_bytes();
     (3..=63).contains(&bytes.len())
         && bytes.iter().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-')
@@ -369,12 +369,7 @@ impl BlobRequest<'_> {
         let now = SystemTime::now();
         account.containers.insert(
             container.to_string(),
-            Container {
-                etag: etag.clone(),
-                last_modified: now,
-                metadata: self.metadata(),
-                blobs: Default::default(),
-            },
+            Container::new(etag.clone(), now, self.metadata()),
         );
         Ok(respond(
             StatusCode::CREATED,

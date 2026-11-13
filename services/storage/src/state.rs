@@ -31,7 +31,27 @@ pub(crate) struct Container {
     pub etag: String,
     pub last_modified: SystemTime,
     pub metadata: Vec<(String, String)>,
+    /// `None`, `Blob` or `Container`: what anonymous callers may read.
+    pub public_access: String,
+    /// Settings only Resource Manager can set, fixed when the container is created.
+    pub default_encryption_scope: String,
+    pub deny_encryption_scope_override: bool,
     pub blobs: BTreeMap<String, Blob>,
+}
+
+impl Container {
+    /// A new, empty, private container.
+    pub(crate) fn new(etag: String, now: SystemTime, metadata: Vec<(String, String)>) -> Self {
+        Self {
+            etag,
+            last_modified: now,
+            metadata,
+            public_access: "None".into(),
+            default_encryption_scope: "$account-encryption-key".into(),
+            deny_encryption_scope_override: false,
+            blobs: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Clone)]

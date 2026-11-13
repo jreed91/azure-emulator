@@ -945,6 +945,8 @@ impl ArmRequest<'_> {
                 .resources
                 .iter()
                 .filter(|(id, _)| id.starts_with(&prefix))
+                // The generic listing shows top-level resources, not their children.
+                .filter(|(_, r)| r.resource_type.matches('/').count() == 1)
                 .map(|(_, r)| r.summary())
                 .collect(),
         )
@@ -1085,12 +1087,17 @@ impl ArmRequest<'_> {
                 Ok(StatusCode::NO_CONTENT.into_response())
             }
             "PUT" => {
-                let object = self.body.as_object().ok_or_else(|| {
-                    ArmError::bad_request(
-                        "InvalidRequestContent",
-                        "The request content was invalid and could not be deserialized.",
-                    )
-                })?;
+                // Some types take no body at all; an absent one is an empty object.
+                let empty = Map::new();
+                let object = match self.body {
+                    Value::Null => &empty,
+                    body => body.as_object().ok_or_else(|| {
+                        ArmError::bad_request(
+                            "InvalidRequestContent",
+                            "The request content was invalid and could not be deserialized.",
+                        )
+                    })?,
+                };
                 let requested = object.get("location").and_then(Value::as_str).map(normalize_location);
                 let stored = existing.as_ref().and_then(|r| r.location.clone());
                 let location = match (requested, stored) {
