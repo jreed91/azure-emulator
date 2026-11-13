@@ -29,6 +29,7 @@ rely on it as a security boundary.
 | `Microsoft.DocumentDB` | Database accounts with `listKeys`, `readonlykeys`, `listConnectionStrings` and `regenerateKey`; SQL databases and containers (the same store as the data plane); the Cosmos DB for NoSQL data plane (see [Cosmos DB](#cosmos-db)) |
 | Key Vault secrets | Set, get (latest or by version), update attributes, list, list versions, soft delete, get and list deleted, recover, purge |
 | Key Vault keys | RSA (2048, 3072, 4096) and EC (P-256, P-384, P-521, P-256K) keys, `-HSM` types in Premium vaults: create, import (JSON Web Key), get (latest or by version), update (operations, attributes, tags), list, list versions, rotate, rotation policy (stored; rotation is not automatic), backup and restore, soft delete with get and list deleted, recover and purge. Encrypt, decrypt, wrap and unwrap with `RSA1_5`, `RSA-OAEP` and `RSA-OAEP-256`; sign and verify with `RS256`–`RS512`, `PS256`–`PS512`, `ES256`, `ES384`, `ES512` and `ES256K` over a digest; random bytes. A key's permitted operations and `enabled` are enforced |
+| Key Vault certificates | Create with the `Self` issuer (signed by its own key) or the `Unknown` issuer (a CSR, completed by merging the CA's certificate); import PKCS#12 (encrypted or not) or PEM; get (latest or by version), update, list, list versions, policy, pending operation (get, cancel, delete), soft delete with get and list deleted, recover and purge, backup and restore, contacts and issuers. Each version comes with its key (RSA 2048–4096, or EC on P-256 or P-384) and a secret holding the key and certificates as PKCS#12 or PEM, under the same version |
 
 Beyond these, every resource type in the Storage, Key Vault, Managed Identity and
 Service Bus specifications is mounted from a generated scaffold and answers `501`
@@ -119,11 +120,12 @@ tried yet.
   the response, and do not check `x-ms-copy-source-authorization`. Shared access
   signatures that name a stored access policy or use a user delegation key are
   not verified, and a token's IP and protocol restrictions are not enforced.
-- Key Vault: certificates, the managed HSM data plane (and with it symmetric
-  keys and AES algorithms), automatic rotation on a key rotation policy's
-  schedule, key release, private endpoints, and listing pages. Purge protection is
-  stored but does not block a purge, and a key's `nbf` and `exp` are stored
-  but not enforced.
+- Key Vault: certificates from issuers other than `Self` and `Unknown` (an
+  issuer can be configured but not used), certificate auto-renewal, the
+  managed HSM data plane (and with it symmetric keys and AES algorithms),
+  automatic rotation on a key rotation policy's schedule, key release, private
+  endpoints, and listing pages. Purge protection is stored but does not block
+  a purge, and a key's `nbf` and `exp` are stored but not enforced.
 - Some error codes and messages are best-effort and have not been compared with
   real Azure; the code marks the ones known to be unverified.
 - State is kept across restarts only with `--persist`, and then without the
@@ -561,7 +563,7 @@ Each `Emulator` is fully isolated. `core/router/tests/` shows how to drive it.
 ├── services/
 │   ├── entra/           # token service
 │   ├── storage/         # Microsoft.Storage + Blob data plane
-│   ├── keyvault/        # Microsoft.KeyVault + secrets data plane
+│   ├── keyvault/        # Microsoft.KeyVault + secrets, keys and certificates data planes
 │   ├── managedidentity/ # Microsoft.ManagedIdentity
 │   ├── servicebus/      # Microsoft.ServiceBus + the AMQP broker (Service Bus and Event Hubs)
 │   ├── eventhub/        # Microsoft.EventHub
