@@ -8,8 +8,9 @@ It is modelled on [aws/aws-emulator](https://github.com/aws/aws-emulator): one
 binary, one port, one crate per service, all state in memory, and an honest `501`
 for anything not implemented yet.
 
-**This is an early slice, not a complete emulator.** Do not use it for production
-workloads or to test security.
+**Not every Azure API is here** (see below for what is), and what is here is
+for development and tests: do not use it for production workloads, and do not
+rely on it as a security boundary.
 
 ## What works today
 
@@ -103,8 +104,72 @@ cargo run -p azure-emulator
 ```
 
 The emulator serves HTTPS on `127.0.0.1:10443` and prints its endpoints. Options:
-`--port`, `--bind`, `--host`, `--dns-suffix`, `--http`; run with `--help` for
-details.
+`--port`, `--bind`, `--host`, `--dns-suffix`, `--amqp-port`, `--http`,
+`--config`; each also has an `AZURE_EMULATOR_*` environment variable. Run with
+`--help` for details. (Pick ports Node's `fetch` allows if you change them:
+it refuses some, such as `10080`.)
+
+### Docker
+
+```bash
+docker build -t azure-emulator .
+docker run -p 10443:10443 -p 5672:5672 azure-emulator
+```
+
+Pushes to `main` publish `ghcr.io/<owner>/azure-emulator:edge` (and a
+`sha-<commit>` tag); `v*` tags publish versioned images and release binaries.
+The image listens on all interfaces and keeps its generated CA in `/data`. In
+Compose, with resources created at startup from a file:
+
+```yaml
+services:
+  azure:
+    image: ghcr.io/<owner>/azure-emulator:edge
+    environment:
+      AZURE_EMULATOR_HTTP: "1"          # plain HTTP for Resource Manager
+      AZURE_EMULATOR_CONFIG: /config.json
+    volumes:
+      - ./azure-emulator.json:/config.json:ro
+    ports: ["10443:10443", "5672:5672"]
+```
+
+### Provisioning at startup
+
+`--config <file>` (or `AZURE_EMULATOR_CONFIG`) creates resources before the
+emulator starts serving, through the same Resource Manager API a client would
+call, so they are validated the same way. Service Bus has a shorthand; any
+other resource can be listed by id:
+
+```json
+{
+  "serviceBus": [{
+    "resourceGroup": "local",
+    "namespace": "local-bus",
+    "keys": { "RootManageSharedAccessKey": "SAS_KEY_VALUE" },
+    "queues": [{ "name": "jobs", "properties": { "maxDeliveryCount": 5 } }],
+    "topics": [{
+      "name": "events",
+      "subscriptions": [
+        { "name": "all" },
+        { "name": "errors", "rules": [{ "name": "errors", "properties": {
+          "filterType": "SqlFilter", "sqlFilter": { "sqlExpression": "level = 'error'" } } }] }
+      ]
+    }]
+  }],
+  "resources": [{
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/local/providers/Microsoft.Storage/storageAccounts/localfiles",
+    "apiVersion": "2023-05-01",
+    "body": { "location": "eastus", "kind": "StorageV2", "sku": { "name": "Standard_LRS" } }
+  }]
+}
+```
+
+`keys` fixes an authorization rule's keys (a string is the primary key; or
+`{"primary": "...", "secondary": "..."}`), so connection strings can be written
+ahead of time. A rule other than `RootManageSharedAccessKey` is created with
+`Listen`, `Send` and `Manage`. Rules given for a subscription replace its
+`$Default` rule. Keys can also be set at any time with `regenerateKeys` and a
+`key` in the body, as on Azure.
 
 ### Trust the certificate
 
@@ -170,7 +235,20 @@ Data-plane endpoints come back from the control plane (`primaryEndpoints.blob`,
 
 The emulator also runs an AMQP 1.0 broker (plain AMQP, port `5672`; change it
 with `--amqp-port`). The connection strings `listKeys` returns point at it and
-carry `UseDevelopmentEmulator=true`, which tells the SDKs to use plain AMQP:
+carry `UseDevelopmentEmulator=true`, which tells the SDKs to use plain AMQP.
+
+A connection string does not have to use the namespace's own hostname
+(`<namespace>.servicebus.azure.localhost`): any name that reaches the
+emulator works, such as `localhost` or a container's name. The namespace is
+the host's first label when a namespace has that name, and otherwise the only
+namespace there is. With keys fixed in a provisioning file, this works
+without any setup call:
+
+```
+Endpoint=sb://localhost:5672/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true
+```
+
+From Python, reading the connection string from Resource Manager:
 
 ```python
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
@@ -198,7 +276,10 @@ NULL`, `[NOT] IN`, `[NOT] LIKE` with `ESCAPE`, `EXISTS`, and `sys.`/`user.`
 properties; an invalid expression is refused when the rule is created.
 Shared access signatures are verified against the namespace's or entity's
 authorization rule keys and their rights. Message counts show up on the queue and
-subscription resources.
+subscription resources. Every abandon counts as a delivery attempt, and links
+advertise the entity's maximum message size (256 KB by default), which the SDKs
+size message batches by. The Python and JavaScript SDKs are both tested
+against it.
 
 The broker is built on `fe2o3-amqp`, vendored with small patches listed in
 `vendor/fe2o3-amqp/PATCHED.md`.
@@ -321,3 +402,10 @@ cd tests/sdk && python -m pytest -n auto
 No hosts-file entries or certificate setup are needed: the suite resolves
 `*.localhost` itself and trusts the emulator's CA. Set `AZURE_EMULATOR_BIN` to
 test a binary other than `target/debug/azure-emulator`.
+
+A smaller suite drives Service Bus with the Azure SDK for JavaScript:
+
+```bash
+cargo build -p azure-emulator
+cd tests/sdk-js && npm ci && npm test
+```

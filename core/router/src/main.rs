@@ -23,6 +23,12 @@ OPTIONS:
         --dns-suffix <S>   Suffix of data-plane hostnames [default: azure.localhost]
         --amqp-port <PORT> Port of the Service Bus AMQP listener [default: 5672]
         --http             Serve plain HTTP instead of HTTPS
+        --config <FILE>    Provision resources from a JSON file at startup
+                           (see the README)
+
+Every option can also be set in the environment: AZURE_EMULATOR_PORT,
+AZURE_EMULATOR_AMQP_PORT, AZURE_EMULATOR_BIND, AZURE_EMULATOR_HOST,
+AZURE_EMULATOR_DNS_SUFFIX, AZURE_EMULATOR_HTTP=1, AZURE_EMULATOR_CONFIG.
     -h, --help             Print this help
 ";
 
@@ -112,8 +118,25 @@ async fn main() {
     }
     let mut config = Config::default();
     let mut bind = "127.0.0.1".to_string();
-    if let Ok(port) = std::env::var("AZURE_EMULATOR_PORT") {
+    let mut config_file = std::env::var("AZURE_EMULATOR_CONFIG").ok();
+    let env = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    if let Some(port) = env("AZURE_EMULATOR_PORT") {
         config.port = port.parse().unwrap_or_else(|_| fail("AZURE_EMULATOR_PORT is not a port"));
+    }
+    if let Some(port) = env("AZURE_EMULATOR_AMQP_PORT") {
+        config.amqp_port = port.parse().unwrap_or_else(|_| fail("AZURE_EMULATOR_AMQP_PORT is not a port"));
+    }
+    if let Some(value) = env("AZURE_EMULATOR_BIND") {
+        bind = value;
+    }
+    if let Some(value) = env("AZURE_EMULATOR_HOST") {
+        config.host = value;
+    }
+    if let Some(value) = env("AZURE_EMULATOR_DNS_SUFFIX") {
+        config.dns_suffix = value;
+    }
+    if env("AZURE_EMULATOR_HTTP").is_some_and(|v| v != "0" && !v.eq_ignore_ascii_case("false")) {
+        config.scheme = "http".into();
     }
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -129,6 +152,7 @@ async fn main() {
                 config.amqp_port = value("--amqp-port").parse().unwrap_or_else(|_| fail("--amqp-port is not a port"))
             }
             "--http" => config.scheme = "http".into(),
+            "--config" => config_file = Some(value("--config")),
             "-h" | "--help" => {
                 print!("{USAGE}");
                 return;
@@ -141,6 +165,14 @@ async fn main() {
         .unwrap_or_else(|_| fail("--bind is not an IP address"));
 
     let emulator = Emulator::new(config.clone());
+    if let Some(path) = &config_file {
+        let text = std::fs::read_to_string(path).unwrap_or_else(|e| fail(format!("cannot read {path}: {e}")));
+        let file: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|e| fail(format!("{path} is not JSON: {e}")));
+        let done = azure_emulator::provision::provision(&emulator, &file)
+            .await
+            .unwrap_or_else(|e| fail(format!("provisioning from {path} failed: {e}")));
+        println!("Provisioned {} resource(s) from {path}", done.len());
+    }
     let app = emulator.router().into_make_service();
     println!("Azure Emulator");
     println!("  Resource Manager + login: {}", config.management_endpoint());

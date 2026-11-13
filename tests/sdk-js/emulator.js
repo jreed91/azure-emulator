@@ -1,7 +1,7 @@
 // Starts one emulator for the test process, on free ports, and talks to its
 // control plane with plain fetch.
 import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -20,10 +20,16 @@ function freePort() {
   });
 }
 
-export async function startEmulator() {
+/** Starts an emulator; `config` is an optional provisioning file's content. */
+export async function startEmulator(config) {
   const [port, amqpPort] = [await freePort(), await freePort()];
   const home = mkdtempSync(join(tmpdir(), "azure-emulator-"));
-  const child = spawn(binary, ["--http", "--port", String(port), "--amqp-port", String(amqpPort)], {
+  const args = ["--http", "--port", String(port), "--amqp-port", String(amqpPort)];
+  if (config) {
+    writeFileSync(join(home, "config.json"), JSON.stringify(config));
+    args.push("--config", join(home, "config.json"));
+  }
+  const child = spawn(binary, args, {
     env: { ...process.env, AZURE_EMULATOR_HOME: home },
     stdio: "ignore",
   });

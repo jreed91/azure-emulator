@@ -63,8 +63,8 @@ pub async fn serve(engine: Arc<Engine>, listener: TcpListener) {
 }
 
 /// What one connection shares across its sessions and links.
-#[derive(Default)]
 struct Context {
+    engine: Arc<Engine>,
     grants: Mutex<Vec<Grant>>,
     /// Where replies to a request/response node go: the client's receiver link
     /// for that node address.
@@ -82,7 +82,7 @@ impl Context {
     /// on this connection that covers it.
     fn entity_address(&self, address: &str) -> Option<(String, String)> {
         if address.contains("://") {
-            return auth::split_uri(address).filter(|(_, path)| !path.is_empty());
+            return auth::split_uri(&self.engine, address).filter(|(_, path)| !path.is_empty());
         }
         let path = address.trim_matches('/').to_string();
         let grants = self.grants.lock().unwrap_or_else(|e| e.into_inner());
@@ -109,7 +109,7 @@ async fn connection(engine: Arc<Engine>, stream: tokio::net::TcpStream) -> Resul
         .sasl_acceptor(SaslAnonymousMechanism::new())
         .build();
     let mut connection = acceptor.accept(stream).await?;
-    let context = Arc::new(Context::default());
+    let context = Arc::new(Context { engine: engine.clone(), grants: Mutex::default(), replies: Mutex::default() });
     while let Some(incoming) = connection.next_incoming_session().await {
         let session = SessionAcceptor::new().accept_incoming_session(incoming, &mut connection).await?;
         tokio::spawn(session_loop(engine.clone(), context.clone(), session));

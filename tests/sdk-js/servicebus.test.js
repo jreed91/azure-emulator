@@ -97,3 +97,28 @@ test("complete, defer and receive deferred", async () => {
   await receiver.close();
   await sender.close();
 });
+
+test("a provisioned namespace takes a hand-written localhost connection string", async () => {
+  const provisioned = await startEmulator({
+    serviceBus: [{
+      resourceGroup: "local",
+      namespace: "local-bus",
+      keys: { RootManageSharedAccessKey: "SAS_KEY_VALUE" },
+      queues: [{ name: "jobs" }],
+    }],
+  });
+  const connection = `Endpoint=sb://localhost:${provisioned.amqpPort}/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true`;
+  const local = new ServiceBusClient(connection);
+  const forged = new ServiceBusClient(connection.replace("SAS_KEY_VALUE", "WRONG"), { retryOptions: { maxRetries: 0 } });
+  try {
+    await local.createSender("jobs").sendMessages({ body: "hello" });
+    const receiver = local.createReceiver("jobs", { receiveMode: "receiveAndDelete" });
+    const got = await receiver.receiveMessages(1, { maxWaitTimeInMs: 2000 });
+    assert.deepEqual(got.map((m) => m.body), ["hello"]);
+    await assert.rejects(forged.createSender("jobs").sendMessages({ body: "nope" }), { code: "UnauthorizedAccess" });
+  } finally {
+    await local.close();
+    await forged.close();
+    provisioned.stop();
+  }
+});
