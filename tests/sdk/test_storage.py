@@ -1,0 +1,182 @@
+"""Storage: the account on Resource Manager, the Blob data plane, and shared
+access signatures."""
+
+import datetime
+
+import pytest
+from azure.core.exceptions import HttpResponseError, ResourceExistsError, ResourceNotFoundError
+from azure.storage.blob import (
+    AccountSasPermissions,
+    BlobClient,
+    BlobSasPermissions,
+    BlobServiceClient,
+    ContainerClient,
+    ContainerSasPermissions,
+    ResourceTypes,
+    generate_account_sas,
+    generate_blob_sas,
+    generate_container_sas,
+)
+
+
+def expiry(hours=1):
+    return datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=hours)
+
+
+def test_account(storage, emulator, group, account):
+    assert not storage.storage_accounts.check_name_availability({"name": "Bad_Name"}).name_available
+    assert not storage.storage_accounts.check_name_availability({"name": account.name}).name_available
+    assert account.blob_url == f"https://{account.name}.blob.core.azure.localhost:{emulator.port}/"
+    assert account.name in [a.name for a in storage.storage_accounts.list()]
+    assert account.name in [a.name for a in storage.storage_accounts.list_by_resource_group(group)]
+
+    keys = storage.storage_accounts.list_keys(group, account.name)["keys"]
+    regenerated = storage.storage_accounts.regenerate_key(group, account.name, {"keyName": "key1"})["keys"]
+    assert regenerated[0]["value"] != keys[0]["value"]
+    assert regenerated[1]["value"] == keys[1]["value"]
+
+
+@pytest.mark.parametrize("auth", ["entra", "shared-key"])
+def test_blob_round_trip(credential, account, auth):
+    service = BlobServiceClient(account.blob_url, credential=credential if auth == "entra" else account.key)
+    container = service.create_container("data")
+    with pytest.raises(ResourceExistsError):
+        service.create_container("data")
+
+    blob = container.get_blob_client("folder/hello world.txt")
+    blob.upload_blob(b"hello from the sdk")
+    with pytest.raises(ResourceExistsError):
+        blob.upload_blob(b"again")
+    blob.upload_blob(b"hello from the sdk, twice", overwrite=True, metadata={"origin": "sdk-tests"})
+    assert blob.download_blob().readall() == b"hello from the sdk, twice"
+    assert blob.download_blob(offset=6, length=4).readall() == b"from"
+    properties = blob.get_blob_properties()
+    assert properties.size == 25
+    assert properties.metadata == {"origin": "sdk-tests"}
+
+    container.upload_blob("empty", b"")
+    assert container.download_blob("empty").readall() == b""
+    assert [b.name for b in container.list_blobs()] == ["empty", "folder/hello world.txt"]
+    assert sorted(b.name for b in container.walk_blobs(delimiter="/")) == ["empty", "folder/"]
+
+    blob.delete_blob()
+    with pytest.raises(ResourceNotFoundError):
+        blob.get_blob_properties()
+    assert "data" in [c.name for c in service.list_containers()]
+    container.delete_container()
+    assert "data" not in [c.name for c in service.list_containers()]
+
+
+def test_wrong_account_key_is_refused(account):
+    with pytest.raises(HttpResponseError) as refused:
+        BlobServiceClient(account.blob_url, credential="A" * 88).create_container("nope")
+    assert refused.value.status_code == 403
+
+
+def test_management_plane_under_the_account(storage, credential, group, account):
+    assert storage.blob_services.get_service_properties(group, account.name).sku.name == "Standard_LRS"
+
+    # Containers are one store, whichever plane creates them.
+    storage.blob_containers.create(group, account.name, "from-arm", {"properties": {"metadata": {"made": "by-arm"}}})
+    from_arm = BlobServiceClient(account.blob_url, credential=credential).get_container_client("from-arm")
+    assert from_arm.get_container_properties().metadata == {"made": "by-arm"}
+    from_arm.upload_blob("x.txt", b"x")
+    BlobServiceClient(account.blob_url, credential=credential).create_container("from-data-plane")
+    assert sorted(c.name for c in storage.blob_containers.list(group, account.name)) == ["from-arm", "from-data-plane"]
+    storage.blob_containers.delete(group, account.name, "from-data-plane")
+    assert [c.name for c in storage.blob_containers.list(group, account.name)] == ["from-arm"]
+
+    storage.queue.create(group, account.name, "jobs", {})
+    storage.table.create(group, account.name, "Customers")
+    share = storage.file_shares.create(group, account.name, "docs", {"properties": {"shareQuota": 10}})
+    assert share.share_quota == 10
+    assert share.enabled_protocols == "SMB"
+    scope = storage.encryption_scopes.put(group, account.name, "tenant-a", {})
+    assert scope.state == "Enabled"
+    assert scope.source == "Microsoft.Storage"
+
+
+def test_lifecycle_management_policy(storage, group, account):
+    rule = {
+        "name": "expire",
+        "enabled": True,
+        "type": "Lifecycle",
+        "definition": {
+            "actions": {"baseBlob": {"delete": {"daysAfterModificationGreaterThan": 30}}},
+            "filters": {"blobTypes": ["blockBlob"]},
+        },
+    }
+    storage.management_policies.create_or_update(group, account.name, "default", {"properties": {"policy": {"rules": [rule]}}})
+    assert storage.management_policies.get(group, account.name, "default").policy.rules[0].name == "expire"
+
+
+@pytest.fixture
+def signed(account):
+    """A container `sas` holding `a.txt`, created with an account SAS."""
+    token = generate_account_sas(
+        account.name,
+        account.key,
+        ResourceTypes(service=True, container=True, object=True),
+        AccountSasPermissions(read=True, write=True, delete=True, list=True, create=True),
+        expiry(),
+    )
+    service = BlobServiceClient(account.blob_url, credential=token)
+    service.create_container("sas").upload_blob("a.txt", b"signed")
+    assert "sas" in [c.name for c in service.list_containers()]
+    return account
+
+
+def test_sdk_signed_tokens_are_accepted(signed):
+    read_only = generate_account_sas(signed.name, signed.key, ResourceTypes(object=True), AccountSasPermissions(read=True), expiry())
+    assert BlobClient(signed.blob_url, "sas", "a.txt", credential=read_only).download_blob().readall() == b"signed"
+
+    blob_sas = generate_blob_sas(
+        signed.name, "sas", "a.txt", account_key=signed.key, permission=BlobSasPermissions(read=True), expiry=expiry()
+    )
+    assert BlobClient(signed.blob_url, "sas", "a.txt", credential=blob_sas).download_blob().readall() == b"signed"
+
+    container_sas = generate_container_sas(
+        signed.name, "sas", account_key=signed.key, permission=ContainerSasPermissions(read=True, list=True), expiry=expiry()
+    )
+    assert [b.name for b in ContainerClient(signed.blob_url, "sas", credential=container_sas).list_blobs()] == ["a.txt"]
+
+
+REFUSALS = {
+    "read-only token used to write": lambda a: BlobClient(
+        a.blob_url, "sas", "b.txt",
+        credential=generate_account_sas(a.name, a.key, ResourceTypes(object=True), AccountSasPermissions(read=True), expiry()),
+    ).upload_blob(b"x"),
+    "blob token used on another blob": lambda a: BlobClient(
+        a.blob_url, "sas", "other.txt",
+        credential=generate_blob_sas(a.name, "sas", "a.txt", account_key=a.key, permission=BlobSasPermissions(read=True), expiry=expiry()),
+    ).download_blob().readall(),
+    "expired token": lambda a: BlobClient(
+        a.blob_url, "sas", "a.txt",
+        credential=generate_blob_sas(a.name, "sas", "a.txt", account_key=a.key, permission=BlobSasPermissions(read=True), expiry=expiry(-1)),
+    ).download_blob().readall(),
+    "token signed with the wrong key": lambda a: BlobClient(
+        a.blob_url, "sas", "a.txt",
+        credential=generate_blob_sas(a.name, "sas", "a.txt", account_key="A" * 88, permission=BlobSasPermissions(read=True), expiry=expiry()),
+    ).download_blob().readall(),
+}
+
+
+@pytest.mark.parametrize("case", list(REFUSALS))
+def test_bad_tokens_are_refused(signed, case):
+    with pytest.raises(HttpResponseError) as refused:
+        REFUSALS[case](signed)
+    assert refused.value.status_code == 403
+
+
+def test_token_issued_by_resource_manager(storage, group, signed):
+    token = storage.storage_accounts.list_account_sas(
+        group,
+        signed.name,
+        {
+            "signedServices": "b",
+            "signedResourceTypes": "o",
+            "signedPermission": "r",
+            "signedExpiryTime": expiry().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        },
+    ).account_sas_token
+    assert BlobClient(signed.blob_url, "sas", "a.txt", credential=token).download_blob().readall() == b"signed"
