@@ -1589,6 +1589,7 @@ name = "service-servicebus"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "bytes",
  "chrono",
  "emulator-core",
  "fe2o3-amqp",

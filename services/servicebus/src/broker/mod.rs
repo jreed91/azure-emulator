@@ -19,6 +19,7 @@ mod auth;
 mod duration;
 mod filters;
 mod management;
+pub(crate) mod sql;
 pub(crate) mod store;
 
 use std::collections::HashMap;
@@ -62,8 +63,8 @@ pub async fn serve(engine: Arc<Engine>, listener: TcpListener) {
 }
 
 /// What one connection shares across its sessions and links.
-#[derive(Default)]
 struct Context {
+    engine: Arc<Engine>,
     grants: Mutex<Vec<Grant>>,
     /// Where replies to a request/response node go: the client's receiver link
     /// for that node address.
@@ -81,7 +82,7 @@ impl Context {
     /// on this connection that covers it.
     fn entity_address(&self, address: &str) -> Option<(String, String)> {
         if address.contains("://") {
-            return auth::split_uri(address).filter(|(_, path)| !path.is_empty());
+            return auth::split_uri(&self.engine, address).filter(|(_, path)| !path.is_empty());
         }
         let path = address.trim_matches('/').to_string();
         let grants = self.grants.lock().unwrap_or_else(|e| e.into_inner());
@@ -108,7 +109,7 @@ async fn connection(engine: Arc<Engine>, stream: tokio::net::TcpStream) -> Resul
         .sasl_acceptor(SaslAnonymousMechanism::new())
         .build();
     let mut connection = acceptor.accept(stream).await?;
-    let context = Arc::new(Context::default());
+    let context = Arc::new(Context { engine: engine.clone(), grants: Mutex::default(), replies: Mutex::default() });
     while let Some(incoming) = connection.next_incoming_session().await {
         let session = SessionAcceptor::new().accept_incoming_session(incoming, &mut connection).await?;
         tokio::spawn(session_loop(engine.clone(), context.clone(), session));
@@ -130,11 +131,24 @@ fn refusal_error(refusal: &Refusal) -> AmqpError {
 }
 
 async fn session_loop(engine: Arc<Engine>, context: Arc<Context>, mut session: ListenerSessionHandle) {
-    let acceptor = LinkAcceptor::builder()
-        .supported_sender_settle_modes(SupportedSenderSettleModes::All)
-        .supported_receiver_settle_modes(SupportedReceiverSettleModes::Both)
-        .build();
     while let Some(attach) = session.next_incoming_attach().await {
+        // The largest message the link takes: what the SDKs size batches by.
+        let max_message_size = attach
+            .target
+            .as_ref()
+            .and_then(|t| match t.as_ref() {
+                fe2o3_amqp_types::messaging::TargetArchetype::Target(t) => t.address.as_deref(),
+                #[allow(unreachable_patterns)]
+                _ => None,
+            })
+            .and_then(|address| context.entity_address(address))
+            .and_then(|(namespace, path)| store::resolve(&engine, &namespace, &path).ok())
+            .map_or(store::DEFAULT_MAX_MESSAGE_SIZE, |entity| entity.max_message_size());
+        let acceptor = LinkAcceptor::builder()
+            .supported_sender_settle_modes(SupportedSenderSettleModes::All)
+            .supported_receiver_settle_modes(SupportedReceiverSettleModes::Both)
+            .max_message_size(max_message_size)
+            .build();
         let settled = attach.snd_settle_mode == SenderSettleMode::Settled;
         let session_filter = attach
             .source
@@ -374,13 +388,18 @@ async fn deliver(engine: Arc<Engine>, mut link: Sender, entity: Entity, remove: 
             }
             continue;
         };
+        let payload = match store::encode(delivery.message) {
+            Ok(payload) => payload,
+            Err(_) => {
+                if !remove {
+                    store::unreserve(&engine, &entity, delivery.sequence);
+                }
+                return;
+            }
+        };
         // The lock token is the delivery tag: a 16-byte little-endian UUID.
-        let sendable = Sendable::builder()
-            .message(delivery.message)
-            .settled(remove)
-            .delivery_tag(delivery.lock_token.to_bytes_le().to_vec())
-            .build();
-        let sent = tokio::time::timeout(CREDIT_WAIT, link.send_batchable(sendable)).await;
+        let tag = delivery.lock_token.to_bytes_le().to_vec();
+        let sent = tokio::time::timeout(CREDIT_WAIT, link.send_encoded(payload, remove, tag)).await;
         let outcome = match sent {
             Ok(Ok(outcome)) => outcome,
             Ok(Err(_)) => {
@@ -442,17 +461,19 @@ fn properties_to_modify(fields: Option<&Fields>) -> Vec<(String, SimpleValue)> {
         .collect()
 }
 
-/// What a receiver's outcome means for the message.
+/// What a receiver's outcome means for the message. Every abandon counts as
+/// a delivery attempt, as on Service Bus, whatever `delivery-failed` says:
+/// the JavaScript SDK abandons with `modified` and leaves the flag unset.
 fn settlement(outcome: Outcome) -> Settlement {
     match outcome {
         Outcome::Accepted(_) => Settlement::Complete,
-        Outcome::Released(_) => Settlement::Abandon { failed: false, properties: Vec::new() },
+        Outcome::Released(_) => Settlement::Abandon { failed: true, properties: Vec::new() },
         Outcome::Modified(modified) => {
             let properties = properties_to_modify(modified.message_annotations.as_ref());
             if modified.undeliverable_here == Some(true) {
                 Settlement::Defer { properties }
             } else {
-                Settlement::Abandon { failed: modified.delivery_failed.unwrap_or(false), properties }
+                Settlement::Abandon { failed: true, properties }
             }
         }
         Outcome::Rejected(rejected) => {
@@ -466,6 +487,6 @@ fn settlement(outcome: Outcome) -> Settlement {
             }
         }
         #[allow(unreachable_patterns)]
-        _ => Settlement::Abandon { failed: false, properties: Vec::new() },
+        _ => Settlement::Abandon { failed: true, properties: Vec::new() },
     }
 }

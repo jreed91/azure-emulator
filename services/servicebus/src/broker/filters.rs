@@ -1,41 +1,36 @@
-//! Subscription rules: whether a message sent to a topic matches a rule.
+//! Subscription rules: whether a message sent to a topic matches a rule, and
+//! what the rule's action does to the subscription's copy.
 //!
-//! Correlation filters are evaluated completely: every property the filter sets
-//! must equal the message's. SQL filters are a language; until the emulator has
-//! an evaluator for the whole of it, only the always-true and always-false
-//! expressions (`1=1`, `1=0`, the forms `$Default` and the SDKs write) are
-//! evaluated, and any other expression refuses the send rather than guessing.
-//! Rule actions are refused the same way.
+//! Correlation filters compare every property they set. SQL filters and
+//! actions are evaluated by [`super::sql`].
 
 use fe2o3_amqp_types::messaging::MessageId;
 use fe2o3_amqp_types::primitives::SimpleValue;
 use serde_json::Value as Json;
 
+use super::sql::{Action, Filter};
 use super::store::{refuse, AmqpMessage, Refusal};
 
 /// Whether the rule with these `properties` matches `message`.
 pub(crate) fn matches(rule: &Json, message: &AmqpMessage) -> Result<bool, Refusal> {
-    if let Some(action) = rule.pointer("/action/sqlExpression").and_then(Json::as_str).filter(|a| !a.trim().is_empty()) {
-        return Err(refuse(
-            "amqp:not-implemented",
-            format!("Rule actions ('{action}') are not supported by the emulator yet."),
-        ));
-    }
     match rule.get("filterType").and_then(Json::as_str).unwrap_or("SqlFilter") {
         "CorrelationFilter" => Ok(correlation(rule.get("correlationFilter").unwrap_or(&Json::Null), message)),
-        _ => sql(rule.pointer("/sqlFilter/sqlExpression").and_then(Json::as_str).unwrap_or("1=1")),
+        _ => {
+            let expression = rule.pointer("/sqlFilter/sqlExpression").and_then(Json::as_str).unwrap_or("1=1");
+            let filter = Filter::parse(expression)
+                .map_err(|e| refuse("amqp:internal-error", format!("The rule's SQL filter '{expression}' is not valid: {e}")))?;
+            Ok(filter.matches(message))
+        }
     }
 }
 
-fn sql(expression: &str) -> Result<bool, Refusal> {
-    let compact: String = expression.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_ascii_lowercase();
-    match compact.as_str() {
-        "1=1" | "true" => Ok(true),
-        "1=0" | "false" => Ok(false),
-        _ => Err(refuse(
-            "amqp:not-implemented",
-            format!("The SQL filter '{expression}' cannot be evaluated: the emulator evaluates only 1=1 and 1=0 so far. Use a correlation filter instead."),
-        )),
+/// The rule's action, if it has one.
+pub(crate) fn action(rule: &Json) -> Result<Option<Action>, Refusal> {
+    match rule.pointer("/action/sqlExpression").and_then(Json::as_str).filter(|a| !a.trim().is_empty()) {
+        None => Ok(None),
+        Some(text) => Action::parse(text)
+            .map(Some)
+            .map_err(|e| refuse("amqp:internal-error", format!("The rule's action '{text}' is not valid: {e}"))),
     }
 }
 

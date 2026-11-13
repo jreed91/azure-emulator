@@ -25,6 +25,9 @@ use super::duration;
 
 pub(crate) type AmqpMessage = Message<Body<Value>>;
 
+/// The maximum message size of a Standard namespace: 256 KB.
+pub(crate) const DEFAULT_MAX_MESSAGE_SIZE: u64 = 256 * 1024;
+
 const NAMESPACE_TYPE: &str = "Microsoft.ServiceBus/namespaces";
 
 /// Why an operation on an entity was refused, as an AMQP error condition.
@@ -92,6 +95,11 @@ impl Entity {
 
     fn dead_letter_on_expiry(&self) -> bool {
         self.setting("deadLetteringOnMessageExpiration").and_then(Json::as_bool).unwrap_or(false)
+    }
+
+    /// The largest message the entity accepts, in bytes.
+    pub fn max_message_size(&self) -> u64 {
+        self.setting("maxMessageSizeInKilobytes").and_then(Json::as_u64).map_or(DEFAULT_MAX_MESSAGE_SIZE, |kb| kb * 1024)
     }
 
     pub fn requires_session(&self) -> bool {
@@ -304,24 +312,27 @@ pub(crate) fn counts(engine: &Engine, key: &str) -> serde_json::Value {
 
 /// Accepts `message` sent to `entity`: a queue (or a forwarding chain from it),
 /// or a topic, which copies it to every subscription whose rules match.
-pub(crate) fn send(engine: &Engine, entity: &Entity, message: AmqpMessage) -> Result<i64, Refusal> {
+pub(crate) fn send(engine: &Engine, entity: &Entity, mut message: AmqpMessage) -> Result<i64, Refusal> {
     entity.check_send()?;
+    // Service Bus gives a message without a message id one of its own.
+    let properties = message.properties.get_or_insert_with(Default::default);
+    if properties.message_id.is_none() {
+        properties.message_id = Some(MessageId::String(uuid::Uuid::new_v4().simple().to_string()));
+    }
     if entity.dead_letter {
         return Err(refuse("amqp:not-allowed", "Messages cannot be sent to a dead-letter queue."));
     }
-    let max_kb = match entity.kind {
-        Kind::Subscription => {
-            return Err(refuse("amqp:not-allowed", "Messages are sent to a topic, not to one of its subscriptions."))
-        }
-        _ => entity.setting("maxMessageSizeInKilobytes").and_then(Json::as_u64).unwrap_or(256),
-    };
+    if entity.kind == Kind::Subscription {
+        return Err(refuse("amqp:not-allowed", "Messages are sent to a topic, not to one of its subscriptions."));
+    }
+    let max_bytes = entity.max_message_size();
     let size = serde_amqp::to_vec(&fe2o3_amqp_types::messaging::message::__private::Serializable(&message))
         .map(|bytes| bytes.len())
         .unwrap_or(0);
-    if size as u64 > max_kb * 1024 {
+    if size as u64 > max_bytes {
         return Err(refuse(
             "amqp:link:message-size-exceeded",
-            format!("The message ({size} bytes) exceeds the entity's maximum message size ({max_kb} KB)."),
+            format!("The message ({size} bytes) exceeds the entity's maximum message size ({max_bytes} bytes)."),
         ));
     }
     if entity.requires_session() {
@@ -354,11 +365,15 @@ pub(crate) fn send(engine: &Engine, entity: &Entity, message: AmqpMessage) -> Re
         _ => now,
     };
     let targets = match entity.kind {
-        Kind::Queue => vec![entity.clone()],
+        Kind::Queue => vec![(entity.clone(), message.clone())],
         Kind::Topic => matching_subscriptions(engine, entity, &message)?,
         Kind::Subscription => Vec::new(),
     };
-    for target in targets {
+    let mut filled = std::collections::HashSet::new();
+    for (target, message) in targets {
+        // A second copy for the same subscription (another rule's action)
+        // needs a sequence number of its own.
+        let sequence = if filled.insert(target.key.clone()) { sequence } else { broker.next_sequence(&entity.key) };
         let target = forwarded(engine, target)?;
         let message_ttl = message
             .header
@@ -370,7 +385,7 @@ pub(crate) fn send(engine: &Engine, entity: &Entity, message: AmqpMessage) -> Re
             (own, default) => own.or(default),
         };
         let stored = Stored {
-            message: message.clone(),
+            message,
             sequence,
             enqueued: now,
             available_at,
@@ -398,8 +413,10 @@ fn forwarded(engine: &Engine, mut entity: Entity) -> Result<Entity, Refusal> {
     Err(refuse("amqp:not-allowed", "The auto-forwarding chain is longer than four hops."))
 }
 
-/// The subscriptions of `topic` whose rules match `message`.
-fn matching_subscriptions(engine: &Engine, topic: &Entity, message: &AmqpMessage) -> Result<Vec<Entity>, Refusal> {
+/// The copies of `message` the subscriptions of `topic` receive. A
+/// subscription gets one unmodified copy if any matching rule has no action,
+/// and one copy per matching rule that has an action, with that action applied.
+fn matching_subscriptions(engine: &Engine, topic: &Entity, message: &AmqpMessage) -> Result<Vec<(Entity, AmqpMessage)>, Refusal> {
     let subscriptions: Vec<(Resource, Vec<Resource>)> = {
         let state = engine.state::<ArmState>();
         let state = state.lock();
@@ -410,23 +427,33 @@ fn matching_subscriptions(engine: &Engine, topic: &Entity, message: &AmqpMessage
     };
     let mut out = Vec::new();
     for (subscription, rules) in subscriptions {
-        let mut matched = false;
+        let mut copies = Vec::new();
+        let mut plain = false;
         for rule in &rules {
-            if super::filters::matches(&rule.properties, message)? {
-                matched = true;
-                break;
+            if !super::filters::matches(&rule.properties, message)? {
+                continue;
+            }
+            match super::filters::action(&rule.properties)? {
+                Some(action) => {
+                    let mut copy = message.clone();
+                    action.apply(&mut copy);
+                    copies.push(copy);
+                }
+                None => plain = true,
             }
         }
-        if matched {
-            out.push(Entity {
-                key: format!("{}/{}/subscriptions/{}", topic.namespace, topic.resource.name, subscription.name).to_ascii_lowercase(),
-                namespace: topic.namespace.clone(),
-                path: format!("{}/Subscriptions/{}", topic.resource.name, subscription.name),
-                kind: Kind::Subscription,
-                dead_letter: false,
-                resource: subscription,
-            });
+        if plain {
+            copies.insert(0, message.clone());
         }
+        let target = Entity {
+            key: format!("{}/{}/subscriptions/{}", topic.namespace, topic.resource.name, subscription.name).to_ascii_lowercase(),
+            namespace: topic.namespace.clone(),
+            path: format!("{}/Subscriptions/{}", topic.resource.name, subscription.name),
+            kind: Kind::Subscription,
+            dead_letter: false,
+            resource: subscription,
+        };
+        out.extend(copies.into_iter().map(|copy| (target.clone(), copy)));
     }
     Ok(out)
 }
@@ -714,5 +741,50 @@ pub(crate) fn cancel_scheduled(engine: &Engine, entity: &Entity, sequences: &[i6
                 queue.messages.remove(sequence);
             }
         }
+    }
+}
+
+
+/// Encodes a message for the wire. The header is written by hand with every
+/// field present: the derived encoding leaves out fields at their defaults,
+/// and the SDKs read a missing `delivery-count` as "unknown" rather than 0.
+pub(crate) fn encode(mut message: AmqpMessage) -> Result<bytes::Bytes, serde_amqp::Error> {
+    let header = message.header.take().unwrap_or_default();
+    let mut fields = Vec::with_capacity(16);
+    fields.push(if header.durable { 0x41 } else { 0x42 });
+    fields.extend([0x50, header.priority.0]);
+    match header.ttl {
+        Some(ttl) => {
+            fields.push(0x70);
+            fields.extend(ttl.to_be_bytes());
+        }
+        None => fields.push(0x40),
+    }
+    fields.push(if header.first_acquirer { 0x41 } else { 0x42 });
+    fields.push(0x70);
+    fields.extend(header.delivery_count.to_be_bytes());
+    // Described list: descriptor 0x70 (header), list8 of five fields.
+    let mut out = vec![0x00, 0x53, 0x70, 0xc0, (fields.len() + 1) as u8, 5];
+    out.extend(fields);
+    out.extend(serde_amqp::to_vec(&fe2o3_amqp_types::messaging::message::__private::Serializable(message))?);
+    Ok(out.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_header_keeps_a_zero_delivery_count() {
+        let message: AmqpMessage = Message::builder()
+            .header(Header::default())
+            .body(Body::Value(fe2o3_amqp_types::messaging::AmqpValue(Value::Bool(true))))
+            .build();
+        let bytes = encode(message).unwrap();
+        assert_eq!(&bytes[..6], &[0x00, 0x53, 0x70, 0xc0, 11, 5]);
+        let decoded: fe2o3_amqp_types::messaging::message::__private::Deserializable<AmqpMessage> =
+            serde_amqp::from_slice(&bytes).unwrap();
+        assert_eq!(decoded.0.header.unwrap().delivery_count, 0);
+        assert_eq!(decoded.0.body, Body::Value(fe2o3_amqp_types::messaging::AmqpValue(Value::Bool(true))));
     }
 }

@@ -23,6 +23,7 @@ use http::Request;
 
 pub use emulator_core::Config;
 
+pub mod provision;
 pub mod tls;
 
 /// One isolated emulator instance.

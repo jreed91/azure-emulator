@@ -58,13 +58,45 @@ fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-/// `sb://host[:port]/path` (or `amqp`, `amqps`) as `(namespace, path)`: the
-/// namespace is the host's first label.
-pub(crate) fn split_uri(uri: &str) -> Option<(String, String)> {
+/// `sb://host[:port]/path` (or `amqp`, `amqps`) as `(host, path)`.
+fn split_host(uri: &str) -> Option<(String, String)> {
     let rest = uri.split_once("://").map(|(_, rest)| rest).unwrap_or(uri);
     let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
-    let namespace = host.split(':').next()?.split('.').next()?.to_ascii_lowercase();
-    (!namespace.is_empty()).then(|| (namespace, path.trim_matches('/').to_string()))
+    let host = host.split(':').next()?.to_ascii_lowercase();
+    (!host.is_empty()).then(|| (host, path.trim_matches('/').to_string()))
+}
+
+/// The namespace a client means by `host`. On the emulator's own domain
+/// (`<namespace>.servicebus.<suffix>`) and for any host whose first label
+/// names a namespace, that namespace; for any other host (`localhost`, a
+/// container's name) the only namespace there is, so a connection string
+/// can point at whatever name reaches the emulator.
+pub(crate) fn namespace_for_host(engine: &Engine, host: &str) -> String {
+    let first = host.split('.').next().unwrap_or(host).to_ascii_lowercase();
+    let own_domain = format!(".servicebus.{}", engine.config().dns_suffix.to_ascii_lowercase());
+    if host.ends_with(&own_domain) {
+        return first;
+    }
+    let state = engine.state::<ArmState>();
+    let state = state.lock();
+    let mut namespaces = state
+        .resources()
+        .filter(|r| r.resource_type.eq_ignore_ascii_case("Microsoft.ServiceBus/namespaces"))
+        .map(|r| r.name.to_ascii_lowercase());
+    let names: Vec<String> = namespaces.by_ref().take(64).collect();
+    if names.contains(&first) {
+        return first;
+    }
+    match names.as_slice() {
+        [only] => only.clone(),
+        _ => first,
+    }
+}
+
+/// `sb://host[:port]/path` (or `amqp`, `amqps`) as `(namespace, path)`.
+pub(crate) fn split_uri(engine: &Engine, uri: &str) -> Option<(String, String)> {
+    let (host, path) = split_host(uri)?;
+    Some((namespace_for_host(engine, &host), path))
 }
 
 fn percent_decode(text: &str) -> String {
@@ -74,7 +106,7 @@ fn percent_decode(text: &str) -> String {
 /// Verifies a CBS token for `audience`. `kind` is the token type the client
 /// declared (`servicebus.windows.net:sastoken` or `jwt`).
 pub(crate) fn verify(engine: &Engine, kind: &str, token: &str, audience: &str) -> Result<Grant, String> {
-    let (namespace, audience_path) = split_uri(audience).ok_or("The token's audience is not a Service Bus address.")?;
+    let (namespace, audience_path) = split_uri(engine, audience).ok_or("The token's audience is not a Service Bus address.")?;
     // The SDKs declare `jwt` for shared access signatures too, so the token's
     // own form decides how it is checked.
     let _ = kind;
@@ -104,7 +136,7 @@ pub(crate) fn verify(engine: &Engine, kind: &str, token: &str, audience: &str) -
         return Err("The shared access signature has expired.".into());
     }
     let resource = percent_decode(&raw_resource);
-    let (token_namespace, token_path) = split_uri(&resource).ok_or("The token's resource is not a Service Bus address.")?;
+    let (token_namespace, token_path) = split_uri(engine, &resource).ok_or("The token's resource is not a Service Bus address.")?;
     if token_namespace != namespace {
         return Err("The token was issued for another namespace.".into());
     }
@@ -195,14 +227,14 @@ mod tests {
     #[test]
     fn uris() {
         assert_eq!(
-            split_uri("sb://orders.servicebus.azure.localhost:5672/jobs"),
-            Some(("orders".into(), "jobs".into()))
+            split_host("sb://orders.servicebus.azure.localhost:5672/jobs"),
+            Some(("orders.servicebus.azure.localhost".into(), "jobs".into()))
         );
         assert_eq!(
-            split_uri("amqps://orders.servicebus.azure.localhost/events/Subscriptions/audit/"),
-            Some(("orders".into(), "events/Subscriptions/audit".into()))
+            split_host("amqps://Orders.servicebus.azure.localhost/events/Subscriptions/audit/"),
+            Some(("orders.servicebus.azure.localhost".into(), "events/Subscriptions/audit".into()))
         );
-        assert_eq!(split_uri("sb://orders.servicebus.azure.localhost"), Some(("orders".into(), String::new())));
+        assert_eq!(split_host("sb://localhost"), Some(("localhost".into(), String::new())));
     }
 
     #[test]
