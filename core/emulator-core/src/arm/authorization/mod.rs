@@ -25,7 +25,7 @@ fn builtin_roles() -> &'static [Value] {
     ROLES.get_or_init(|| serde_json::from_str(include_str!("builtin-roles.json")).expect("built-in roles are valid JSON"))
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Assignment {
     id: String,
     name: String,
@@ -42,7 +42,7 @@ struct Assignment {
     created_by: Option<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct CustomRole {
     name: String,
     role_name: String,
@@ -55,7 +55,7 @@ struct CustomRole {
 }
 
 /// Role assignments and custom role definitions.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct AuthorizationState {
     /// Keyed by lowercased assignment id.
     assignments: BTreeMap<String, Assignment>,

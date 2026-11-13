@@ -21,7 +21,7 @@ use crate::KeyVaultState;
 /// Days a deleted secret stays recoverable.
 const RECOVERABLE_DAYS: i64 = 90;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Vault {
     /// Keyed by lowercased secret name.
     secrets: BTreeMap<String, Secret>,
@@ -30,19 +30,28 @@ pub(crate) struct Vault {
     pub(crate) keys: crate::keys::KeyStore,
     /// Soft-deleted keys, keyed the same way.
     pub(crate) deleted_keys: BTreeMap<String, crate::keys::DeletedKey>,
-    /// The certificate contacts, as last set.
-    certificate_contacts: Option<Value>,
+    /// Certificates and deleted certificates, by lowercased name.
+    #[serde(default)]
+    pub(crate) certificates: BTreeMap<String, crate::certificates::Certificate>,
+    #[serde(default)]
+    pub(crate) deleted_certificates: BTreeMap<String, crate::certificates::DeletedCertificate>,
+    /// The vault's certificate contacts, as Set Certificate Contacts gave them.
+    #[serde(default)]
+    pub(crate) certificate_contacts: Option<Value>,
+    /// Certificate issuers by lowercased name.
+    #[serde(default)]
+    pub(crate) certificate_issuers: BTreeMap<String, Value>,
 }
 
-#[derive(Clone)]
-struct Secret {
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Secret {
     /// The name as first created; ids keep this casing.
     name: String,
     /// Oldest first; the last one is the current version.
     versions: Vec<SecretVersion>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct SecretVersion {
     version: String,
     value: String,
@@ -53,8 +62,12 @@ struct SecretVersion {
     expires: Option<Value>,
     created: i64,
     updated: i64,
+    /// For a certificate's secret: the id of the certificate's key.
+    #[serde(default)]
+    kid: Option<String>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct DeletedSecret {
     secret: Secret,
     deleted_date: i64,
@@ -94,6 +107,7 @@ impl Vault {
             expires: None,
             created,
             updated: created,
+            kid: None,
         };
         version.apply(body);
         let is_new = !self.secrets.contains_key(&key);
@@ -143,6 +157,35 @@ impl Vault {
 
     pub(crate) fn summaries(&self) -> Vec<SecretSummary> {
         self.secrets.values().filter_map(Self::summarize).collect()
+    }
+
+    /// Stores a certificate's secret: the version is the certificate's, and
+    /// the secret is managed by it.
+    pub(crate) fn add_certificate_secret(&mut self, name: &str, version: &str, value: String, content_type: &str, validity: (i64, i64), kid: String) {
+        let created = now();
+        let secret = self.secrets.entry(name.to_ascii_lowercase()).or_insert_with(|| Secret { name: name.to_string(), versions: Vec::new() });
+        secret.versions.push(SecretVersion {
+            version: version.to_string(),
+            value,
+            content_type: Some(json!(content_type)),
+            tags: None,
+            enabled: true,
+            not_before: Some(json!(validity.0)),
+            expires: Some(json!(validity.1)),
+            created,
+            updated: created,
+            kid: Some(kid),
+        });
+    }
+
+    /// Removes a secret wholesale, as deleting its certificate does.
+    pub(crate) fn take_secret(&mut self, name: &str) -> Option<Secret> {
+        self.secrets.remove(&name.to_ascii_lowercase())
+    }
+
+    /// Puts back a secret taken with `take_secret`.
+    pub(crate) fn put_secret(&mut self, secret: Secret) {
+        self.secrets.insert(secret.name.to_ascii_lowercase(), secret);
     }
 }
 
@@ -233,6 +276,10 @@ impl SecretRequest<'_> {
         }
         if let Some(tags) = &version.tags {
             out["tags"] = tags.clone();
+        }
+        if let Some(kid) = &version.kid {
+            out["kid"] = json!(kid);
+            out["managed"] = json!(true);
         }
         out
     }
@@ -429,12 +476,9 @@ fn permission_for(method: &Method, collection: &str, rest: &[&str]) -> Option<Ne
     if matches!(collection, "keys" | "deletedkeys") {
         return key_permission_for(method, collection, rest);
     }
-    if collection == "certificates" && rest.first().is_some_and(|r| r.eq_ignore_ascii_case("contacts")) {
-        let action = match method.as_str() {
-            "GET" => "Microsoft.KeyVault/vaults/certificates/read",
-            _ => "Microsoft.KeyVault/vaults/certificatecontacts/write",
-        };
-        return Some(Needed { kind: "certificates", action, policy: "managecontacts" });
+    if matches!(collection, "certificates" | "deletedcertificates") {
+        let (action, policy) = crate::certificates::permission_for(method, collection, rest)?;
+        return Some(Needed { kind: "certificates", action, policy });
     }
     let needed = |action, policy| Some(Needed { kind: "secrets", action, policy });
     const READ_METADATA: &str = "Microsoft.KeyVault/vaults/secrets/readMetadata/action";
@@ -553,31 +597,6 @@ fn check_access(engine: &Engine, vault: &str, claims: &auth::Claims, needed: &Ne
     ))
 }
 
-/// The vault's certificate contacts: get, set and delete.
-fn certificate_contacts(engine: &Engine, vault: &str, method: &Method, body: &Value) -> Result<Response, ArmError> {
-    let state = engine.state::<KeyVaultState>();
-    let mut state = state.lock();
-    let data = state.vaults.get_mut(vault).ok_or_else(|| ArmError::not_found("VaultNotFound", "The vault was not found."))?;
-    let id = format!("{}certificates/contacts", engine.config().vault_uri(vault));
-    let document = |contacts: &Value| json!({"id": id, "contacts": contacts});
-    // Unverified against Azure: the code and message when no contacts are set.
-    let none = || ArmError::not_found("ContactsNotFound", "Contacts not found");
-    let reply = match method.as_str() {
-        "GET" => document(data.certificate_contacts.as_ref().ok_or_else(none)?),
-        "PUT" => {
-            let contacts = body
-                .get("contacts")
-                .filter(|c| c.is_array())
-                .ok_or_else(|| ArmError::bad_request("BadParameter", "The property 'contacts' must be an array."))?;
-            data.certificate_contacts = Some(contacts.clone());
-            document(contacts)
-        }
-        "DELETE" => document(&data.certificate_contacts.take().ok_or_else(none)?),
-        _ => return Err(ArmError::not_implemented("this Key Vault operation")),
-    };
-    Ok(json_response(StatusCode::OK, &reply))
-}
-
 /// Serves one Key Vault data-plane request addressed to `vault`.
 pub async fn handle(engine: Arc<Engine>, vault: String, request: Request<Body>) -> Response {
     let (parts, body) = request.into_parts();
@@ -649,8 +668,13 @@ async fn serve(
     if let Some(needed) = permission_for(method, &collection, &rest) {
         check_access(engine, vault, &claims, &needed, rest.first().copied())?;
     }
-    if collection == "certificates" && matches!(rest.as_slice(), [contacts] if contacts.eq_ignore_ascii_case("contacts")) {
-        return certificate_contacts(engine, vault, method, &body).map_err(fail);
+    if matches!(collection.as_str(), "certificates" | "deletedcertificates") {
+        let request = crate::certificates::CertificateRequest { engine, vault, body: &body };
+        return match request.serve(method, &collection, &rest) {
+            Ok(crate::certificates::Answer::Json(status, body)) => Ok(json_response(status, &body)),
+            Ok(crate::certificates::Answer::Empty(status)) => Ok(status.into_response()),
+            Err(error) => Err(fail(error)),
+        };
     }
     if matches!(collection.as_str(), "keys" | "deletedkeys" | "rng") {
         return crate::keys_data::serve(engine, vault, method, &collection, &rest, &body)

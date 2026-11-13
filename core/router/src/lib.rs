@@ -23,6 +23,7 @@ use http::Request;
 
 pub use emulator_core::Config;
 
+pub mod persist;
 pub mod provision;
 pub mod tls;
 
@@ -76,6 +77,9 @@ async fn dispatch(State(emulator): State<Emulator>, request: Request<Body>) -> R
     let config = engine.config();
     if let Some(account) = host.strip_suffix(&config.blob_host_suffix()) {
         return service_storage::blob::handle(engine.clone(), account.to_string(), request).await;
+    }
+    if let Some(account) = host.strip_suffix(&config.file_host_suffix()) {
+        return service_storage::files::handle(engine.clone(), account.to_string(), request).await;
     }
     if let Some(account) = host.strip_suffix(&config.table_host_suffix()) {
         return service_storage::table::handle(engine.clone(), account.to_string(), request).await;

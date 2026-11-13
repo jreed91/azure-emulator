@@ -5,7 +5,7 @@ use std::time::SystemTime;
 
 use axum::body::Bytes;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct StorageState {
     /// Keyed by account name, which is globally unique.
     pub(crate) accounts: BTreeMap<String, Account>,
@@ -26,6 +26,7 @@ impl StorageState {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct Account {
     /// `key1` and `key2`, base64 encoded.
     pub keys: [String; 2],
@@ -37,8 +38,12 @@ pub(crate) struct Account {
     pub queues: BTreeMap<String, crate::queue::Queue>,
     /// Tables by lowercased name: the Table data plane's, and Resource Manager's.
     pub tables: BTreeMap<String, crate::table::Table>,
+    /// File shares by name: the Files data plane's, and Resource Manager's.
+    #[serde(default)]
+    pub shares: BTreeMap<String, crate::files::Share>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct Container {
     pub etag: String,
     pub last_modified: SystemTime,
@@ -57,16 +62,19 @@ pub(crate) struct Container {
     pub blobs: BTreeMap<String, Blob>,
     /// Blocks staged with Put Block and not yet committed, by blob name, in the
     /// order they were staged; a block staged again under the same id replaces it.
+    #[serde(with = "crate::persist::staged_blocks")]
     pub uncommitted: BTreeMap<String, Vec<(String, Bytes)>>,
     /// Snapshots by blob name, then by snapshot time (`x-ms-snapshot`), oldest first.
     pub snapshots: BTreeMap<String, BTreeMap<String, Blob>>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct LegalHoldTag {
     pub tag: String,
     pub timestamp: String,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct ImmutabilityPolicy {
     pub days: i64,
     pub locked: bool,
@@ -74,10 +82,11 @@ pub(crate) struct ImmutabilityPolicy {
     pub allow_protected_append_writes_all: Option<bool>,
     pub etag: String,
     /// `(update, days, timestamp)`: how the policy got where it is.
+    #[serde(with = "crate::persist::history")]
     pub history: Vec<(&'static str, i64, String)>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Lease {
     pub id: String,
     /// Seconds, or `None` for an infinite lease.
@@ -177,8 +186,9 @@ impl Container {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Blob {
+    #[serde(with = "crate::persist::bytes")]
     pub data: Bytes,
     pub content_type: String,
     /// Base64 MD5 of the content.
@@ -189,6 +199,7 @@ pub(crate) struct Blob {
     pub metadata: Vec<(String, String)>,
     /// `Cache-Control`, `Content-Encoding`, `Content-Language` and
     /// `Content-Disposition`, as set on upload or with Set Blob Properties.
+    #[serde(with = "crate::persist::named_values")]
     pub content_headers: Vec<(&'static str, String)>,
     /// The committed blocks, in order, with their sizes: the blob's content is
     /// their concatenation. Empty for a blob written with Put Blob.
@@ -201,10 +212,44 @@ pub(crate) struct Blob {
     pub lease: Option<Lease>,
     /// The last copy that wrote this blob, if a Copy Blob did.
     pub copy: Option<CopyInfo>,
+    /// Block, append or page blob, with what only the last two have.
+    #[serde(default)]
+    pub kind: Kind,
+}
+
+/// A blob's type, with what only append and page blobs have.
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Kind {
+    pub blob_type: BlobType,
+    /// Append blobs: the blocks appended, and whether the blob is sealed.
+    pub append_blocks: u32,
+    pub sealed: bool,
+    /// Page blobs: the sequence number, and the 512-byte pages written
+    /// (by index), which Get Page Ranges reports.
+    pub sequence_number: i64,
+    pub pages: std::collections::BTreeSet<u64>,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) enum BlobType {
+    #[default]
+    Block,
+    Append,
+    Page,
+}
+
+impl BlobType {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Block => "BlockBlob",
+            Self::Append => "AppendBlob",
+            Self::Page => "PageBlob",
+        }
+    }
 }
 
 /// What Get Blob Properties reports about the copy that wrote a blob.
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct CopyInfo {
     pub id: String,
     pub source: String,

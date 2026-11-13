@@ -2,6 +2,8 @@
 //! Manager and the Blob service data plane on `{account}.blob.core.<suffix>`.
 
 pub mod blob;
+mod persist;
+pub mod files;
 pub mod queue;
 pub mod table;
 mod management;
@@ -129,6 +131,7 @@ impl ResourceTypeHandler for StorageAccounts {
                     replication: Default::default(),
                     queues: Default::default(),
                     tables: Default::default(),
+                    shares: Default::default(),
                 },
             );
         }
@@ -165,6 +168,7 @@ impl ResourceTypeHandler for StorageAccounts {
             "blob": ctx.engine.config().blob_endpoint(name),
             "queue": ctx.engine.config().queue_endpoint(name),
             "table": ctx.engine.config().table_endpoint(name),
+            "file": ctx.engine.config().file_endpoint(name),
         });
         Ok(properties)
     }

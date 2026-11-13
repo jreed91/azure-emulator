@@ -33,17 +33,21 @@ service-keyvault = { path = "services/keyvault" }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 base64 = "0.22"
-chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 fancy-regex = "0.14"
 fe2o3-amqp = { version = "0.18", default-features = false, features = ["acceptor"] }
 fe2o3-amqp-types = "0.18"
 serde_amqp = { version = "0.18", features = ["derive"] }
 hmac = "0.12"
-k256 = { version = "0.13", features = ["ecdsa"] }
-p256 = { version = "0.13", features = ["ecdsa"] }
-p384 = { version = "0.13", features = ["ecdsa"] }
-p521 = { version = "0.13", features = ["ecdsa"] }
+k256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+p384 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+p521 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 sha1 = "0.10"
+time = "0.3"
+x509-parser = "0.16"
+p12-keystore = "0.4"
+pem = "3"
 http = "1"
 httpdate = "1"
 jsonwebtoken = "9"

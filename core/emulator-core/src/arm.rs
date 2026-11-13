@@ -28,7 +28,7 @@ mod deployments;
 pub use authorization::{data_access, principal_ids, AuthorizationState, Permission};
 
 /// A stored ARM resource.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Resource {
     pub id: String,
     pub name: String,
@@ -69,7 +69,7 @@ impl Resource {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct ResourceGroup {
     name: String,
     location: String,
@@ -77,8 +77,16 @@ struct ResourceGroup {
     managed_by: Option<Value>,
 }
 
+/// Marks Resource Manager's states (resources, role assignments and custom
+/// roles, deployments) as ones a snapshot holds.
+pub fn persist(engine: &crate::Engine) {
+    engine.persist::<ArmState>("arm");
+    engine.persist::<authorization::AuthorizationState>("authorization");
+    engine.persist::<deployments::DeploymentState>("deployments");
+}
+
 /// Resource Manager's own state: resource groups and every tracked resource.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct ArmState {
     /// Keyed by lowercased group name.
     groups: BTreeMap<String, ResourceGroup>,

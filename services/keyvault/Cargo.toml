@@ -7,6 +7,7 @@ edition.workspace = true
 emulator-core = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
@@ -19,6 +20,11 @@ rand = { workspace = true }
 rsa = { workspace = true }
 sha1 = { workspace = true }
 sha2 = { workspace = true, features = ["oid"] }
+rcgen = { workspace = true }
+time = { workspace = true }
+x509-parser = { workspace = true }
+p12-keystore = { workspace = true }
+pem = { workspace = true }
 
 [lints]
 workspace = true

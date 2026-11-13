@@ -81,3 +81,32 @@ test("leases, snapshots and copies", async () => {
   await assert.rejects(blob.delete(), (e) => e.statusCode === 409 && e.code === "SnapshotsPresent");
   await blob.delete({ deleteSnapshots: "include" });
 });
+
+test("append and page blobs", async () => {
+  const container = service.getContainerClient("types");
+  await container.create();
+
+  const log = container.getAppendBlobClient("app.log");
+  await log.create();
+  await log.appendBlock("one\n", 4);
+  const second = await log.appendBlock("two\n", 4);
+  assert.equal(second.blobAppendOffset, "4");
+  assert.equal(second.blobCommittedBlockCount, 2);
+  await log.seal();
+  await assert.rejects(log.appendBlock("x", 1), (e) => e.statusCode === 409 && e.code === "BlobIsSealed");
+  assert.equal((await log.downloadToBuffer()).toString(), "one\ntwo\n");
+  const logProps = await log.getProperties();
+  assert.deepEqual([logProps.blobType, logProps.isSealed], ["AppendBlob", true]);
+
+  const disk = container.getPageBlobClient("disk.vhd");
+  await disk.create(2048);
+  await disk.uploadPages(Buffer.alloc(512, 1), 512, 512);
+  // The JS SDK reports a range as its first byte and its last byte's offset from it.
+  const { pageRange } = await disk.getPageRanges();
+  assert.deepEqual(pageRange.map((r) => [r.offset, r.count]), [[512, 511]]);
+  await disk.resize(1024);
+  const diskProps = await disk.getProperties();
+  assert.deepEqual([diskProps.blobType, diskProps.contentLength], ["PageBlob", 1024]);
+  const data = await disk.downloadToBuffer();
+  assert.deepEqual([data[0], data[512]], [0, 1]);
+});
