@@ -14,6 +14,8 @@
 //! Not implemented yet: certificates, and the managed HSM data plane. Purge
 //! protection is stored but does not block a purge.
 
+mod cert_crypto;
+mod certificates;
 mod crypto;
 mod keys;
 mod keys_data;
