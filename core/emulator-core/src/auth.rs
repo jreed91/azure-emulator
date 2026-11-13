@@ -124,10 +124,9 @@ pub fn bearer_token(headers: &HeaderMap) -> Option<&str> {
     scheme.eq_ignore_ascii_case("bearer").then(|| token.trim())
 }
 
-/// Verifies the request's bearer token and that it was issued for one of
-/// `audiences` (compared without regard to case or a trailing slash).
-pub fn authorize(headers: &HeaderMap, audiences: &[String]) -> Result<Claims, AuthFailure> {
-    let token = bearer_token(headers).ok_or(AuthFailure::Missing)?;
+/// Verifies a token and that it was issued for one of `audiences` (compared
+/// without regard to case or a trailing slash).
+pub fn verify_token(token: &str, audiences: &[String]) -> Result<Claims, AuthFailure> {
     let mut validation = Validation::new(Algorithm::RS256);
     validation.validate_aud = false;
     validation.leeway = 0;
@@ -140,4 +139,11 @@ pub fn authorize(headers: &HeaderMap, audiences: &[String]) -> Result<Claims, Au
     } else {
         Err(AuthFailure::WrongAudience)
     }
+}
+
+/// Verifies the request's bearer token and that it was issued for one of
+/// `audiences` (compared without regard to case or a trailing slash).
+pub fn authorize(headers: &HeaderMap, audiences: &[String]) -> Result<Claims, AuthFailure> {
+    let token = bearer_token(headers).ok_or(AuthFailure::Missing)?;
+    verify_token(token, audiences)
 }

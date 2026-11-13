@@ -21,6 +21,7 @@ OPTIONS:
         --bind <ADDRESS>   Address to bind [default: 127.0.0.1]
         --host <NAME>      Hostname clients use for Resource Manager [default: localhost]
         --dns-suffix <S>   Suffix of data-plane hostnames [default: azure.localhost]
+        --amqp-port <PORT> Port of the Service Bus AMQP listener [default: 5672]
         --http             Serve plain HTTP instead of HTTPS
     -h, --help             Print this help
 ";
@@ -124,6 +125,9 @@ async fn main() {
             "--bind" => bind = value("--bind"),
             "--host" => config.host = value("--host"),
             "--dns-suffix" => config.dns_suffix = value("--dns-suffix"),
+            "--amqp-port" => {
+                config.amqp_port = value("--amqp-port").parse().unwrap_or_else(|_| fail("--amqp-port is not a port"))
+            }
             "--http" => config.scheme = "http".into(),
             "-h" | "--help" => {
                 print!("{USAGE}");
@@ -144,6 +148,13 @@ async fn main() {
     println!("  Key Vault:                {}", config.vault_uri("<vault>"));
     println!("  Subscription:             {}", config.subscription_id);
     println!("  Tenant:                   {}", config.tenant_id);
+
+    let amqp_address = format!("{bind}:{}", config.amqp_port);
+    let amqp = tokio::net::TcpListener::bind(&amqp_address)
+        .await
+        .unwrap_or_else(|e| fail(format!("cannot listen for AMQP on {amqp_address}: {e}")));
+    println!("  Service Bus (AMQP):       {}", config.servicebus_amqp_endpoint("<namespace>"));
+    tokio::spawn(service_servicebus::broker::serve(emulator.engine(), amqp));
 
     let result = if config.scheme == "https" {
         let identity = tls::identity(&config, &bind).unwrap_or_else(|e| fail(format!("TLS setup failed: {e}")));

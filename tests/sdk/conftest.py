@@ -65,9 +65,10 @@ def _wait_until_ready(base, ca_path, process, timeout=30):
 
 
 class Emulator:
-    def __init__(self, base, port):
+    def __init__(self, base, port, amqp_port):
         self.base = base
         self.port = port
+        self.amqp_port = amqp_port
         self.tenant = TENANT
         self.subscription = SUBSCRIPTION
 
@@ -84,10 +85,11 @@ def emulator(tmp_path_factory):
         pytest.exit(f"emulator binary not found at {binary}; run `cargo build -p azure-emulator` first", 2)
     home = tmp_path_factory.mktemp("emulator-home")
     port = _free_port()
+    amqp_port = _free_port()
     base = f"https://localhost:{port}"
     log = open(home / "emulator.log", "w")
     process = subprocess.Popen(
-        [str(binary), "--port", str(port)],
+        [str(binary), "--port", str(port), "--amqp-port", str(amqp_port)],
         env={**os.environ, "AZURE_EMULATOR_HOME": str(home)},
         stdout=log,
         stderr=subprocess.STDOUT,
@@ -100,7 +102,7 @@ def emulator(tmp_path_factory):
         os.environ["NO_PROXY"] = os.environ["no_proxy"] = ",".join(
             part for part in [no_proxy, "localhost", "127.0.0.1", ".localhost"] if part
         )
-        yield Emulator(base, port)
+        yield Emulator(base, port, amqp_port)
     finally:
         process.terminate()
         process.wait(timeout=10)

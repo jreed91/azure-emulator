@@ -301,10 +301,10 @@ fn alias_rule_keys(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Repl
     let (rule, _) = find_alias_rule(ctx, request)?;
     let keys = rule_keys(ctx, &rule.id);
     let config = ctx.engine.config();
-    let endpoint = |host: &str| config.servicebus_endpoint(&host.to_ascii_lowercase()).replacen("https://", "sb://", 1);
+    let endpoint = |host: &str| config.servicebus_amqp_endpoint(&host.to_ascii_lowercase());
     let namespace = id_part(&rule.id, "namespaces").unwrap_or("");
     let connection = |host: &str, key: &str| {
-        format!("Endpoint={};SharedAccessKeyName={};SharedAccessKey={key}", endpoint(host), rule.name)
+        format!("Endpoint={};SharedAccessKeyName={};SharedAccessKey={key};UseDevelopmentEmulator=true", endpoint(host), rule.name)
     };
     // The alias connection strings keep working across a failover.
     Ok((

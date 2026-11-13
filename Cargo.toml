@@ -27,6 +27,9 @@ axum-server = { version = "0.7", features = ["tls-rustls"] }
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 fancy-regex = "0.14"
+fe2o3-amqp = { version = "0.18", default-features = false, features = ["acceptor"] }
+fe2o3-amqp-types = "0.18"
+serde_amqp = { version = "0.18", features = ["derive"] }
 hmac = "0.12"
 http = "1"
 httpdate = "1"
@@ -51,3 +54,8 @@ opt-level = 2
 # Handlers return `Result<Response, Response>`: the error is itself the HTTP answer,
 # built once per request, so its size is not a cost worth boxing away.
 result_large_err = "allow"
+
+# fe2o3-amqp with one addition: a sender may choose a delivery's tag (Service Bus
+# lock tokens are delivery tags). See vendor/fe2o3-amqp/PATCHED.md.
+[patch.crates-io]
+fe2o3-amqp = { path = "vendor/fe2o3-amqp" }
