@@ -190,6 +190,7 @@ dependencies = [
  "serde_json",
  "service-cosmosdb",
  "service-entra",
+ "service-eventhub",
  "service-keyvault",
  "service-managedidentity",
  "service-servicebus",
@@ -1634,6 +1635,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "service-eventhub"
+version = "0.1.0"
+dependencies = [
+ "emulator-core",
+ "serde_json",
+ "service-servicebus",
+]
+
+[[package]]
 name = "service-keyvault"
 version = "0.1.0"
 dependencies = [
@@ -1673,6 +1683,7 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "sha2",
+ "socket2",
  "tokio",
  "tokio-rustls",
  "uuid",

@@ -178,6 +178,13 @@ def cosmos(emulator, credential):
 
 
 @pytest.fixture(scope="session")
+def eventhub(emulator, credential):
+    from azure.mgmt.eventhub import EventHubManagementClient
+
+    return EventHubManagementClient(credential, SUBSCRIPTION, **emulator.arm)
+
+
+@pytest.fixture(scope="session")
 def servicebus(emulator, credential):
     from azure.mgmt.servicebus import ServiceBusManagementClient
 

@@ -17,6 +17,7 @@
 
 mod auth;
 mod duration;
+pub mod eventhubs;
 mod filters;
 mod management;
 mod rules;
@@ -49,6 +50,26 @@ pub use store::BrokerState;
 
 /// The message format of a batch: data sections that each hold one message.
 const BATCH_FORMAT: u32 = 0x8001_3700;
+
+/// A listener for AMQP connections on `address`.
+///
+/// Connections advertise a maximum segment size of 16 KB. The Python Event
+/// Hubs SDK reads its socket's segment size after connecting and sets it
+/// again, which Linux refuses above 32767 bytes: on a loopback or container
+/// link (with segments of 32 KB or 64 KB) every receiver would fail to
+/// connect.
+pub fn listen(address: std::net::SocketAddr) -> std::io::Result<TcpListener> {
+    use socket2::{Domain, Protocol, Socket, Type};
+
+    let socket = Socket::new(Domain::for_address(address), Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_reuse_address(true)?;
+    #[cfg(unix)]
+    let _ = socket.set_tcp_mss(16 * 1024);
+    socket.bind(&address.into())?;
+    socket.listen(1024)?;
+    socket.set_nonblocking(true)?;
+    TcpListener::from_std(std::net::TcpListener::from(socket))
+}
 
 /// Serves AMQP connections from `listener` until the listener fails: over
 /// TLS (`amqps`) when given a TLS acceptor, else plain AMQP.
@@ -125,8 +146,15 @@ async fn connection<Io>(engine: Arc<Engine>, stream: Io) -> Result<(), Box<dyn s
 where
     Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + std::fmt::Debug + Send + Unpin + 'static,
 {
+    // Service Bus advertises a four-minute idle timeout and connection
+    // properties. Some clients read those fields of the open frame without
+    // checking they are there, and the encoder leaves out trailing empty ones.
+    let mut properties = Fields::new();
+    properties.insert(Symbol::from("product"), Value::String("azure-emulator".into()));
     let acceptor = ConnectionAcceptor::builder()
         .container_id("azure-emulator")
+        .idle_time_out(240_000u32)
+        .properties(properties)
         .sasl_acceptor(SaslAnonymousMechanism::new())
         .build();
     let mut connection = acceptor.accept(stream).await?;
@@ -256,8 +284,13 @@ async fn session_loop(engine: Arc<Engine>, context: Arc<Context>, mut session: L
                 _ => None,
             })
             .and_then(|address| context.entity_address(address))
-            .and_then(|(namespace, path)| store::resolve(&engine, &namespace, &path).ok())
-            .map_or(store::DEFAULT_MAX_MESSAGE_SIZE, |entity| entity.max_message_size());
+            .map_or(store::DEFAULT_MAX_MESSAGE_SIZE, |(namespace, path)| {
+                if eventhubs::is_event_hubs_namespace(&engine, &namespace) {
+                    eventhubs::MAX_EVENT_SIZE
+                } else {
+                    store::resolve(&engine, &namespace, &path).map_or(store::DEFAULT_MAX_MESSAGE_SIZE, |entity| entity.max_message_size())
+                }
+            });
         // A receiver on a session-enabled entity gets its session now: the
         // attach the broker answers with names it.
         let (grant, locked_until) = if attach.role == fe2o3_amqp_types::definitions::Role::Receiver {
@@ -276,13 +309,14 @@ async fn session_loop(engine: Arc<Engine>, context: Arc<Context>, mut session: L
         }
         let acceptor = acceptor.build();
         let settled = attach.snd_settle_mode == SenderSettleMode::Settled;
+        let receiver_options = eventhubs::ReceiverOptions::from_attach(&attach);
         // A client's link for a node's replies gets its route now, before the
         // attach is answered: a client may send its request the moment the
         // attach is, and a reply with no route yet would be lost.
         let reply_queue = (attach.role == fe2o3_amqp_types::definitions::Role::Receiver)
             .then(|| source_address(&attach).map(|a| a.to_ascii_lowercase()))
             .flatten()
-            .filter(|address| address == "$cbs" || address.ends_with("/$management"))
+            .filter(|address| address == "$cbs" || address == "$management" || address.ends_with("/$management"))
             .map(|address| {
                 let (route, queue) = mpsc::unbounded_channel();
                 context.replies.lock().unwrap_or_else(|e| e.into_inner()).insert(address, route);
@@ -293,7 +327,7 @@ async fn session_loop(engine: Arc<Engine>, context: Arc<Context>, mut session: L
                 tokio::spawn(incoming(engine.clone(), context.clone(), link));
             }
             Ok(LinkEndpoint::Sender(link)) => {
-                tokio::spawn(outgoing(engine.clone(), context.clone(), link, settled, grant, reply_queue));
+                tokio::spawn(outgoing(engine.clone(), context.clone(), link, settled, grant, reply_queue, receiver_options));
             }
             Err(_) => {
                 if let SessionGrant::Held { id, owner, entity } = grant {
@@ -336,8 +370,14 @@ async fn incoming(engine: Arc<Engine>, context: Arc<Context>, mut link: Receiver
     if lower == "$cbs" {
         return cbs_requests(engine, context, link, address).await;
     }
+    if lower == "$management" {
+        return event_hubs_management(engine, context, link, address).await;
+    }
     if lower.ends_with("/$management") {
         return management_requests(engine, context, link, address).await;
+    }
+    if let Some((namespace, path)) = context.entity_address(&address).filter(|(ns, _)| eventhubs::is_event_hubs_namespace(&engine, ns)) {
+        return eventhubs::incoming(engine, context, link, namespace, path).await;
     }
     let Some((namespace, path)) = context.entity_address(&address) else {
         let _ = link.close_with_error(error("amqp:invalid-field", format!("'{address}' is not an entity address."))).await;
@@ -436,6 +476,36 @@ async fn cbs_requests(engine: Arc<Engine>, context: Arc<Context>, mut link: Rece
     }
 }
 
+/// Requests to an Event Hubs namespace's `$management` node.
+async fn event_hubs_management(engine: Arc<Engine>, context: Arc<Context>, mut link: Receiver, address: String) {
+    while let Ok(delivery) = link.recv::<Body<Value>>().await {
+        let info = DeliveryInfo::from(&delivery).settle_on_disposition();
+        let request = delivery.into_message();
+        let _ = link.accept(info).await;
+        // A request may carry its own token instead of one put on $cbs.
+        let token = request.application_properties.as_ref().and_then(|a| text(a.0.get("security_token")));
+        if let Some(token) = token {
+            let name = request.application_properties.as_ref().and_then(|a| text(a.0.get("name"))).unwrap_or_default();
+            let resource = token
+                .split('&')
+                .find_map(|pair| pair.strip_prefix("sr=").or_else(|| pair.strip_prefix("SharedAccessSignature sr=")))
+                .map(|sr| emulator_core::http_util::percent_decode(sr, true));
+            let audience = resource.unwrap_or_else(|| format!("sb://localhost/{name}"));
+            if let Ok(grant) = auth::verify(&engine, "", &token, &audience) {
+                context.grants.lock().unwrap_or_else(|e| e.into_inner()).push(grant);
+            }
+        }
+        // The node is the namespace's; the namespace is the one the
+        // connection's tokens are for.
+        let namespace = context.grants.lock().unwrap_or_else(|e| e.into_inner()).first().map(|g| g.namespace().to_string());
+        let reply = match namespace {
+            Some(namespace) => eventhubs::management(&engine, &context, &namespace, &request),
+            None => response(&request, "status-code", 401, "Put a token on the connection first."),
+        };
+        context.reply(&address, reply);
+    }
+}
+
 /// Requests to an entity's `$management` node.
 async fn management_requests(engine: Arc<Engine>, context: Arc<Context>, mut link: Receiver, address: String) {
     let entity_part = &address[..address.len() - "/$management".len()];
@@ -466,11 +536,15 @@ async fn outgoing(
     remove: bool,
     grant: SessionGrant,
     reply_queue: Option<mpsc::UnboundedReceiver<AmqpMessage>>,
+    receiver_options: eventhubs::ReceiverOptions,
 ) {
     let address = link.source().as_ref().and_then(|s| s.address.clone()).unwrap_or_default();
     let lower = address.to_ascii_lowercase();
     if let Some(queue) = reply_queue {
         return replies(context, link, lower, queue).await;
+    }
+    if let Some((namespace, path)) = context.entity_address(&address).filter(|(ns, _)| eventhubs::is_event_hubs_namespace(&engine, ns)) {
+        return eventhubs::outgoing(engine, context, link, namespace, path, receiver_options).await;
     }
     let Some((namespace, path)) = context.entity_address(&address) else {
         let _ = link.close_with_error(error("amqp:invalid-field", format!("'{address}' is not an entity address."))).await;

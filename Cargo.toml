@@ -9,6 +9,7 @@ members = [
     "services/managedidentity",
     "services/servicebus",
     "services/cosmosdb",
+    "services/eventhub",
     "tools/scaffold",
 ]
 
@@ -17,10 +18,12 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace.dependencies]
+socket2 = { version = "0.6", features = ["all"] }
 tokio-rustls = "0.26"
 rustls-pemfile = "2"
 bytes = "1"
 emulator-core = { path = "core/emulator-core" }
+service-eventhub = { path = "services/eventhub" }
 service-cosmosdb = { path = "services/cosmosdb" }
 service-servicebus = { path = "services/servicebus" }
 service-managedidentity = { path = "services/managedidentity" }

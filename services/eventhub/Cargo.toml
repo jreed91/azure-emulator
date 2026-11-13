@@ -1,0 +1,12 @@
+[package]
+name = "service-eventhub"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+emulator-core = { workspace = true }
+service-servicebus = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

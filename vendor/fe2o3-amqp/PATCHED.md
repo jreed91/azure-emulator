@@ -42,3 +42,8 @@ offers the same.
   decoded again. The rhea client behind the JavaScript SDK sends a rejected
   outcome's error `info` with string keys; strictly decoded, the frame was
   dropped and `deadLetterMessage` never returned.
+
+- Performatives other than transfers are written with all their fields
+  (src/frames/amqp.rs), trailing empty ones as nulls. The derived encoding
+  drops them, as the specification allows, but the AMQP client inside the
+  Python Event Hubs SDK reads open, begin and attach fields by position.

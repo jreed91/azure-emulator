@@ -81,7 +81,7 @@ pub(crate) fn namespace_for_host(engine: &Engine, host: &str) -> String {
     let state = state.lock();
     let mut namespaces = state
         .resources()
-        .filter(|r| r.resource_type.eq_ignore_ascii_case("Microsoft.ServiceBus/namespaces"))
+        .filter(|r| is_namespace_type(&r.resource_type))
         .map(|r| r.name.to_ascii_lowercase());
     let names: Vec<String> = namespaces.by_ref().take(64).collect();
     if names.contains(&first) {
@@ -108,6 +108,12 @@ fn entity_of(path: &str) -> String {
 pub(crate) fn split_uri(engine: &Engine, uri: &str) -> Option<(String, String)> {
     let (host, path) = split_host(uri)?;
     Some((namespace_for_host(engine, &host), path))
+}
+
+/// Service Bus and Event Hubs namespaces share the broker, its names and its
+/// authorization model.
+pub(crate) fn is_namespace_type(resource_type: &str) -> bool {
+    resource_type.eq_ignore_ascii_case("Microsoft.ServiceBus/namespaces") || resource_type.eq_ignore_ascii_case("Microsoft.EventHub/namespaces")
 }
 
 fn percent_decode(text: &str) -> String {
@@ -182,7 +188,7 @@ fn matching_rule(engine: &Engine, namespace: &str, path: &str, key_name: &str, t
         let state = state.lock();
         let ns = state
             .resources()
-            .find(|r| r.resource_type.eq_ignore_ascii_case("Microsoft.ServiceBus/namespaces") && r.name.eq_ignore_ascii_case(namespace))?
+            .find(|r| is_namespace_type(&r.resource_type) && r.name.eq_ignore_ascii_case(namespace))?
             .clone();
         let mut ids = vec![format!("{}/AuthorizationRules/{key_name}", ns.id)];
         let entity: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
@@ -190,8 +196,12 @@ fn matching_rule(engine: &Engine, namespace: &str, path: &str, key_name: &str, t
             [name] => {
                 ids.push(format!("{}/queues/{name}/authorizationRules/{key_name}", ns.id));
                 ids.push(format!("{}/topics/{name}/authorizationRules/{key_name}", ns.id));
+                ids.push(format!("{}/eventhubs/{name}/authorizationRules/{key_name}", ns.id));
             }
-            [topic, ..] => ids.push(format!("{}/topics/{topic}/authorizationRules/{key_name}", ns.id)),
+            [entity, ..] => {
+                ids.push(format!("{}/topics/{entity}/authorizationRules/{key_name}", ns.id));
+                ids.push(format!("{}/eventhubs/{entity}/authorizationRules/{key_name}", ns.id));
+            }
             [] => {}
         }
         ids.iter()
