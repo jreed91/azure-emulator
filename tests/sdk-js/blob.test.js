@@ -44,3 +44,40 @@ test("uploadStream and uploadData send blocks and commit them", async () => {
   assert.deepEqual(await uploaded.downloadToBuffer(), data);
   assert.equal((await uploaded.getBlockList("committed")).committedBlocks.length, 5);
 });
+
+test("leases, snapshots and copies", async () => {
+  const container = service.getContainerClient("features");
+  await container.create();
+  const blob = container.getBlockBlobClient("doc.txt");
+  await blob.upload("v1", 2);
+
+  const leases = blob.getBlobLeaseClient();
+  await leases.acquireLease(15);
+  await assert.rejects(blob.upload("v2", 2), (e) => e.statusCode === 412 && e.code === "LeaseIdMissing");
+  await blob.upload("v2", 2, { conditions: { leaseId: leases.leaseId } });
+  const leased = await blob.getProperties();
+  assert.deepEqual([leased.leaseState, leased.leaseStatus, leased.leaseDuration], ["leased", "locked", "fixed"]);
+  await leases.releaseLease();
+
+  const { snapshot } = await blob.createSnapshot();
+  await blob.upload("v3", 2);
+  const old = await blob.withSnapshot(snapshot).downloadToBuffer();
+  assert.equal(old.toString(), "v2");
+  const names = [];
+  for await (const item of container.listBlobsFlat({ includeSnapshots: true })) names.push([item.name, item.snapshot ?? null]);
+  assert.deepEqual(names, [["doc.txt", snapshot], ["doc.txt", null]]);
+
+  const copy = container.getBlobClient("copy.txt");
+  const poller = await copy.beginCopyFromURL(blob.url);
+  const result = await poller.pollUntilDone();
+  assert.equal(result.copyStatus, "success");
+  assert.equal((await copy.downloadToBuffer()).toString(), "v3");
+  assert.equal((await copy.getProperties()).copyStatus, "success");
+
+  const fromUrl = container.getBlockBlobClient("from-url.txt");
+  await fromUrl.syncUploadFromURL(blob.withSnapshot(snapshot).url);
+  assert.equal((await fromUrl.downloadToBuffer()).toString(), "v2");
+
+  await assert.rejects(blob.delete(), (e) => e.statusCode === 409 && e.code === "SnapshotsPresent");
+  await blob.delete({ deleteSnapshots: "include" });
+});
