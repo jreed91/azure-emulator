@@ -469,6 +469,8 @@ fn key_permission_for(method: &Method, collection: &str, rest: &[&str]) -> Optio
         ("keys", [], "GET") | ("keys", [_, "versions"], "GET") => needed(READ, "list"),
         ("keys", [_, "create"], "POST") => needed("Microsoft.KeyVault/vaults/keys/create/action", "create"),
         ("keys", [_, "rotate"], "POST") => needed("Microsoft.KeyVault/vaults/keys/rotate/action", "rotate"),
+        ("keys", ["restore"], "POST") => needed("Microsoft.KeyVault/vaults/keys/restore/action", "restore"),
+        ("keys", [_, "backup"], "POST") => needed("Microsoft.KeyVault/vaults/keys/backup/action", "backup"),
         ("keys", [_, "rotationpolicy"], "GET") => needed("Microsoft.KeyVault/vaults/keyrotationpolicies/read", "getrotationpolicy"),
         ("keys", [_, "rotationpolicy"], "PUT") => needed("Microsoft.KeyVault/vaults/keyrotationpolicies/write", "setrotationpolicy"),
         ("keys", [_, op], "POST") | ("keys", [_, _, op], "POST") => crypto(op),

@@ -25,8 +25,6 @@ pub(crate) struct Key {
     pub(crate) name: String,
     /// Oldest first; the last one is the current version.
     pub(crate) versions: Vec<KeyVersion>,
-    /// The rotation policy set through the data plane, if any.
-    pub(crate) rotation_policy: Option<serde_json::Value>,
 }
 
 #[derive(Clone)]
@@ -295,7 +293,7 @@ fn create(ctx: &ArmContext<'_>, request: &OperationRequest<'_>, holder: Holder) 
         created,
     };
     let body = with_keys(ctx, &resource, holder, |store| {
-        let key = store.entry(name.to_ascii_lowercase()).or_insert_with(|| Key { name: name.to_string(), versions: Vec::new(), rotation_policy: None });
+        let key = store.entry(name.to_ascii_lowercase()).or_insert_with(|| Key { name: name.to_string(), versions: Vec::new() });
         key.versions.push(version);
         Ok(key_json(ctx, &resource, holder, key, key.versions.last().expect("just pushed"), false))
     })?;

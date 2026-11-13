@@ -142,6 +142,28 @@ impl Material {
         out
     }
 
+    /// Every JSON Web Key member, private ones included, as a backup keeps them.
+    pub(crate) fn private_jwk(&self) -> Map<String, Value> {
+        use rsa::traits::PrivateKeyParts;
+        let mut out = self.public_jwk();
+        out.insert("kty".into(), json!(self.family()));
+        let d = match self {
+            Material::Rsa(key) => {
+                if let [p, q] = key.primes() {
+                    out.insert("p".into(), json!(b64(&p.to_bytes_be())));
+                    out.insert("q".into(), json!(b64(&q.to_bytes_be())));
+                }
+                key.d().to_bytes_be()
+            }
+            Material::P256(key) => key.to_bytes().to_vec(),
+            Material::P384(key) => key.to_bytes().to_vec(),
+            Material::P521(key) => key.to_bytes().to_vec(),
+            Material::K256(key) => key.to_bytes().to_vec(),
+        };
+        out.insert("d".into(), json!(b64(&d)));
+        out
+    }
+
     fn rsa(&self, operation: &str) -> Result<&RsaPrivateKey, String> {
         match self {
             Material::Rsa(key) => Ok(key),
