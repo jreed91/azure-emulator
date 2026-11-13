@@ -25,6 +25,7 @@ rely on it as a security boundary.
 | `Microsoft.KeyVault` | Vaults: create, get, update, delete, list, `checkNameAvailability`; soft delete with list, get, recover and purge of deleted vaults; access-policy updates; secrets through Resource Manager (the same store as the data plane); managed HSMs with soft delete, regions and name availability (no HSM data plane); keys through Resource Manager in vaults and managed HSMs (metadata only; no keys data plane yet) |
 | `Microsoft.ManagedIdentity` | User-assigned identities and federated identity credentials; listing the resources that use an identity; reading any resource's system-assigned identity. Every resource's `identity` block is filled in: system-assigned identities get a principal id, and user-assigned identities are checked and given their principal and client ids |
 | `Microsoft.ServiceBus` | Namespaces, queues, topics, subscriptions, rules, authorization rules with `listKeys` and `regenerateKeys`, network rule sets, geo-disaster-recovery aliases with failover and break-pairing, legacy IP filter and virtual network rules, private link resources, Standard-to-Premium migration (start and revert; completion is not modeled), `checkNameAvailability`; messaging over AMQP 1.0 (see [Service Bus messaging](#service-bus-messaging)) |
+| `Microsoft.EventHub` | Namespaces (names shared with Service Bus), event hubs, consumer groups, authorization rules with `listKeys` and `regenerateKeys`, network rule sets, `checkNameAvailability`; events over AMQP (see [Event Hubs](#event-hubs)) |
 | `Microsoft.DocumentDB` | Database accounts with `listKeys`, `readonlykeys`, `listConnectionStrings` and `regenerateKey`; SQL databases and containers (the same store as the data plane); the Cosmos DB for NoSQL data plane (see [Cosmos DB](#cosmos-db)) |
 | Key Vault secrets | Set, get (latest or by version), update attributes, list, list versions, soft delete, get and list deleted, recover, purge |
 
@@ -86,6 +87,11 @@ tried yet.
 - Operations the ARM layer cannot route yet (tenant-, location- and
   extension-scoped ones) are listed by `coverage` as `501`.
 - Service Bus throughput limits, quotas and partitioning are not modelled.
+- Event Hubs has no Kafka endpoint, capture, schema registry, application
+  groups or geo-replication, and does not enforce throughput units. A
+  partition key maps to a partition by the emulator's own hash, so the same
+  key may land on a different partition number than on Azure (it always lands
+  on the same one here).
 - Cosmos DB serves the NoSQL API only (no MongoDB, Cassandra, Gremlin or Table
   data planes), with one region and one partition key range per container.
   Request charges are a flat 1 RU, consistency levels are accepted but every
@@ -248,6 +254,49 @@ blobs = BlobServiceClient(
 
 Data-plane endpoints come back from the control plane (`primaryEndpoints.blob`,
 `vaultUri`), so code that reads them needs no emulator-specific addresses.
+
+### Event Hubs
+
+Event Hubs namespaces are served by the same broker as Service Bus, on the
+same ports (AMQP `5672`, AMQP over TLS `5671`, WebSockets on the HTTPS port),
+with the same connection strings, keys and provisioning shortcuts:
+
+```python
+from azure.eventhub import EventData, EventHubConsumerClient, EventHubProducerClient
+
+keys = eventhub_mgmt.namespaces.list_keys("rg", "telemetry-ns", "RootManageSharedAccessKey")
+with EventHubProducerClient.from_connection_string(keys.primary_connection_string, eventhub_name="devices") as producer:
+    batch = producer.create_batch(partition_key="device-1")
+    batch.add(EventData("reading"))
+    producer.send_batch(batch)
+
+consumer = EventHubConsumerClient.from_connection_string(
+    keys.primary_connection_string, consumer_group="$Default", eventhub_name="devices")
+consumer.receive(on_event=lambda partition, event: print(event.body_as_str()), starting_position="-1")
+```
+
+Each event hub's partitions are append-only logs: an event gets a sequence
+number, an offset and an enqueued time, and stays until the hub's retention
+passes, however many consumer groups read it. Sends go to the hub (the
+partition chosen by partition key, or round robin; a batch stays together) or
+to one partition. Receivers read one partition of one consumer group from any
+position (earliest, latest, an offset, a sequence number or an enqueued time,
+inclusive or not) and keep receiving as events arrive; a receiver with an
+owner level takes the partition from receivers with a lower one. Hub and
+partition properties are answered as the SDKs ask for them. Event hubs check
+their partition count (fixed once created) and retention against the tier, and
+a Basic namespace has only the `$Default` consumer group.
+
+```json
+{
+  "eventHubs": [{
+    "resourceGroup": "local",
+    "namespace": "local-hubs",
+    "keys": { "RootManageSharedAccessKey": "SAS_KEY_VALUE" },
+    "hubs": [{ "name": "devices", "partitionCount": 4, "consumerGroups": ["analytics"] }]
+  }]
+}
+```
 
 ### Cosmos DB
 
@@ -454,7 +503,8 @@ Each `Emulator` is fully isolated. `core/router/tests/` shows how to drive it.
 │   ├── storage/         # Microsoft.Storage + Blob data plane
 │   ├── keyvault/        # Microsoft.KeyVault + secrets data plane
 │   ├── managedidentity/ # Microsoft.ManagedIdentity
-│   ├── servicebus/      # Microsoft.ServiceBus + AMQP broker
+│   ├── servicebus/      # Microsoft.ServiceBus + the AMQP broker (Service Bus and Event Hubs)
+│   ├── eventhub/        # Microsoft.EventHub
 │   └── cosmosdb/        # Microsoft.DocumentDB + NoSQL data plane
 ├── tools/scaffold/      # emulator-scaffold: OpenAPI specification → service scaffold
 ├── vendor/fe2o3-amqp/   # the AMQP library, patched (see PATCHED.md)
@@ -557,8 +607,8 @@ No hosts-file entries or certificate setup are needed: the suite resolves
 `*.localhost` itself and trusts the emulator's CA. Set `AZURE_EMULATOR_BIN` to
 test a binary other than `target/debug/azure-emulator`.
 
-A smaller suite drives Service Bus and Cosmos DB with the Azure SDK for
-JavaScript:
+A smaller suite drives Service Bus, Event Hubs and Cosmos DB with the Azure
+SDK for JavaScript:
 
 ```bash
 cargo build -p azure-emulator

@@ -9,8 +9,32 @@ use serde_json::{json, Value};
 
 use crate::ServiceBusState;
 
-const NAMESPACE_TYPE: &str = "Microsoft.ServiceBus/namespaces";
 const NAMESPACE_RULE_TYPE: &str = "Microsoft.ServiceBus/namespaces/AuthorizationRules";
+
+/// Service Bus and Event Hubs namespaces work alike: the same names (unique
+/// across both, as on Azure), rules and keys. A flavor names one provider's
+/// types.
+pub struct Flavor {
+    pub namespace: &'static str,
+    pub rule: &'static str,
+    pub network_rule_set: &'static str,
+    /// Event Hubs namespaces report throughput units and Kafka.
+    pub event_hubs: bool,
+}
+
+pub const SERVICE_BUS: Flavor = Flavor {
+    namespace: "Microsoft.ServiceBus/namespaces",
+    rule: NAMESPACE_RULE_TYPE,
+    network_rule_set: "Microsoft.ServiceBus/namespaces/networkRuleSets",
+    event_hubs: false,
+};
+
+pub const EVENT_HUBS: Flavor = Flavor {
+    namespace: "Microsoft.EventHub/namespaces",
+    rule: "Microsoft.EventHub/namespaces/authorizationRules",
+    network_rule_set: "Microsoft.EventHub/namespaces/networkRuleSets",
+    event_hubs: true,
+};
 
 /// The three levels an authorization rule can be defined at.
 pub(crate) const AUTHORIZATION_RULE_TYPES: [&str; 3] = [
@@ -46,6 +70,14 @@ pub(crate) fn is_valid_namespace_name(name: &str) -> bool {
 
 const NAME_RULE: &str = "The specified service namespace is invalid. The namespace name must be 6 to 50 characters long, contain only letters, numbers and hyphens, start with a letter and end with a letter or number.";
 
+fn apply_event_hubs_settable(properties: &mut Value, body: &Value) {
+    for member in ["isAutoInflateEnabled", "maximumThroughputUnits", "kafkaEnabled"] {
+        if let Some(value) = body.pointer(&format!("/properties/{member}")).filter(|v| !v.is_null()) {
+            properties[member] = value.clone();
+        }
+    }
+}
+
 fn apply_settable(properties: &mut Value, body: &Value) {
     for member in SETTABLE {
         if let Some(value) = body.pointer(&format!("/properties/{member}")).filter(|v| !v.is_null()) {
@@ -55,15 +87,13 @@ fn apply_settable(properties: &mut Value, body: &Value) {
     properties["updatedAt"] = json!(iso_timestamp());
 }
 
-const NETWORK_RULE_SET_TYPE: &str = "Microsoft.ServiceBus/namespaces/networkRuleSets";
-
 /// A namespace's network rule set: a singleton named `default` that exists from
 /// the moment the namespace does.
-pub(crate) struct NetworkRuleSets;
+pub struct NetworkRuleSets(pub &'static Flavor);
 
 impl ResourceTypeHandler for NetworkRuleSets {
     fn resource_type(&self) -> &'static str {
-        NETWORK_RULE_SET_TYPE
+        self.0.network_rule_set
     }
 
     fn put(&self, _ctx: &ArmContext<'_>, request: &PutRequest<'_>) -> Result<Value, ArmError> {
@@ -110,11 +140,11 @@ impl ResourceTypeHandler for NetworkRuleSets {
     }
 }
 
-pub(crate) struct Namespaces;
+pub struct Namespaces(pub &'static Flavor);
 
 impl ResourceTypeHandler for Namespaces {
     fn resource_type(&self) -> &'static str {
-        NAMESPACE_TYPE
+        self.0.namespace
     }
 
     fn put(&self, ctx: &ArmContext<'_>, request: &PutRequest<'_>) -> Result<Value, ArmError> {
@@ -140,7 +170,7 @@ impl ResourceTypeHandler for Namespaces {
                         format!("The specified service namespace '{name}' is already in use. Namespace names are unique across Azure."),
                     ));
                 }
-                json!({
+                let mut properties = json!({
                     "provisioningState": "Succeeded",
                     "status": "Active",
                     "createdAt": iso_timestamp(),
@@ -150,16 +180,29 @@ impl ResourceTypeHandler for Namespaces {
                     "disableLocalAuth": false,
                     "minimumTlsVersion": "1.2",
                     "publicNetworkAccess": "Enabled",
-                })
+                });
+                if self.0.event_hubs {
+                    let tier = request.body.pointer("/sku/name").and_then(Value::as_str).unwrap_or("Standard");
+                    properties["kafkaEnabled"] = json!(tier != "Basic");
+                    properties["isAutoInflateEnabled"] = json!(false);
+                    properties["maximumThroughputUnits"] = json!(0);
+                }
+                properties
             }
         };
         apply_settable(&mut properties, request.body);
+        if self.0.event_hubs {
+            apply_event_hubs_settable(&mut properties, request.body);
+        }
         Ok(properties)
     }
 
     fn patch(&self, _ctx: &ArmContext<'_>, existing: &Resource, body: &Value) -> Result<Value, ArmError> {
         let mut properties = existing.properties.clone();
         apply_settable(&mut properties, body);
+        if self.0.event_hubs {
+            apply_event_hubs_settable(&mut properties, body);
+        }
         Ok(properties)
     }
 
@@ -169,7 +212,8 @@ impl ResourceTypeHandler for Namespaces {
         if sku.get("tier").is_none() {
             sku["tier"] = sku["name"].clone();
         }
-        if sku["name"] == "Premium" && sku.get("capacity").is_none() {
+        // Premium has messaging units; Event Hubs has throughput units too.
+        if (sku["name"] == "Premium" || self.0.event_hubs) && sku.get("capacity").is_none() {
             sku["capacity"] = json!(1);
         }
         resource.sku = Some(sku);
@@ -180,7 +224,7 @@ impl ResourceTypeHandler for Namespaces {
         ctx.engine.state::<ArmState>().lock().insert(Resource {
             id: format!("{}/AuthorizationRules/RootManageSharedAccessKey", resource.id),
             name: "RootManageSharedAccessKey".into(),
-            resource_type: NAMESPACE_RULE_TYPE.into(),
+            resource_type: self.0.rule.into(),
             location: None,
             tags: None,
             kind: None,
@@ -192,7 +236,7 @@ impl ResourceTypeHandler for Namespaces {
         ctx.engine.state::<ArmState>().lock().insert(Resource {
             id: format!("{}/networkRuleSets/default", resource.id),
             name: "default".into(),
-            resource_type: NETWORK_RULE_SET_TYPE.into(),
+            resource_type: self.0.network_rule_set.into(),
             location: None,
             tags: None,
             kind: None,
@@ -215,10 +259,13 @@ impl ResourceTypeHandler for Namespaces {
             .namespaces
             .remove(&resource.name.to_ascii_lowercase());
         crate::entities::forget_messages(ctx, resource);
+        if self.0.event_hubs {
+            crate::broker::eventhubs::forget(ctx.engine, &resource.name);
+        }
     }
 }
 
-pub(crate) fn check_name_availability(ctx: &ArmContext<'_>, body: &Value) -> Result<Value, ArmError> {
+pub fn check_name_availability(ctx: &ArmContext<'_>, body: &Value) -> Result<Value, ArmError> {
     let name = body
         .get("name")
         .and_then(Value::as_str)
@@ -270,13 +317,14 @@ pub(crate) fn rule_keys(ctx: &ArmContext<'_>, rule_id: &str) -> [String; 2] {
 }
 
 /// Authorization rules at one of the three levels; the level is the type name.
-pub(crate) struct AuthorizationRules(pub(crate) &'static str);
+pub struct AuthorizationRules(pub &'static str);
 
 impl AuthorizationRules {
     fn keys_json(&self, ctx: &ArmContext<'_>, resource: &Resource, keys: &[String; 2]) -> Value {
         let namespace = id_part(&resource.id, "namespaces").unwrap_or("").to_ascii_lowercase();
         let endpoint = ctx.engine.config().servicebus_amqp_endpoint(&namespace);
         let entity = id_part(&resource.id, "queues")
+            .or_else(|| id_part(&resource.id, "eventhubs"))
             .or_else(|| id_part(&resource.id, "topics"))
             .map(|entity| format!(";EntityPath={entity}"))
             .unwrap_or_default();

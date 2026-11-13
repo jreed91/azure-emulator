@@ -22,6 +22,12 @@
 //!       }]
 //!     }]
 //!   }],
+//!   "eventHubs": [{
+//!     "resourceGroup": "local",
+//!     "namespace": "local-hubs",
+//!     "keys": { "RootManageSharedAccessKey": "my-key" },
+//!     "hubs": [{ "name": "telemetry", "partitionCount": 4, "consumerGroups": ["analytics"] }]
+//!   }],
 //!   "cosmos": [{
 //!     "resourceGroup": "local",
 //!     "account": "local-cosmos",
@@ -47,6 +53,7 @@ use crate::Emulator;
 
 const SERVICE_BUS_API: &str = "2022-10-01-preview";
 const COSMOS_API: &str = "2024-11-15";
+const EVENT_HUBS_API: &str = "2024-01-01";
 const RESOURCES_API: &str = "2021-04-01";
 
 /// One Resource Manager request the file asks for.
@@ -136,6 +143,57 @@ fn steps(file: &Value, default_subscription: &str) -> Result<Vec<Step>, String> 
                 steps.push(Step {
                     method: Method::POST,
                     path: format!("{rule_path}/regenerateKeys?api-version={SERVICE_BUS_API}"),
+                    body: json!({ "keyType": kind, "key": key }),
+                });
+            }
+        }
+    }
+    for hubs in list(file, "eventHubs") {
+        let group = text(hubs, "resourceGroup", "eventHubs entry")?;
+        let name = text(hubs, "namespace", "eventHubs entry")?;
+        let location = hubs.get("location").and_then(Value::as_str).unwrap_or("eastus");
+        let group_path = format!("/subscriptions/{subscription}/resourceGroups/{group}");
+        if !groups.contains(&group_path) {
+            groups.push(group_path.clone());
+            steps.push(put(group_path.clone(), RESOURCES_API, json!({ "location": location })));
+        }
+        let namespace = format!("{group_path}/providers/Microsoft.EventHub/namespaces/{name}");
+        let sku = hubs.get("sku").and_then(Value::as_str).unwrap_or("Standard");
+        steps.push(put(namespace.clone(), EVENT_HUBS_API, json!({ "location": location, "sku": { "name": sku, "tier": sku } })));
+        for hub in list(hubs, "hubs") {
+            let hub_name = text(hub, "name", "event hub")?;
+            let hub_path = format!("{namespace}/eventhubs/{hub_name}");
+            let mut properties = hub.get("properties").cloned().unwrap_or_else(|| json!({}));
+            for member in ["partitionCount", "messageRetentionInDays"] {
+                if let Some(value) = hub.get(member) {
+                    properties[member] = value.clone();
+                }
+            }
+            steps.push(put(hub_path.clone(), EVENT_HUBS_API, json!({ "properties": properties })));
+            for consumer_group in hub.get("consumerGroups").and_then(Value::as_array).into_iter().flatten() {
+                let consumer_group = consumer_group.as_str().ok_or_else(|| format!("{hub_name}: consumer groups are names"))?;
+                if consumer_group != "$Default" {
+                    steps.push(put(format!("{hub_path}/consumergroups/{consumer_group}"), EVENT_HUBS_API, json!({})));
+                }
+            }
+        }
+        for (rule, keys) in hubs.get("keys").and_then(Value::as_object).into_iter().flatten() {
+            let rule_path = format!("{namespace}/authorizationRules/{rule}");
+            if rule != "RootManageSharedAccessKey" {
+                steps.push(put(rule_path.clone(), EVENT_HUBS_API, json!({ "properties": { "rights": ["Listen", "Send", "Manage"] } })));
+            }
+            let pairs = match keys {
+                Value::String(primary) => vec![("PrimaryKey", primary.as_str())],
+                Value::Object(keys) => [("PrimaryKey", "primary"), ("SecondaryKey", "secondary")]
+                    .into_iter()
+                    .filter_map(|(kind, field)| keys.get(field).and_then(Value::as_str).map(|k| (kind, k)))
+                    .collect(),
+                _ => return Err(format!("keys.{rule}: a key string or {{\"primary\", \"secondary\"}}")),
+            };
+            for (kind, key) in pairs {
+                steps.push(Step {
+                    method: Method::POST,
+                    path: format!("{rule_path}/regenerateKeys?api-version={EVENT_HUBS_API}"),
                     body: json!({ "keyType": kind, "key": key }),
                 });
             }

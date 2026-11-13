@@ -208,8 +208,10 @@ async fn main() {
     }
 
     let amqp_address = format!("{bind}:{}", config.amqp_port);
-    let amqp = tokio::net::TcpListener::bind(&amqp_address)
-        .await
+    let amqp = amqp_address
+        .parse()
+        .map_err(|e| format!("{e}"))
+        .and_then(|address| service_servicebus::broker::listen(address).map_err(|e| e.to_string()))
         .unwrap_or_else(|e| fail(format!("cannot listen for AMQP on {amqp_address}: {e}")));
     println!("  Service Bus (AMQP):       {}", config.servicebus_amqp_endpoint("<namespace>"));
     tokio::spawn(service_servicebus::broker::serve(emulator.engine(), amqp, None));
@@ -218,8 +220,10 @@ async fn main() {
     // clients that connect by namespace name (and an Entra ID credential) use.
     let identity = tls::identity(&config, &bind).unwrap_or_else(|e| fail(format!("TLS setup failed: {e}")));
     let amqps_address = format!("{bind}:{}", config.amqps_port);
-    let amqps = tokio::net::TcpListener::bind(&amqps_address)
-        .await
+    let amqps = amqps_address
+        .parse()
+        .map_err(|e| format!("{e}"))
+        .and_then(|address| service_servicebus::broker::listen(address).map_err(|e| e.to_string()))
         .unwrap_or_else(|e| fail(format!("cannot listen for AMQP over TLS on {amqps_address}: {e}")));
     let amqps_tls = tls::acceptor(&identity).unwrap_or_else(|e| fail(format!("TLS setup failed: {e}")));
     println!("  Service Bus (AMQP + TLS): amqps://<namespace>.servicebus.{}:{}/", config.dns_suffix, config.amqps_port);

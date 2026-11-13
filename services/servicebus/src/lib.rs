@@ -6,9 +6,9 @@
 //! scaffold. `CONTRACT.md` describes what the specification says about each type.
 //!
 //! Implemented: namespaces, queues, topics, subscriptions, rules, and authorization
-//! rules with their keys at namespace, queue and topic level. This is the control
-//! plane only: nothing serves the messaging protocol, so message counts are always
-//! zero and the endpoint a namespace reports does not accept connections.
+//! rules with their keys at namespace, queue and topic level; and [`broker`], the
+//! AMQP 1.0 broker that serves messaging for Service Bus and Event Hubs namespaces
+//! alike (Event Hubs' resource provider is the `service-eventhub` crate).
 //!
 //! Also implemented: geo-disaster-recovery aliases (pairing, break and failover as
 //! control-plane state; nothing is replicated because there is no data plane), the
@@ -21,7 +21,7 @@ pub mod broker;
 mod entities;
 mod geo;
 mod migration;
-mod namespaces;
+pub mod namespaces;
 pub mod scaffold;
 
 use std::collections::{BTreeSet, HashMap};
@@ -40,8 +40,8 @@ pub struct ServiceBusState {
 
 /// Mounts the provider on Resource Manager.
 pub fn register(registry: &mut ArmRegistry) {
-    registry.register_type(namespaces::Namespaces);
-    registry.register_type(namespaces::NetworkRuleSets);
+    registry.register_type(namespaces::Namespaces(&namespaces::SERVICE_BUS));
+    registry.register_type(namespaces::NetworkRuleSets(&namespaces::SERVICE_BUS));
     for kind in namespaces::AUTHORIZATION_RULE_TYPES {
         registry.register_type(namespaces::AuthorizationRules(kind));
     }

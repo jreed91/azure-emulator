@@ -1,10 +1,12 @@
 # The Azure SDKs for Python the suite drives the emulator with. Pinned so that a
 # new SDK release changes the suite only when this file changes.
 azure-cosmos==4.17.1
+azure-eventhub==5.15.1
 azure-identity==1.27.0
 azure-mgmt-authorization==4.0.0
 azure-keyvault-secrets==4.12.0
 azure-mgmt-cosmosdb==10.0.0
+azure-mgmt-eventhub==12.0.0
 azure-mgmt-keyvault==14.1.0
 azure-mgmt-msi==7.1.0
 azure-mgmt-resource==26.0.0

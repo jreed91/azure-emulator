@@ -41,6 +41,7 @@ impl Emulator {
         service_managedidentity::register(&mut registry);
         service_servicebus::register(&mut registry);
         service_cosmosdb::register(&mut registry);
+        service_eventhub::register(&mut registry);
         // emulator-scaffold: new services are registered above this line.
         Self {
             engine: Arc::new(Engine::new(config)),

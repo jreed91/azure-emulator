@@ -166,53 +166,19 @@ impl Encoder<Frame> for FrameEncoder {
     type Error = Error;
 
     fn encode(&mut self, item: Frame, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        use serde_amqp::ser::Serializer;
-
         match item.body {
-            FrameBody::Open(performative) => {
-                write_header(dst, item.channel);
-                let mut serializer = Serializer::from(dst.writer());
-                performative.serialize(&mut serializer)
-            }
-            FrameBody::Begin(performative) => {
-                write_header(dst, item.channel);
-                let mut serializer = Serializer::from(dst.writer());
-                performative.serialize(&mut serializer)
-            }
-            FrameBody::Attach(performative) => {
-                write_header(dst, item.channel);
-                let mut serializer = Serializer::from(dst.writer());
-                performative.serialize(&mut serializer)
-            }
-            FrameBody::Flow(performative) => {
-                write_header(dst, item.channel);
-                let mut serializer = Serializer::from(dst.writer());
-                performative.serialize(&mut serializer)
-            }
+            FrameBody::Open(performative) => write_padded(dst, item.channel, &performative, OPEN_FIELDS),
+            FrameBody::Begin(performative) => write_padded(dst, item.channel, &performative, BEGIN_FIELDS),
+            FrameBody::Attach(performative) => write_padded(dst, item.channel, &performative, ATTACH_FIELDS),
+            FrameBody::Flow(performative) => write_padded(dst, item.channel, &performative, FLOW_FIELDS),
             FrameBody::Transfer {
                 performative,
                 payload,
             } => self.encode_transfer(dst, item.channel, performative, payload),
-            FrameBody::Disposition(performative) => {
-                write_header(dst, item.channel);
-                let mut serializer = Serializer::from(dst.writer());
-                performative.serialize(&mut serializer)
-            }
-            FrameBody::Detach(performative) => {
-                write_header(dst, item.channel);
-                let mut serializer = Serializer::from(dst.writer());
-                performative.serialize(&mut serializer)
-            }
-            FrameBody::End(performative) => {
-                write_header(dst, item.channel);
-                let mut serializer = Serializer::from(dst.writer());
-                performative.serialize(&mut serializer)
-            }
-            FrameBody::Close(performative) => {
-                write_header(dst, item.channel);
-                let mut serializer = Serializer::from(dst.writer());
-                performative.serialize(&mut serializer)
-            }
+            FrameBody::Disposition(performative) => write_padded(dst, item.channel, &performative, DISPOSITION_FIELDS),
+            FrameBody::Detach(performative) => write_padded(dst, item.channel, &performative, DETACH_FIELDS),
+            FrameBody::End(performative) => write_padded(dst, item.channel, &performative, &[None]),
+            FrameBody::Close(performative) => write_padded(dst, item.channel, &performative, &[None]),
             FrameBody::Empty => {
                 write_header(dst, item.channel);
                 Ok(())
@@ -220,6 +186,58 @@ impl Encoder<Frame> for FrameEncoder {
         }
         .map_err(Into::into)
     }
+}
+
+/// A field's default value, per the specification.
+enum Default {
+    Uint(u32),
+    Ushort(u16),
+    Ubyte(u8),
+    Bool(bool),
+}
+
+use Default::{Bool, Ubyte, Uint, Ushort};
+
+const OPEN_FIELDS: &[Option<Default>] = &[None, None, Some(Uint(u32::MAX)), Some(Ushort(u16::MAX)), None, None, None, None, None, None];
+const BEGIN_FIELDS: &[Option<Default>] = &[None, None, None, None, Some(Uint(u32::MAX)), None, None, None];
+const ATTACH_FIELDS: &[Option<Default>] =
+    &[None, None, None, Some(Ubyte(2)), Some(Ubyte(0)), None, None, None, Some(Bool(false)), None, None, None, None, None];
+const FLOW_FIELDS: &[Option<Default>] = &[None, None, None, None, None, None, None, None, Some(Bool(false)), Some(Bool(false)), None];
+const DISPOSITION_FIELDS: &[Option<Default>] = &[None, None, None, Some(Bool(false)), None, Some(Bool(false))];
+const DETACH_FIELDS: &[Option<Default>] = &[None, Some(Bool(false)), None];
+
+/// Writes a performative with all of its `fields`, the trailing empty ones
+/// as nulls. (Patched in for the azure-emulator: the derived encoding drops
+/// trailing empty fields, which the specification allows but some clients,
+/// such as the AMQP client inside the Python Event Hubs SDK, index into
+/// without checking the list's length.)
+fn write_padded<T: Serialize>(dst: &mut BytesMut, channel: u16, performative: &T, fields: &[Option<Default>]) -> Result<(), serde_amqp::Error> {
+    use serde_amqp::Value;
+
+    let bytes = serde_amqp::to_vec(performative)?;
+    let mut value: Value = serde_amqp::from_slice(&bytes)?;
+    if let Value::Described(described) = &mut value {
+        if let Value::List(items) = &mut described.value {
+            while items.len() < fields.len() {
+                items.push(Value::Null);
+            }
+            // A field left out for having its default value is written with
+            // that value: a null would read as "no value" to such clients.
+            for (item, default) in items.iter_mut().zip(fields) {
+                if let (Value::Null, Some(default)) = (&item, default) {
+                    *item = match default {
+                        Default::Uint(n) => Value::Uint(*n),
+                        Default::Ushort(n) => Value::Ushort(*n),
+                        Default::Ubyte(n) => Value::Ubyte(*n),
+                        Default::Bool(b) => Value::Bool(*b),
+                    };
+                }
+            }
+        }
+    }
+    write_header(dst, channel);
+    dst.extend_from_slice(&serde_amqp::to_vec(&value)?);
+    Ok(())
 }
 
 /// Decoder of the AMQP frames
