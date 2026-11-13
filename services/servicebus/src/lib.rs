@@ -4,12 +4,48 @@
 //! [`scaffold::PROVIDER`] and answers `501` until it is implemented. To implement a
 //! type, write a `ResourceTypeHandler` for it and register it here, before the
 //! scaffold. `CONTRACT.md` describes what the specification says about each type.
+//!
+//! Implemented: namespaces, queues, topics, subscriptions, rules, and authorization
+//! rules with their keys at namespace, queue and topic level. This is the control
+//! plane only: nothing serves the messaging protocol, so message counts are always
+//! zero and the endpoint a namespace reports does not accept connections.
+//!
+//! Not checked against Azure: the code and wording of validation refusals here, and
+//! the tier restrictions (topics on a Basic namespace are accepted).
 
+mod entities;
+mod namespaces;
 pub mod scaffold;
+
+use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
 
 use emulator_core::arm::ArmRegistry;
 
+/// Service Bus control-plane state beyond the resources themselves.
+#[derive(Default)]
+pub struct ServiceBusState {
+    /// Lowercased namespace names in use; they are global DNS labels.
+    pub(crate) namespaces: BTreeSet<String>,
+    /// Lowercased authorization rule id → its primary and secondary key.
+    pub(crate) keys: HashMap<String, [String; 2]>,
+}
+
 /// Mounts the provider on Resource Manager.
 pub fn register(registry: &mut ArmRegistry) {
+    registry.register_type(namespaces::Namespaces);
+    for kind in namespaces::AUTHORIZATION_RULE_TYPES {
+        registry.register_type(namespaces::AuthorizationRules(kind));
+    }
+    registry.register_type(entities::Queues);
+    registry.register_type(entities::Topics);
+    registry.register_type(entities::Subscriptions);
+    registry.register_type(entities::Rules);
+    for action in ["checkNameAvailability", "CheckNameSpaceAvailability"] {
+        registry.register_provider_action(
+            &format!("Microsoft.ServiceBus/{action}"),
+            Arc::new(namespaces::check_name_availability),
+        );
+    }
     registry.register_scaffold(&scaffold::PROVIDER);
 }

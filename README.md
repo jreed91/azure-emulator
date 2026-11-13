@@ -20,7 +20,8 @@ workloads or to test security.
 | `Microsoft.Storage` | Storage accounts: create, get, update, delete, list, `listKeys`, `regenerateKey`, `checkNameAvailability` |
 | Blob service | Containers: create, delete, properties, list. Block blobs: upload (single request), download with ranges, properties, metadata, delete, list with prefix, delimiter and paging. Authorization by Entra token or verified Shared Key |
 | `Microsoft.KeyVault` | Vaults: create, get, update, delete, list, `checkNameAvailability` |
-| `Microsoft.ManagedIdentity` | User-assigned identities: create, get, update, delete, list |
+| `Microsoft.ManagedIdentity` | User-assigned identities and federated identity credentials |
+| `Microsoft.ServiceBus` | Namespaces, queues, topics, subscriptions, rules, authorization rules with `listKeys` and `regenerateKeys`, `checkNameAvailability` (control plane only: nothing serves messaging) |
 | Key Vault secrets | Set, get (latest or by version), update attributes, list, list versions, soft delete, get and list deleted, recover, purge |
 
 Beyond these, every resource type in the Storage, Key Vault, Managed Identity and
@@ -30,10 +31,10 @@ until someone implements it. `azure-emulator coverage` prints the current score:
 ```
 Provider                                  Types     Operations
 Microsoft.KeyVault                         1/16           7/51
-Microsoft.ManagedIdentity                   1/2           6/14
-Microsoft.ServiceBus                       0/21           0/91
+Microsoft.ManagedIdentity                   2/2          10/14
+Microsoft.ServiceBus                       8/21          42/91
 Microsoft.Storage                          1/32          9/153
-Total                                      3/71         22/309
+Total                                     12/71         68/309
 ```
 
 That score counts control-plane (Resource Manager) operations only; data planes
@@ -56,6 +57,9 @@ tried yet.
   refused. Every accepted version gets the same behaviour.
 - Operations the ARM layer cannot route yet (tenant-, location- and
   extension-scoped ones) are listed by `coverage` as `501`.
+- Service Bus has no data plane: the endpoint and connection strings a namespace
+  reports point at the emulator's domain, but nothing accepts AMQP there. Tier
+  restrictions (such as topics on a Basic namespace) are not enforced.
 - Blob: block lists (large uploads), page and append blobs, leases, snapshots,
   shared access signatures, copy, and conditional headers other than
   `If-None-Match: *`.

@@ -82,6 +82,18 @@ impl Config {
         )
     }
 
+    /// Address a Service Bus namespace reports. Nothing serves the messaging
+    /// protocol there yet; it is on the emulator's own domain so that clients
+    /// never reach the real service by mistake.
+    pub fn servicebus_endpoint(&self, namespace: &str) -> String {
+        format!(
+            "https://{}.servicebus.{}{}/",
+            namespace,
+            self.dns_suffix,
+            self.port_suffix()
+        )
+    }
+
     /// Audience a Key Vault token is requested for. It shares the vault hostname's
     /// domain (and port) so SDKs that verify the challenge resource against the vault accept it.
     pub fn vault_resource(&self) -> String {

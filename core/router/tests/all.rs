@@ -11,5 +11,7 @@ mod entra;
 mod scaffold;
 #[path = "all/keyvault.rs"]
 mod keyvault;
+#[path = "all/servicebus.rs"]
+mod servicebus;
 #[path = "all/storage.rs"]
 mod storage;

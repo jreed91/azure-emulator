@@ -1154,7 +1154,10 @@ dependencies = [
 name = "service-servicebus"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "emulator-core",
+ "rand",
+ "serde_json",
 ]
 
 [[package]]
