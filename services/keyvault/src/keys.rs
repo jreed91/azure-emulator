@@ -19,7 +19,7 @@ use crate::KeyVaultState;
 /// Keys by lowercased name.
 pub(crate) type KeyStore = BTreeMap<String, Key>;
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Key {
     /// The name as first created; ids keep this casing.
     pub(crate) name: String,
@@ -27,7 +27,7 @@ pub(crate) struct Key {
     pub(crate) versions: Vec<KeyVersion>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct KeyVersion {
     pub(crate) version: String,
     pub(crate) kty: String,
@@ -47,6 +47,7 @@ pub(crate) struct KeyVersion {
 }
 
 /// A soft-deleted key.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct DeletedKey {
     pub(crate) key: Key,
     pub(crate) deleted_date: i64,

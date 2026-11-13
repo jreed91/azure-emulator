@@ -2,6 +2,7 @@
 //! Manager and the Blob service data plane on `{account}.blob.core.<suffix>`.
 
 pub mod blob;
+mod persist;
 pub mod queue;
 pub mod table;
 mod management;

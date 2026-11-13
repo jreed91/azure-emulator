@@ -33,7 +33,7 @@ service-keyvault = { path = "services/keyvault" }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 base64 = "0.22"
-chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 fancy-regex = "0.14"
 fe2o3-amqp = { version = "0.18", default-features = false, features = ["acceptor"] }
 fe2o3-amqp-types = "0.18"

@@ -34,7 +34,7 @@ const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 const QUEUE_TYPE: &str = "Microsoft.Storage/storageAccounts/queueServices/queues";
 
 /// One queue's metadata, access policies and messages.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Queue {
     pub metadata: BTreeMap<String, String>,
     /// The `SignedIdentifiers` XML last set, as sent.
@@ -42,6 +42,7 @@ pub(crate) struct Queue {
     pub messages: Vec<Message>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct Message {
     id: String,
     text: String,

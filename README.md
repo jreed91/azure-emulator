@@ -125,7 +125,9 @@ tried yet.
   but not enforced.
 - Some error codes and messages are best-effort and have not been compared with
   real Azure; the code marks the ones known to be unverified.
-- State is lost when the process exits.
+- State is kept across restarts only with `--persist`, and then without the
+  messages and events in flight in Service Bus and Event Hubs (see
+  [Keeping state across restarts](#keeping-state-across-restarts)).
 
 ## Quick start
 
@@ -135,7 +137,7 @@ cargo run -p azure-emulator
 
 The emulator serves HTTPS on `127.0.0.1:10443` and prints its endpoints. Options:
 `--port`, `--bind`, `--host`, `--dns-suffix`, `--amqp-port`, `--http`,
-`--config`, `--enforce-rbac`, `--rbac-owner`; each also has an
+`--config`, `--persist`, `--state-file`, `--enforce-rbac`, `--rbac-owner`; each also has an
 `AZURE_EMULATOR_*` environment variable. Run with
 `--help` for details. (Pick ports Node's `fetch` allows if you change them:
 it refuses some, such as `10080`.)
@@ -162,6 +164,41 @@ services:
     volumes:
       - ./azure-emulator.json:/config.json:ro
     ports: ["10443:10443", "5672:5672", "5671:5671"]
+```
+
+### Keeping state across restarts
+
+By default the emulator starts empty every time. With `--persist` (or
+`AZURE_EMULATOR_PERSIST=1`) it keeps its state in `state.json` in its home
+directory (`AZURE_EMULATOR_HOME`, `/data` in the image), or in the file
+`--state-file` (`AZURE_EMULATOR_STATE_FILE`) names:
+
+- It loads the file at startup, before provisioning from `--config`, which
+  then updates what was restored.
+- It writes the file whenever the state changes (checked every two seconds)
+  and again when it stops on Ctrl-C or `SIGTERM` (as `docker stop` sends).
+  Each write replaces the file whole, so it is never left half-written.
+- A file it cannot read (from an incompatible version, say) is moved aside to
+  `state.json.unreadable`, and the emulator starts empty.
+
+What is kept: resource groups and every resource, role assignments and custom
+roles, deployments; storage account keys, blobs (with snapshots, leases and
+staged blocks), queues and their messages, tables and entities; Key Vault
+secrets and keys, with their key material, and deleted items; Cosmos DB
+databases, containers and items; Service Bus and Event Hubs namespaces,
+entities and keys. Not kept: messages and events in flight in Service Bus and
+Event Hubs, which start empty again.
+
+```yaml
+services:
+  azure:
+    image: ghcr.io/<owner>/azure-emulator:edge
+    environment:
+      AZURE_EMULATOR_PERSIST: "1"
+    volumes:
+      - azure-data:/data
+volumes:
+  azure-data:
 ```
 
 ### Provisioning at startup

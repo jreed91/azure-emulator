@@ -34,11 +34,30 @@ const TABLE_TYPE: &str = "Microsoft.Storage/storageAccounts/tableServices/tables
 const MAX_PAGE: usize = 1000;
 
 /// One table: its name as created, its entities and access policies.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct Table {
     pub name: String,
-    /// Entities by (PartitionKey, RowKey).
+    /// Entities by (PartitionKey, RowKey); a snapshot keeps them as a list.
+    #[serde(with = "entity_list")]
     entities: BTreeMap<(String, String), Entity>,
     acl: Option<String>,
+}
+
+/// Entities as `[[partition, row], entity]` pairs, since JSON keys are strings.
+mod entity_list {
+    use std::collections::BTreeMap;
+
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::Entity;
+
+    pub(super) fn serialize<S: Serializer>(entities: &BTreeMap<(String, String), Entity>, serializer: S) -> Result<S::Ok, S::Error> {
+        entities.iter().collect::<Vec<_>>().serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<BTreeMap<(String, String), Entity>, D::Error> {
+        Ok(Vec::<((String, String), Entity)>::deserialize(deserializer)?.into_iter().collect())
+    }
 }
 
 impl Table {
@@ -51,7 +70,7 @@ impl Table {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Entity {
     /// Properties other than the keys and timestamp, with their
     /// `@odata.type` annotations as given.

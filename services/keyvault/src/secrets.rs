@@ -21,7 +21,7 @@ use crate::KeyVaultState;
 /// Days a deleted secret stays recoverable.
 const RECOVERABLE_DAYS: i64 = 90;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Vault {
     /// Keyed by lowercased secret name.
     secrets: BTreeMap<String, Secret>,
@@ -32,7 +32,7 @@ pub(crate) struct Vault {
     pub(crate) deleted_keys: BTreeMap<String, crate::keys::DeletedKey>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Secret {
     /// The name as first created; ids keep this casing.
     name: String,
@@ -40,7 +40,7 @@ struct Secret {
     versions: Vec<SecretVersion>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct SecretVersion {
     version: String,
     value: String,
@@ -53,6 +53,7 @@ struct SecretVersion {
     updated: i64,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct DeletedSecret {
     secret: Secret,
     deleted_date: i64,

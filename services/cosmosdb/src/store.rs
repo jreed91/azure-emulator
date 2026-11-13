@@ -10,12 +10,13 @@ use rand::RngCore;
 use serde_json::{json, Map, Value};
 
 /// The emulator state of one account, keyed by lowercased account name.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct CosmosState {
     pub(crate) accounts: HashMap<String, Account>,
 }
 
 /// An account's keys and data.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct Account {
     /// Primary, secondary, primary read-only, secondary read-only.
     pub keys: [String; 4],
@@ -36,6 +37,22 @@ impl Account {
 }
 
 /// A new 512-bit account key, base64 encoded, as Cosmos DB issues them.
+mod item_list {
+    use std::collections::BTreeMap;
+
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::Item;
+
+    pub(super) fn serialize<S: Serializer>(items: &BTreeMap<(String, String), Item>, serializer: S) -> Result<S::Ok, S::Error> {
+        items.iter().collect::<Vec<_>>().serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<BTreeMap<(String, String), Item>, D::Error> {
+        Ok(Vec::<((String, String), Item)>::deserialize(deserializer)?.into_iter().collect())
+    }
+}
+
 pub(crate) fn new_key() -> String {
     let mut bytes = [0u8; 64];
     rand::thread_rng().fill_bytes(&mut bytes);
@@ -58,7 +75,7 @@ pub(crate) fn new_etag() -> String {
 }
 
 /// The system properties every resource carries.
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct System {
     pub rid: String,
     pub ts: i64,
@@ -76,6 +93,7 @@ impl System {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct Database {
     pub id: String,
     pub system: System,
@@ -101,18 +119,22 @@ impl Database {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct Container {
     /// The definition as given (id, partitionKey, indexingPolicy,
     /// defaultTtl, uniqueKeyPolicy, ...), without system properties.
     pub definition: Map<String, Value>,
     pub system: System,
-    /// Items by (partition key, id), in insertion order of the key.
+    /// Items by (partition key, id), in insertion order of the key; a
+    /// snapshot keeps them as a list, since JSON keys are strings.
+    #[serde(with = "item_list")]
     pub items: BTreeMap<(String, String), Item>,
     pub throughput: Option<i64>,
     /// The etag of the partition key ranges: there is always one range.
     pub ranges_etag: String,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct Item {
     pub body: Map<String, Value>,
     pub system: System,

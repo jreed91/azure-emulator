@@ -11,6 +11,20 @@ use serde_json::{json, Map, Value};
 use sha2::{Sha256, Sha384, Sha512};
 
 /// A key's private material.
+/// A snapshot keeps key material as its private JSON Web Key.
+impl serde::Serialize for Material {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.private_jwk().serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Material {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let jwk = Value::deserialize(deserializer)?;
+        Material::from_jwk(&jwk).map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Clone)]
 pub(crate) enum Material {
     Rsa(Box<RsaPrivateKey>),
