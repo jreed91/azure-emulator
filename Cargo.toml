@@ -26,6 +26,7 @@ axum = { version = "0.8", default-features = false, features = ["http1", "tokio"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+fancy-regex = "0.14"
 hmac = "0.12"
 http = "1"
 httpdate = "1"

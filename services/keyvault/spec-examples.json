@@ -1,0 +1,838 @@
+[
+  {
+    "body": {
+      "location": "westus",
+      "properties": {
+        "enablePurgeProtection": false,
+        "enableSoftDelete": true,
+        "initialAdminObjectIds": [
+          "00000000-0000-0000-0000-000000000000"
+        ],
+        "softDeleteRetentionInDays": 90,
+        "tenantId": "00000000-0000-0000-0000-000000000000"
+      },
+      "sku": {
+        "family": "B",
+        "name": "Standard_B1"
+      },
+      "tags": {
+        "Dept": "hsm",
+        "Environment": "dogfood"
+      }
+    },
+    "operationId": "ManagedHsms_CreateOrUpdate",
+    "parameters": {
+      "api-version": "2026-10-01-preview",
+      "name": "hsm1",
+      "resourceGroupName": "hsm-group",
+      "subscriptionId": "00000000-0000-0000-0000-000000000000"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.KeyVault/managedHSMs/{name}",
+    "response": {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/hsm-group/providers/Microsoft.KeyVault/managedHSMs/hsm1",
+      "location": "westus",
+      "name": "hsm1",
+      "properties": {
+        "enablePurgeProtection": false,
+        "enableSoftDelete": true,
+        "hsmUri": "https://westus.hsm1.managedhsm.azure.net",
+        "initialAdminObjectIds": [
+          "00000000-0000-0000-0000-000000000000"
+        ],
+        "provisioningState": "Succeeded",
+        "softDeleteRetentionInDays": 90,
+        "statusMessage": "ManagedHsm is functional.",
+        "tenantId": "00000000-0000-0000-0000-000000000000"
+      },
+      "sku": {
+        "family": "B",
+        "name": "Standard_B1"
+      },
+      "tags": {
+        "Dept": "hsm",
+        "Environment": "dogfood"
+      },
+      "type": "Microsoft.KeyVault/managedHSMs"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "Create a new managed HSM Pool or update an existing managed HSM Pool",
+    "type": "Microsoft.KeyVault/managedHSMs"
+  },
+  {
+    "body": {
+      "properties": {
+        "kty": "RSA"
+      }
+    },
+    "operationId": "ManagedHsmKeys_CreateIfNotExist",
+    "parameters": {
+      "api-version": "2026-10-01-preview",
+      "keyName": "sample-key-name",
+      "name": "sample-managedhsm-name",
+      "resourceGroupName": "sample-group",
+      "subscriptionId": "00000000-0000-0000-0000-000000000000"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.KeyVault/managedHSMs/{name}/keys/{keyName}",
+    "response": {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/sample-group/providers/Microsoft.KeyVault/managedHSMs/sample-managedhsm-name/keys/sample-key-name",
+      "name": "sample-key-name",
+      "properties": {
+        "attributes": {
+          "created": 1598533051,
+          "enabled": true,
+          "recoveryLevel": "Purgeable",
+          "updated": 1598533051
+        },
+        "keyOps": [
+          "encrypt",
+          "decrypt",
+          "sign",
+          "verify",
+          "wrapKey",
+          "unwrapKey"
+        ],
+        "keySize": 2048,
+        "keyUri": "https://sample-managedhsm-name.managedhsm.azure.net:443/keys/sample-key-name",
+        "keyUriWithVersion": "https://sample-managedhsm-name.managedhsm.azure.net:443/keys/sample-key-name/fd618d9519b74f9aae94ade66b876acc",
+        "kty": "RSA"
+      },
+      "type": "Microsoft.KeyVault/managedHSMs/keys"
+    },
+    "statuses": [
+      200
+    ],
+    "title": "Create a key",
+    "type": "Microsoft.KeyVault/managedHSMs/keys"
+  },
+  {
+    "body": {
+      "properties": {
+        "privateLinkServiceConnectionState": {
+          "description": "My name is Joe and I'm approving this.",
+          "status": "Approved"
+        }
+      }
+    },
+    "operationId": "MHSMPrivateEndpointConnections_Put",
+    "parameters": {
+      "api-version": "2026-10-01-preview",
+      "name": "sample-mhsm",
+      "privateEndpointConnectionName": "sample-pec",
+      "resourceGroupName": "sample-group",
+      "subscriptionId": "00000000-0000-0000-0000-000000000000"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.KeyVault/managedHSMs/{name}/privateEndpointConnections/{privateEndpointConnectionName}",
+    "response": {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/sample-group/providers/Microsoft.KeyVault/managedhsms/sample-mhsm/privateEndpointConnections/sample-pec",
+      "name": "sample-pec",
+      "properties": {
+        "privateEndpoint": {
+          "id": "/subscriptions/00000000-0000-0000-1234-000000000000/resourceGroups/sample-group/providers/Microsoft.Network/privateEndpoints/sample-pe"
+        },
+        "privateLinkServiceConnectionState": {
+          "actionsRequired": "None",
+          "description": "My name is Joe and I'm approving this.",
+          "status": "Approved"
+        },
+        "provisioningState": "Succeeded"
+      },
+      "type": "Microsoft.KeyVault/managedhsms/privateEndpointConnections"
+    },
+    "statuses": [
+      200
+    ],
+    "title": "ManagedHsmPutPrivateEndpointConnection",
+    "type": "Microsoft.KeyVault/managedHSMs/privateEndpointConnections"
+  },
+  {
+    "body": {
+      "location": "westus",
+      "properties": {
+        "accessPolicies": [
+          {
+            "objectId": "00000000-0000-0000-0000-000000000000",
+            "permissions": {
+              "certificates": [
+                "get",
+                "list",
+                "delete",
+                "create",
+                "import",
+                "update",
+                "managecontacts",
+                "getissuers",
+                "listissuers",
+                "setissuers",
+                "deleteissuers",
+                "manageissuers",
+                "recover",
+                "purge"
+              ],
+              "keys": [
+                "encrypt",
+                "decrypt",
+                "wrapKey",
+                "unwrapKey",
+                "sign",
+                "verify",
+                "get",
+                "list",
+                "create",
+                "update",
+                "import",
+                "delete",
+                "backup",
+                "restore",
+                "recover",
+                "purge"
+              ],
+              "secrets": [
+                "get",
+                "list",
+                "set",
+                "delete",
+                "backup",
+                "restore",
+                "recover",
+                "purge"
+              ]
+            },
+            "tenantId": "00000000-0000-0000-0000-000000000000"
+          }
+        ],
+        "enabledForDeployment": true,
+        "enabledForDiskEncryption": true,
+        "enabledForTemplateDeployment": true,
+        "publicNetworkAccess": "Enabled",
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "tenantId": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "operationId": "Vaults_CreateOrUpdate",
+    "parameters": {
+      "api-version": "2026-10-01-preview",
+      "resourceGroupName": "sample-resource-group",
+      "subscriptionId": "00000000-0000-0000-0000-000000000000",
+      "vaultName": "sample-vault"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.KeyVault/vaults/{vaultName}",
+    "response": {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/sample-resource-group/providers/Microsoft.KeyVault/vaults/sample-vault",
+      "location": "westus",
+      "name": "sample-vault",
+      "properties": {
+        "accessPolicies": [
+          {
+            "objectId": "00000000-0000-0000-0000-000000000000",
+            "permissions": {
+              "certificates": [
+                "get",
+                "list",
+                "delete",
+                "create",
+                "import",
+                "update",
+                "managecontacts",
+                "getissuers",
+                "listissuers",
+                "setissuers",
+                "deleteissuers",
+                "manageissuers",
+                "recover",
+                "purge"
+              ],
+              "keys": [
+                "encrypt",
+                "decrypt",
+                "wrapKey",
+                "unwrapKey",
+                "sign",
+                "verify",
+                "get",
+                "list",
+                "create",
+                "update",
+                "import",
+                "delete",
+                "backup",
+                "restore",
+                "recover",
+                "purge"
+              ],
+              "secrets": [
+                "get",
+                "list",
+                "set",
+                "delete",
+                "backup",
+                "restore",
+                "recover",
+                "purge"
+              ]
+            },
+            "tenantId": "00000000-0000-0000-0000-000000000000"
+          }
+        ],
+        "enabledForDeployment": true,
+        "enabledForDiskEncryption": true,
+        "enabledForTemplateDeployment": true,
+        "hsmPoolResourceId": "00000000-0000-0000-0000-000000000000",
+        "networkAcls": {
+          "bypass": "AzureServices",
+          "defaultAction": "Deny",
+          "ipRules": [
+            {
+              "value": ""
+            }
+          ],
+          "virtualNetworkRules": [
+            {
+              "id": "",
+              "ignoreMissingVnetServiceEndpoint": false
+            }
+          ]
+        },
+        "privateEndpointConnections": [
+          {
+            "etag": "",
+            "id": "",
+            "properties": {
+              "privateEndpoint": {
+                "id": ""
+              },
+              "privateLinkServiceConnectionState": {
+                "actionsRequired": "None",
+                "status": "Approved"
+              },
+              "provisioningState": "Succeeded"
+            }
+          }
+        ],
+        "provisioningState": "Succeeded",
+        "publicNetworkAccess": "Enabled",
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "tenantId": "00000000-0000-0000-0000-000000000000",
+        "vaultUri": "https://sample-vault.vault.azure.net"
+      },
+      "systemData": {
+        "createdAt": "2020-01-01T12:00:00.0000000Z",
+        "createdBy": "keyVaultUser1",
+        "createdByType": "User",
+        "lastModifiedAt": "2020-01-01T12:00:00.0000000Z",
+        "lastModifiedBy": "keyVaultUser2",
+        "lastModifiedByType": "User"
+      },
+      "tags": {},
+      "type": "Microsoft.KeyVault/vaults"
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "Create a new vault or update an existing vault",
+    "type": "Microsoft.KeyVault/vaults"
+  },
+  {
+    "body": {
+      "location": "westus",
+      "properties": {
+        "enableCrossTenantAccessProtection": true,
+        "enableRbacAuthorization": true,
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "tenantId": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "operationId": "Vaults_CreateOrUpdate",
+    "parameters": {
+      "api-version": "2026-10-01-preview",
+      "resourceGroupName": "sample-resource-group",
+      "subscriptionId": "00000000-0000-0000-0000-000000000000",
+      "vaultName": "sample-vault"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.KeyVault/vaults/{vaultName}",
+    "response": {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/sample-resource-group/providers/Microsoft.KeyVault/vaults/sample-vault",
+      "location": "westus",
+      "name": "sample-vault",
+      "properties": {
+        "enableCrossTenantAccessProtection": true,
+        "enableRbacAuthorization": true,
+        "provisioningState": "Succeeded",
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "tenantId": "00000000-0000-0000-0000-000000000000",
+        "vaultUri": "https://sample-vault.vault.azure.net"
+      },
+      "tags": {},
+      "type": "Microsoft.KeyVault/vaults"
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "Create a vault with cross-tenant access protection enabled",
+    "type": "Microsoft.KeyVault/vaults"
+  },
+  {
+    "body": {
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/sample-resource-group/providers/Microsoft.ManagedIdentity/userAssignedIdentities/sample-identity": {}
+        }
+      },
+      "location": "westus",
+      "properties": {
+        "accessPolicies": [],
+        "enableRbacAuthorization": true,
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "tenantId": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "operationId": "Vaults_CreateOrUpdate",
+    "parameters": {
+      "api-version": "2026-10-01-preview",
+      "resourceGroupName": "sample-resource-group",
+      "subscriptionId": "00000000-0000-0000-0000-000000000000",
+      "vaultName": "sample-vault"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.KeyVault/vaults/{vaultName}",
+    "response": {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/sample-resource-group/providers/Microsoft.KeyVault/vaults/sample-vault",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/sample-resource-group/providers/Microsoft.ManagedIdentity/userAssignedIdentities/sample-identity": {
+            "clientId": "22222222-2222-2222-2222-222222222222",
+            "principalId": "11111111-1111-1111-1111-111111111111"
+          }
+        }
+      },
+      "location": "westus",
+      "name": "sample-vault",
+      "properties": {
+        "accessPolicies": [],
+        "enableRbacAuthorization": true,
+        "provisioningState": "Succeeded",
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "tenantId": "00000000-0000-0000-0000-000000000000",
+        "vaultUri": "https://sample-vault.vault.azure.net"
+      },
+      "type": "Microsoft.KeyVault/vaults"
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "Create or update a vault by fully replacing the user-assigned identity set",
+    "type": "Microsoft.KeyVault/vaults"
+  },
+  {
+    "body": {
+      "location": "westus",
+      "properties": {
+        "enabledForDeployment": true,
+        "enabledForDiskEncryption": true,
+        "enabledForTemplateDeployment": true,
+        "networkAcls": {
+          "bypass": "AzureServices",
+          "defaultAction": "Deny",
+          "ipRules": [
+            {
+              "value": "124.56.78.91"
+            },
+            {
+              "value": "'10.91.4.0/24'"
+            }
+          ],
+          "virtualNetworkRules": [
+            {
+              "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Network/virtualNetworks/test-vnet/subnets/subnet1"
+            }
+          ]
+        },
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "tenantId": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "operationId": "Vaults_CreateOrUpdate",
+    "parameters": {
+      "api-version": "2026-10-01-preview",
+      "resourceGroupName": "sample-resource-group",
+      "subscriptionId": "00000000-0000-0000-0000-000000000000",
+      "vaultName": "sample-vault"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.KeyVault/vaults/{vaultName}",
+    "response": {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/sample-resource-group/providers/Microsoft.KeyVault/vaults/sample-vault",
+      "location": "westus",
+      "name": "sample-vault",
+      "properties": {
+        "enabledForDeployment": true,
+        "enabledForDiskEncryption": true,
+        "enabledForTemplateDeployment": true,
+        "hsmPoolResourceId": "00000000-0000-0000-0000-000000000000",
+        "networkAcls": {
+          "bypass": "AzureServices",
+          "defaultAction": "Deny",
+          "ipRules": [
+            {
+              "value": "124.56.78.91/32"
+            },
+            {
+              "value": "'10.91.4.0/24'"
+            }
+          ],
+          "virtualNetworkRules": [
+            {
+              "id": "/subscriptions/subid/resourcegroups/rg1/providers/microsoft.network/virtualnetworks/test-vnet/subnets/subnet1"
+            }
+          ]
+        },
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "tenantId": "00000000-0000-0000-0000-000000000000",
+        "vaultUri": "https://sample-vault.vault.azure.net"
+      },
+      "systemData": {
+        "createdAt": "2020-01-01T12:00:00.0000000Z",
+        "createdBy": "keyVaultUser1",
+        "createdByType": "User",
+        "lastModifiedAt": "2020-01-01T12:00:00.0000000Z",
+        "lastModifiedBy": "keyVaultUser2",
+        "lastModifiedByType": "User"
+      },
+      "tags": {},
+      "type": "Microsoft.KeyVault/vaults"
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "Create or update a vault with network acls",
+    "type": "Microsoft.KeyVault/vaults"
+  },
+  {
+    "body": {
+      "location": "westus",
+      "properties": {
+        "accessPolicies": [],
+        "protectionKeysWrappingKey": {
+          "keyAuthenticationData": {
+            "authType": "ServiceIdentity"
+          },
+          "keyValue": {
+            "kty": "oct",
+            "url": "https://sample-hsm.managedhsm.azure.net/keys/wrapping-key"
+          }
+        },
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "tenantId": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "operationId": "Vaults_CreateOrUpdate",
+    "parameters": {
+      "api-version": "2026-10-01-preview",
+      "resourceGroupName": "sample-resource-group",
+      "subscriptionId": "00000000-0000-0000-0000-000000000000",
+      "vaultName": "sample-vault"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.KeyVault/vaults/{vaultName}",
+    "response": {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/sample-resource-group/providers/Microsoft.KeyVault/vaults/sample-vault",
+      "location": "westus",
+      "name": "sample-vault",
+      "properties": {
+        "accessPolicies": [],
+        "protectionKeysWrappingKey": {
+          "keyAuthenticationData": {
+            "authType": "ServiceIdentity"
+          },
+          "keyValue": {
+            "kty": "oct",
+            "url": "https://sample-hsm.managedhsm.azure.net/keys/wrapping-key/0123456789abcdef0123456789abcdef"
+          }
+        },
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "tenantId": "00000000-0000-0000-0000-000000000000",
+        "vaultUri": "https://sample-vault.vault.azure.net"
+      },
+      "type": "Microsoft.KeyVault/vaults"
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "Create or update a vault with protection key wrapping",
+    "type": "Microsoft.KeyVault/vaults"
+  },
+  {
+    "body": {
+      "identity": {
+        "type": "None"
+      },
+      "location": "westus",
+      "properties": {
+        "accessPolicies": [],
+        "enableRbacAuthorization": true,
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "tenantId": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "operationId": "Vaults_CreateOrUpdate",
+    "parameters": {
+      "api-version": "2026-10-01-preview",
+      "resourceGroupName": "sample-resource-group",
+      "subscriptionId": "00000000-0000-0000-0000-000000000000",
+      "vaultName": "sample-vault"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.KeyVault/vaults/{vaultName}",
+    "response": {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/sample-resource-group/providers/Microsoft.KeyVault/vaults/sample-vault",
+      "identity": {
+        "type": "None"
+      },
+      "location": "westus",
+      "name": "sample-vault",
+      "properties": {
+        "accessPolicies": [],
+        "enableRbacAuthorization": true,
+        "provisioningState": "Succeeded",
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "tenantId": "00000000-0000-0000-0000-000000000000",
+        "vaultUri": "https://sample-vault.vault.azure.net"
+      },
+      "type": "Microsoft.KeyVault/vaults"
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "Remove all user-assigned identities and their certificates from a vault using PUT",
+    "type": "Microsoft.KeyVault/vaults"
+  },
+  {
+    "body": {
+      "properties": {
+        "accessPolicies": [
+          {
+            "objectId": "00000000-0000-0000-0000-000000000000",
+            "permissions": {
+              "certificates": [
+                "get"
+              ],
+              "keys": [
+                "encrypt"
+              ],
+              "secrets": [
+                "get"
+              ]
+            },
+            "tenantId": "00000000-0000-0000-0000-000000000000"
+          }
+        ]
+      }
+    },
+    "operationId": "Vaults_UpdateAccessPolicy",
+    "parameters": {
+      "api-version": "2026-10-01-preview",
+      "operationKind": "add",
+      "resourceGroupName": "sample-group",
+      "subscriptionId": "00000000-0000-0000-0000-000000000000",
+      "vaultName": "sample-vault"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.KeyVault/vaults/{vaultName}/accessPolicies/{operationKind}",
+    "response": {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/sample-group/providers/Microsoft.KeyVault/vaults/sample-vault/accessPolicies/",
+      "properties": {
+        "accessPolicies": [
+          {
+            "objectId": "00000000-0000-0000-0000-000000000000",
+            "permissions": {
+              "certificates": [
+                "get"
+              ],
+              "keys": [
+                "encrypt"
+              ],
+              "secrets": [
+                "get"
+              ]
+            },
+            "tenantId": "00000000-0000-0000-0000-000000000000"
+          }
+        ]
+      },
+      "type": "Microsoft.KeyVault/vaults/accessPolicies"
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "Add an access policy, or update an access policy with new permissions",
+    "type": "Microsoft.KeyVault/vaults/accessPolicies"
+  },
+  {
+    "body": {
+      "properties": {
+        "kty": "RSA"
+      }
+    },
+    "operationId": "Keys_CreateIfNotExist",
+    "parameters": {
+      "api-version": "2026-10-01-preview",
+      "keyName": "sample-key-name",
+      "resourceGroupName": "sample-group",
+      "subscriptionId": "00000000-0000-0000-0000-000000000000",
+      "vaultName": "sample-vault-name"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.KeyVault/vaults/{vaultName}/keys/{keyName}",
+    "response": {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/sample-group/providers/Microsoft.KeyVault/vaults/sample-vault-name/keys/sample-key-name",
+      "location": "westus",
+      "name": "sample-key-name",
+      "properties": {
+        "attributes": {
+          "created": 1598533051,
+          "enabled": true,
+          "recoveryLevel": "Purgeable",
+          "updated": 1598533051
+        },
+        "keyOps": [
+          "encrypt",
+          "decrypt",
+          "sign",
+          "verify",
+          "wrapKey",
+          "unwrapKey"
+        ],
+        "keySize": 2048,
+        "keyUri": "https://sample-vault-name.vault.azure.net:443/keys/sample-key-name",
+        "keyUriWithVersion": "https://sample-vault-name.vault.azure.net:443/keys/sample-key-name/fd618d9519b74f9aae94ade66b876acc",
+        "kty": "RSA"
+      },
+      "type": "Microsoft.KeyVault/vaults/keys"
+    },
+    "statuses": [
+      200
+    ],
+    "title": "Create a key",
+    "type": "Microsoft.KeyVault/vaults/keys"
+  },
+  {
+    "body": {
+      "etag": "",
+      "properties": {
+        "privateLinkServiceConnectionState": {
+          "description": "My name is Joe and I'm approving this.",
+          "status": "Approved"
+        }
+      }
+    },
+    "operationId": "PrivateEndpointConnections_Put",
+    "parameters": {
+      "api-version": "2026-10-01-preview",
+      "privateEndpointConnectionName": "sample-pec",
+      "resourceGroupName": "sample-group",
+      "subscriptionId": "00000000-0000-0000-0000-000000000000",
+      "vaultName": "sample-vault"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.KeyVault/vaults/{vaultName}/privateEndpointConnections/{privateEndpointConnectionName}",
+    "response": {
+      "etag": "",
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/sample-group/providers/Microsoft.KeyVault/vaults/sample-vault/privateEndpointConnections/sample-pec",
+      "name": "sample-pec",
+      "properties": {
+        "privateEndpoint": {
+          "id": "/subscriptions/00000000-0000-0000-1234-000000000000/resourceGroups/sample-group/providers/Microsoft.Network/privateEndpoints/sample-pe"
+        },
+        "privateLinkServiceConnectionState": {
+          "actionsRequired": "None",
+          "description": "My name is Joe and I'm approving this.",
+          "status": "Approved"
+        },
+        "provisioningState": "Succeeded"
+      },
+      "type": "Microsoft.KeyVault/vaults/privateEndpointConnections"
+    },
+    "statuses": [
+      200
+    ],
+    "title": "KeyVaultPutPrivateEndpointConnection",
+    "type": "Microsoft.KeyVault/vaults/privateEndpointConnections"
+  },
+  {
+    "body": {
+      "properties": {
+        "value": "secret-value"
+      }
+    },
+    "operationId": "Secrets_CreateOrUpdate",
+    "parameters": {
+      "api-version": "2026-10-01-preview",
+      "resourceGroupName": "sample-group",
+      "secretName": "secret-name",
+      "subscriptionId": "00000000-0000-0000-0000-000000000000",
+      "vaultName": "sample-vault"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.KeyVault/vaults/{vaultName}/secrets/{secretName}",
+    "response": {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/sample-group/providers/Microsoft.KeyVault/vaults/sample-vault/secrets/secret-name",
+      "location": "westus",
+      "name": "secret-name",
+      "properties": {
+        "attributes": {
+          "created": 1514938738,
+          "enabled": true,
+          "updated": 1514938738
+        },
+        "secretUri": "https://sample-vault.vault.azure.net/secrets/secret-name",
+        "secretUriWithVersion": "https:/sample-vault.vault.azure.net/secrets/secret-name/baf6de32c4774c7c81345f6476cf90a4"
+      },
+      "type": "Microsoft.KeyVault/vaults/secrets"
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "Create a secret",
+    "type": "Microsoft.KeyVault/vaults/secrets"
+  }
+]

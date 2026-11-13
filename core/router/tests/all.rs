@@ -13,5 +13,7 @@ mod scaffold;
 mod keyvault;
 #[path = "all/servicebus.rs"]
 mod servicebus;
+#[path = "all/spec_examples.rs"]
+mod spec_examples;
 #[path = "all/storage.rs"]
 mod storage;
