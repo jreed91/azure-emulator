@@ -30,6 +30,8 @@ pub fn register(registry: &mut ArmRegistry) {
     );
     management::register(registry);
     // Everything else in the specification is mounted as a 501 stub.
+    registry.register_type(emulator_core::arm::CreatedByNetwork("Microsoft.Storage/storageAccounts/privateEndpointConnections"));
+    registry.register_type(emulator_core::arm::CreatedByNetwork("Microsoft.Storage/storageAccounts/networkSecurityPerimeterConfigurations"));
     registry.register_scaffold(&scaffold::PROVIDER);
 }
 

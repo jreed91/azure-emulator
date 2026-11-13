@@ -54,5 +54,7 @@ pub fn register(registry: &mut ArmRegistry) {
         );
     }
     geo::register(registry);
+    registry.register_type(emulator_core::arm::CreatedByNetwork("Microsoft.ServiceBus/namespaces/privateEndpointConnections"));
+    registry.register_type(emulator_core::arm::CreatedByNetwork("Microsoft.ServiceBus/namespaces/networkSecurityPerimeterConfigurations"));
     registry.register_scaffold(&scaffold::PROVIDER);
 }
