@@ -268,6 +268,60 @@ impl ResourceTypeHandler for FileShares {
     fn patch(&self, ctx: &ArmContext<'_>, existing: &Resource, body: &Value) -> Result<Value, ArmError> {
         patch_as_put(self, ctx, existing, body)
     }
+
+    fn actions(&self) -> &'static [&'static str] {
+        &["lease"]
+    }
+
+    fn action(&self, ctx: &ArmContext<'_>, resource: &Resource, action: &str, body: &Value) -> Result<Value, ArmError> {
+        if !action.eq_ignore_ascii_case("lease") {
+            return Err(ArmError::not_implemented(format_args!("the '{action}' action on {}", self.resource_type())));
+        }
+        let state = ctx.engine.state::<StorageState>();
+        let mut state = state.lock();
+        let key = resource.id.to_ascii_lowercase();
+        let mut slot = state.share_leases.remove(&key);
+        let reply = crate::protection::apply_lease_action(&mut slot, body, "share");
+        if let Some(lease) = slot {
+            state.share_leases.insert(key, lease);
+        }
+        reply
+    }
+
+    fn view(&self, ctx: &ArmContext<'_>, resource: &mut Resource) {
+        let state = ctx.engine.state::<StorageState>();
+        let state = state.lock();
+        let lease = state.share_leases.get(&resource.id.to_ascii_lowercase());
+        let current = crate::state::lease_state(lease, SystemTime::now());
+        resource.properties["leaseState"] = json!(current.as_str().to_ascii_lowercase());
+        resource.properties["leaseStatus"] = json!(if current.blocks() { "locked" } else { "unlocked" });
+        match lease.filter(|_| current.blocks()) {
+            Some(lease) => resource.properties["leaseDuration"] = json!(if lease.duration.is_none() { "infinite" } else { "fixed" }),
+            None => {
+                if let Some(properties) = resource.properties.as_object_mut() {
+                    properties.remove("leaseDuration");
+                }
+            }
+        }
+    }
+
+    fn before_delete(&self, ctx: &ArmContext<'_>, resource: &Resource) -> Result<(), ArmError> {
+        let state = ctx.engine.state::<StorageState>();
+        let state = state.lock();
+        let lease = state.share_leases.get(&resource.id.to_ascii_lowercase());
+        if crate::state::lease_state(lease, SystemTime::now()).blocks() {
+            return Err(ArmError::new(
+                StatusCode::PRECONDITION_FAILED,
+                "LeaseIdMissing",
+                "There is currently a lease on the file share and no lease ID was specified in the request.",
+            ));
+        }
+        Ok(())
+    }
+
+    fn deleted(&self, ctx: &ArmContext<'_>, resource: &Resource) {
+        ctx.engine.state::<StorageState>().lock().share_leases.remove(&resource.id.to_ascii_lowercase());
+    }
 }
 
 struct EncryptionScopes;

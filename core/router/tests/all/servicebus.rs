@@ -312,3 +312,69 @@ async fn legacy_filter_rules_and_private_link_resources() {
     assert_eq!(links["value"][0]["properties"]["groupId"], "namespace");
     assert_eq!(links["value"][0]["properties"]["requiredZoneNames"], json!(["privatelink.servicebus.windows.net"]));
 }
+
+#[tokio::test]
+async fn post_forms_of_rule_reads_and_legacy_event_hubs() {
+    let client = Client::new();
+    namespace(&client).await;
+    put(&client, "orders-bus/queues/incoming", json!({})).await;
+    put(&client, "orders-bus/queues/incoming/authorizationRules/reader", json!({"properties": {"rights": ["Listen"]}})).await;
+
+    let listed = client.arm(Method::POST, &path("orders-bus/AuthorizationRules"), None).await;
+    assert_eq!(listed.status, StatusCode::OK, "{}", listed.text());
+    assert_eq!(listed.json()["value"][0]["name"], "RootManageSharedAccessKey");
+    let one = client.arm(Method::POST, &path("orders-bus/AuthorizationRules/RootManageSharedAccessKey"), None).await;
+    assert_eq!(one.json()["properties"]["rights"], json!(["Listen", "Manage", "Send"]));
+    let entity = client.arm(Method::POST, &path("orders-bus/queues/incoming/authorizationRules/reader"), None).await;
+    assert_eq!(entity.json()["name"], "reader");
+    let missing = client.arm(Method::POST, &path("orders-bus/topics/none/authorizationRules/reader"), None).await;
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+
+    // Event hubs in Service Bus namespaces exist only in the older api-versions.
+    let legacy = |rest: &str| {
+        format!("{SUB}/resourceGroups/rg/providers/Microsoft.ServiceBus/namespaces/{rest}?api-version=2017-04-01")
+    };
+    let hubs = client.arm(Method::GET, &legacy("orders-bus/eventhubs"), None).await;
+    assert_eq!(hubs.status, StatusCode::OK, "{}", hubs.text());
+    assert_eq!(hubs.json(), json!({"value": []}));
+    // ... and their rules only in the oldest one.
+    let rules = legacy("orders-bus/eventhubs/hub/authorizationRules/r").replace("2017-04-01", "2014-09-01");
+    let reply = client.arm(Method::GET, &rules, None).await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND, "{}", reply.text());
+}
+
+#[tokio::test]
+async fn standard_to_premium_migration() {
+    let client = Client::new();
+    client.create_group("rg").await;
+    put(&client, "standard-bus", json!({"location": "eastus"})).await;
+    put(&client, "premium-bus", json!({"location": "eastus", "sku": {"name": "Premium"}})).await;
+    put(&client, "standard-bus/queues/jobs", json!({"properties": {"maxDeliveryCount": 3}})).await;
+    put(&client, "standard-bus/topics/events", json!({})).await;
+    put(&client, "standard-bus/topics/events/subscriptions/audit", json!({})).await;
+    let premium_id = format!("{SUB}/resourceGroups/rg/providers/Microsoft.ServiceBus/namespaces/premium-bus");
+    let config = json!({"properties": {"targetNamespace": premium_id, "postMigrationName": "standard-bus-old"}});
+
+    assert_eq!(put(&client, "standard-bus/migrationConfigurations/other", config.clone()).await.status, StatusCode::BAD_REQUEST);
+    let wrong_way = json!({"properties": {"targetNamespace": premium_id.replace("premium-bus", "standard-bus"), "postMigrationName": "x-old-name"}});
+    assert_eq!(put(&client, "standard-bus/migrationConfigurations/$default", wrong_way).await.status, StatusCode::BAD_REQUEST);
+
+    let reply = put(&client, "standard-bus/migrationConfigurations/$default", config.clone()).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(reply.json()["properties"]["migrationState"], "Active");
+
+    // The entities' metadata now exists on the Premium namespace too.
+    let queue = get(&client, "premium-bus/queues/jobs").await;
+    assert_eq!(queue["properties"]["maxDeliveryCount"], 3);
+    assert!(queue["id"].as_str().unwrap().contains("/namespaces/premium-bus/"));
+    assert_eq!(get(&client, "premium-bus/topics/events/subscriptions/audit/rules").await["value"][0]["name"], "$Default");
+    assert_eq!(get(&client, "standard-bus/migrationConfigurations").await["value"].as_array().unwrap().len(), 1);
+    assert_eq!(put(&client, "standard-bus/migrationConfigurations/$default", config).await.status, StatusCode::CONFLICT);
+
+    // Completing the migration is not modeled; abandoning it is.
+    let upgrade = client.arm(Method::POST, &path("standard-bus/migrationConfigurations/$default/upgrade"), None).await;
+    assert_eq!(upgrade.status, StatusCode::NOT_IMPLEMENTED);
+    let revert = client.arm(Method::POST, &path("standard-bus/migrationConfigurations/$default/revert"), None).await;
+    assert_eq!(revert.status, StatusCode::OK);
+    assert_eq!(get(&client, "standard-bus/migrationConfigurations").await, json!({"value": []}));
+}

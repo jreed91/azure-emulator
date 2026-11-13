@@ -243,3 +243,19 @@ def test_container_lease(storage, credential, group, account):
 
     storage.blob_containers.lease(group, account.name, "leased", {"action": "Release", "leaseId": acquired.lease_id})
     container.delete_container()
+
+
+def test_file_share_lease(storage, group, account):
+    storage.file_shares.create(group, account.name, "docs", {})
+    acquired = storage.file_shares.lease(group, account.name, "docs", parameters={"action": "Acquire", "leaseDuration": -1})
+    assert storage.file_shares.get(group, account.name, "docs").lease_state == "leased"
+    with pytest.raises(HttpResponseError) as refused:
+        storage.file_shares.delete(group, account.name, "docs")
+    assert refused.value.status_code == 412
+
+    storage.file_shares.lease(group, account.name, "docs", parameters={"action": "Release", "leaseId": acquired.lease_id})
+    storage.file_shares.delete(group, account.name, "docs")
+
+
+def test_revoke_user_delegation_keys(storage, group, account):
+    storage.storage_accounts.revoke_user_delegation_keys(group, account.name)
