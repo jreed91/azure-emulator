@@ -13,6 +13,7 @@ from azure.storage.blob import (
     BlobServiceClient,
     ContainerClient,
     ContainerSasPermissions,
+    ContentSettings,
     ResourceTypes,
     generate_account_sas,
     generate_blob_sas,
@@ -288,3 +289,73 @@ def test_object_replication(storage, credential, group):
     BlobServiceClient(source_url, credential=credential).get_container_client("outbox").upload_blob("a.txt", b"replicated")
     replica = BlobServiceClient(destination_url, credential=credential).get_blob_client("inbox", "a.txt")
     assert replica.download_blob().readall() == b"replicated"
+
+
+def test_block_uploads(account):
+    # Small limits make the SDK upload in blocks, as it does for large blobs.
+    service = BlobServiceClient(account.blob_url, credential=account.key, max_single_put_size=1024, max_block_size=1024)
+    container = service.create_container("blocks")
+    data = bytes(range(256)) * 20  # 5120 bytes: five blocks
+    blob = container.get_blob_client("big.bin")
+    blob.upload_blob(data, content_settings=ContentSettings(content_type="application/x-test"), metadata={"kind": "big"})
+    assert blob.download_blob().readall() == data
+    committed, uncommitted = blob.get_block_list("all")
+    assert [b.size for b in committed] == [1024] * 5
+    assert uncommitted == []
+    properties = blob.get_blob_properties()
+    assert properties.size == 5120
+    assert properties.content_settings.content_type == "application/x-test"
+    assert properties.metadata == {"kind": "big"}
+    # In parallel, as the SDK uploads large files.
+    parallel = container.get_blob_client("parallel.bin")
+    parallel.upload_blob(data * 4, max_concurrency=4)
+    assert parallel.download_blob().readall() == data * 4
+
+
+def test_staged_blocks(account):
+    from azure.storage.blob import BlobBlock, BlockState
+
+    container = BlobServiceClient(account.blob_url, credential=account.key).create_container("staged")
+    blob = container.get_blob_client("parts.txt")
+    for block_id, text in [("aaaa", b"one,"), ("bbbb", b"two,"), ("cccc", b"three")]:
+        blob.stage_block(block_id, text)
+    committed, uncommitted = blob.get_block_list("all")
+    assert committed == [] and sorted(b.id for b in uncommitted) == ["aaaa", "bbbb", "cccc"]
+    # Nothing is visible until the list is committed, and only what it names.
+    with pytest.raises(ResourceNotFoundError):
+        blob.download_blob()
+    blob.commit_block_list([BlobBlock("cccc"), BlobBlock("aaaa")])
+    assert blob.download_blob().readall() == b"threeone,"
+    assert blob.get_block_list("uncommitted")[1] == []
+
+    # Committed blocks can be reused, reordered and mixed with new ones.
+    blob.stage_block("dddd", b"!")
+    blob.commit_block_list(
+        [BlobBlock("aaaa", BlockState.COMMITTED), BlobBlock("dddd", BlockState.UNCOMMITTED), BlobBlock("cccc", BlockState.COMMITTED)]
+    )
+    assert blob.download_blob().readall() == b"one,!three"
+    with pytest.raises(HttpResponseError) as error:
+        blob.commit_block_list([BlobBlock("zzzz")])
+    assert error.value.error_code == "InvalidBlockList"
+    # Every block id of a blob has the same length.
+    with pytest.raises(HttpResponseError) as error:
+        blob.stage_block("longer-id", b"x")
+    assert error.value.error_code == "InvalidBlobOrBlock"
+
+
+def test_blob_metadata_and_headers(account):
+    container = BlobServiceClient(account.blob_url, credential=account.key).create_container("props")
+    blob = container.get_blob_client("page.html")
+    blob.upload_blob(b"<p>hi</p>", content_settings=ContentSettings(content_type="text/html", cache_control="max-age=60"))
+    etag = blob.get_blob_properties().etag
+    blob.set_blob_metadata({"owner": "tests", "stage": "draft"})
+    properties = blob.get_blob_properties()
+    assert properties.metadata == {"owner": "tests", "stage": "draft"}
+    assert properties.content_settings.cache_control == "max-age=60"
+    assert properties.etag != etag
+    blob.set_http_headers(ContentSettings(content_type="text/plain", content_language="en", content_disposition="inline"))
+    settings = blob.get_blob_properties().content_settings
+    assert (settings.content_type, settings.content_language, settings.content_disposition) == ("text/plain", "en", "inline")
+    # Headers not given are cleared, as in Azure.
+    assert settings.cache_control is None
+    assert blob.download_blob().readall() == b"<p>hi</p>"
