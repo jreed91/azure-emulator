@@ -281,6 +281,8 @@ pub(crate) fn replicate(state: &mut StorageState, account: &str, container: &str
         replica.last_modified = SystemTime::now();
         replica.replicated_by.clear();
         replica.replica_of = Some(policy_id.clone());
+        replica.lease = None;
+        replica.copy = None;
         if let Some(target) = state.accounts.get_mut(&destination).and_then(|d| d.containers.get_mut(&destination_container)) {
             target.blobs.insert(name.to_string(), replica);
         }

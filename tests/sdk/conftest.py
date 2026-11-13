@@ -209,9 +209,11 @@ def group(resources):
 
 
 class StorageAccount:
-    def __init__(self, name, blob_url, key):
+    def __init__(self, name, blob_url, key, queue_url=None, table_url=None):
         self.name = name
         self.blob_url = blob_url
+        self.queue_url = queue_url
+        self.table_url = table_url
         self.key = key
 
 
@@ -223,7 +225,7 @@ def account(storage, group):
         group, name, {"location": "eastus", "kind": "StorageV2", "sku": {"name": "Standard_LRS"}}
     ).result()
     key = storage.storage_accounts.list_keys(group, name)["keys"][0]["value"]
-    return StorageAccount(name, created.primary_endpoints.blob, key)
+    return StorageAccount(name, created.primary_endpoints.blob, key, created.primary_endpoints.queue, created.primary_endpoints.table)
 
 
 @pytest.fixture

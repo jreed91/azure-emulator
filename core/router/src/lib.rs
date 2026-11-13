@@ -77,6 +77,12 @@ async fn dispatch(State(emulator): State<Emulator>, request: Request<Body>) -> R
     if let Some(account) = host.strip_suffix(&config.blob_host_suffix()) {
         return service_storage::blob::handle(engine.clone(), account.to_string(), request).await;
     }
+    if let Some(account) = host.strip_suffix(&config.table_host_suffix()) {
+        return service_storage::table::handle(engine.clone(), account.to_string(), request).await;
+    }
+    if let Some(account) = host.strip_suffix(&config.queue_host_suffix()) {
+        return service_storage::queue::handle(engine.clone(), account.to_string(), request).await;
+    }
     if let Some(vault) = host.strip_suffix(&config.vault_host_suffix()) {
         return service_keyvault::secrets::handle(engine.clone(), vault.to_string(), request).await;
     }

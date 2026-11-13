@@ -12,14 +12,14 @@ use axum::response::Response;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use emulator_core::auth::{self, AuthFailure};
-use emulator_core::http_util::{parse_query, percent_decode, read_body, request_id};
+use emulator_core::http_util::{parse_query, percent_decode, read_body, request_host, request_id};
 use emulator_core::Engine;
 use http::{header, HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
 use md5::{Digest, Md5};
 
 use crate::sas::{self, Level, Needed, SasFailure};
 use crate::shared_key;
-use crate::state::{Blob, Container, Protection, StorageState};
+use crate::state::{lease_state, Blob, Container, CopyInfo, Lease, LeaseState, Protection, StorageState};
 
 /// Service version reported when the request names none.
 const DEFAULT_VERSION: &str = "2021-08-06";
@@ -110,7 +110,8 @@ pub async fn handle(engine: Arc<Engine>, account: String, request: Request<Body>
             );
             let mut headers = failure.headers;
             headers.push((name("x-ms-error-code"), failure.code.into()));
-            let mut response = xml(failure.status, if is_head { String::new() } else { body });
+            let empty = is_head || failure.status == StatusCode::NOT_MODIFIED;
+            let mut response = xml(failure.status, if empty { String::new() } else { body });
             for (key, value) in headers {
                 if let Ok(value) = HeaderValue::from_str(&value) {
                     response.headers_mut().insert(key, value);
@@ -154,10 +155,15 @@ enum Route {
     GetMetadata,
     SetMetadata,
     SetProperties,
+    LeaseBlob,
+    LeaseContainer,
+    Snapshot,
+    CopyBlob,
+    AbortCopy,
 }
 
 impl Route {
-    fn of(method: &str, container: &str, blob: &str, restype: Option<&str>, comp: Option<&str>) -> Option<Self> {
+    fn of(method: &str, container: &str, blob: &str, restype: Option<&str>, comp: Option<&str>, copy_source: bool) -> Option<Self> {
         if container.is_empty() {
             return matches!((method, comp), ("GET", Some("list"))).then_some(Self::ListContainers);
         }
@@ -170,10 +176,12 @@ impl Route {
                 ("GET" | "HEAD", None) => Some(Self::ContainerProperties),
                 ("DELETE", None) => Some(Self::DeleteContainer),
                 ("GET", Some("list")) => Some(Self::ListBlobs),
+                ("PUT", Some("lease")) => Some(Self::LeaseContainer),
                 _ => None,
             };
         }
         match (method, comp) {
+            ("PUT", None) if copy_source => Some(Self::CopyBlob),
             ("PUT", None) => Some(Self::PutBlob),
             ("GET", None) => Some(Self::GetBlob),
             ("HEAD", None) => Some(Self::HeadBlob),
@@ -184,6 +192,9 @@ impl Route {
             ("GET" | "HEAD", Some("metadata")) => Some(Self::GetMetadata),
             ("PUT", Some("metadata")) => Some(Self::SetMetadata),
             ("PUT", Some("properties")) => Some(Self::SetProperties),
+            ("PUT", Some("lease")) => Some(Self::LeaseBlob),
+            ("PUT", Some("snapshot")) => Some(Self::Snapshot),
+            ("PUT", Some("copy")) => Some(Self::AbortCopy),
             _ => None,
         }
     }
@@ -200,6 +211,10 @@ impl Route {
             Self::SetMetadata | Self::SetProperties => (Level::Object, "w", false),
             Self::GetBlob | Self::HeadBlob | Self::GetBlockList | Self::GetMetadata => (Level::Object, "r", false),
             Self::DeleteBlob => (Level::Object, "d", false),
+            Self::LeaseBlob => (Level::Object, "wd", false),
+            Self::LeaseContainer => (Level::Container, "wd", false),
+            Self::Snapshot | Self::CopyBlob => (Level::Object, "cw", false),
+            Self::AbortCopy => (Level::Object, "w", false),
         };
         Needed {
             level,
@@ -344,15 +359,23 @@ fn check_roles(engine: &Engine, account: &str, oid: &str, container: &str, blob:
     };
     let needed: Vec<Permission<'_>> = match route {
         Route::ListContainers | Route::ContainerProperties => vec![Permission::Action(&read)],
-        Route::CreateContainer => vec![Permission::Action(&write)],
+        Route::CreateContainer | Route::LeaseContainer => vec![Permission::Action(&write)],
         Route::DeleteContainer => vec![Permission::Action(&delete)],
         Route::ListBlobs | Route::GetBlob | Route::HeadBlob | Route::GetBlockList | Route::GetMetadata => {
             vec![Permission::Data(&blob_read)]
         }
-        Route::PutBlob | Route::PutBlock | Route::PutBlockList if is_new() => {
+        Route::PutBlob | Route::PutBlock | Route::PutBlockList | Route::CopyBlob if is_new() => {
             vec![Permission::Data(&blob_write), Permission::Data(&blob_add)]
         }
-        Route::PutBlob | Route::PutBlock | Route::PutBlockList | Route::SetMetadata | Route::SetProperties => {
+        Route::PutBlob
+        | Route::PutBlock
+        | Route::PutBlockList
+        | Route::SetMetadata
+        | Route::SetProperties
+        | Route::CopyBlob
+        | Route::AbortCopy
+        | Route::LeaseBlob
+        | Route::Snapshot => {
             vec![Permission::Data(&blob_write)]
         }
         Route::DeleteBlob => vec![Permission::Data(&blob_delete)],
@@ -407,7 +430,8 @@ async fn serve(
         Some((container, blob)) => (percent_decode(container, false), percent_decode(blob, false)),
         None => (percent_decode(path, false), String::new()),
     };
-    let route = Route::of(parts.method.as_str(), &container, &blob, param("restype"), param("comp"));
+    let copy_source = parts.headers.contains_key("x-ms-copy-source");
+    let route = Route::of(parts.method.as_str(), &container, &blob, param("restype"), param("comp"), copy_source);
     authorize(engine, account, parts, &query, &container, &blob, route)?;
     let route = route.ok_or_else(not_implemented)?;
 
@@ -444,6 +468,15 @@ async fn serve(
         Route::GetMetadata => request.get_metadata(&container, &blob),
         Route::SetMetadata => request.set_metadata(&container, &blob),
         Route::SetProperties => request.set_properties(&container, &blob),
+        Route::LeaseBlob => request.lease_blob(&container, &blob),
+        Route::LeaseContainer => request.lease_container(&container),
+        Route::Snapshot => request.snapshot_blob(&container, &blob),
+        Route::CopyBlob => request.copy_blob(&container, &blob),
+        Route::AbortCopy => Err(error(
+            StatusCode::CONFLICT,
+            "NoPendingCopyOperation",
+            "There is currently no pending copy operation.",
+        )),
     }
 }
 
@@ -502,19 +535,49 @@ pub(crate) fn is_valid_container_name(name: &str) -> bool {
         && !name.contains("--")
 }
 
-fn lease_headers(headers: &mut Headers) {
-    headers.push((name("x-ms-lease-status"), "unlocked".into()));
-    headers.push((name("x-ms-lease-state"), "available".into()));
+/// `x-ms-lease-status`, `x-ms-lease-state` and, while leased, `x-ms-lease-duration`.
+fn lease_headers(headers: &mut Headers, lease: Option<&Lease>) {
+    let (status, state, duration) = lease_properties(lease);
+    headers.push((name("x-ms-lease-status"), status.into()));
+    headers.push((name("x-ms-lease-state"), state));
+    if let Some(duration) = duration {
+        headers.push((name("x-ms-lease-duration"), duration.into()));
+    }
+}
+
+/// A lease's status, state and, while leased, duration, as Azure spells them.
+fn lease_properties(lease: Option<&Lease>) -> (&'static str, String, Option<&'static str>) {
+    let state = lease_state(lease, SystemTime::now());
+    let status = if state.blocks() { "locked" } else { "unlocked" };
+    let duration = state.blocks().then(|| if lease.is_some_and(|l| l.duration.is_none()) { "infinite" } else { "fixed" });
+    (status, state.as_str().to_ascii_lowercase(), duration)
 }
 
 fn container_lease_headers(headers: &mut Headers, container: &Container) {
-    let state = container.lease_state(SystemTime::now());
-    let status = if state.blocks() { "locked" } else { "unlocked" };
-    headers.push((name("x-ms-lease-status"), status.into()));
-    headers.push((name("x-ms-lease-state"), state.as_str().to_ascii_lowercase()));
-    if state.blocks() {
-        let infinite = container.lease.as_ref().is_some_and(|l| l.duration.is_none());
-        headers.push((name("x-ms-lease-duration"), if infinite { "infinite" } else { "fixed" }.into()));
+    lease_headers(headers, container.lease.as_ref());
+}
+
+/// An entity tag without quotes or a weak prefix, for comparison.
+fn bare_etag(tag: &str) -> &str {
+    tag.trim().trim_start_matches("W/").trim_matches('"')
+}
+
+fn unix_seconds(time: SystemTime) -> u64 {
+    time.duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// A snapshot time, `2024-01-02T03:04:05.1234567Z`, later than any in `taken`.
+fn snapshot_time(taken: Option<&std::collections::BTreeMap<String, Blob>>) -> String {
+    let mut time = chrono::Utc::now();
+    loop {
+        // Seven digits of fraction, as Azure gives: chrono formats three, six or nine.
+        let nanos = time.format("%Y-%m-%dT%H:%M:%S%.9f").to_string();
+        let stamp = format!("{}Z", &nanos[..nanos.len() - 2]);
+        let last = taken.and_then(|t| t.keys().next_back());
+        if last.is_none_or(|last| *last < stamp) {
+            return stamp;
+        }
+        time += chrono::Duration::nanoseconds(100);
     }
 }
 
@@ -744,6 +807,7 @@ impl BlobRequest<'_> {
                 "The specified blob already exists.",
             ));
         }
+        self.preconditions(existing, true)?;
         let now = SystemTime::now();
         let stored = Blob {
             data,
@@ -761,6 +825,8 @@ impl BlobRequest<'_> {
             blocks: Vec::new(),
             replicated_by: Vec::new(),
             replica_of: None,
+            lease: existing.and_then(|b| b.lease.clone()),
+            copy: None,
         };
         // Put Blob discards any blocks staged for the blob.
         found.uncommitted.remove(blob);
@@ -793,6 +859,7 @@ impl BlobRequest<'_> {
         let mut state = handle.lock();
         let account = state.accounts.get_mut(self.account).expect("account checked");
         let found = account.containers.get_mut(container).ok_or_else(container_not_found)?;
+        self.check_lease(found.blobs.get(blob), true)?;
         // Every block of a blob has an id of the same length.
         let decoded_len = |id: &str| STANDARD.decode(id).map(|d| d.len()).unwrap_or(0);
         let length = decoded_len(&id);
@@ -856,6 +923,7 @@ impl BlobRequest<'_> {
         if existing.is_some() && self.header("if-none-match") == Some("*") {
             return Err(error(StatusCode::CONFLICT, "BlobAlreadyExists", "The specified blob already exists."));
         }
+        self.preconditions(existing, true)?;
         // The committed blocks, as slices of the current content.
         let mut committed: Vec<(String, Bytes)> = Vec::new();
         if let Some(current) = existing {
@@ -893,6 +961,8 @@ impl BlobRequest<'_> {
             blocks,
             replicated_by: Vec::new(),
             replica_of: None,
+            lease: existing.and_then(|b| b.lease.clone()),
+            copy: None,
         };
         found.uncommitted.remove(blob);
         found.blobs.insert(blob.to_string(), stored);
@@ -984,6 +1054,7 @@ impl BlobRequest<'_> {
         if let Some(protection) = found.protection(existing, SystemTime::now()) {
             return Err(immutable(protection));
         }
+        self.preconditions(Some(existing), true)?;
         let target = found.blobs.get_mut(blob).expect("checked above");
         change(target);
         let now = SystemTime::now();
@@ -1016,17 +1087,19 @@ impl BlobRequest<'_> {
         })
     }
 
+    /// The blob, or the snapshot of it `?snapshot=` names, checked against
+    /// the request's lease and conditional headers as a read.
     fn find_blob(&self, container: &str, blob: &str) -> Result<Blob, BlobError> {
         let handle = self.engine.state::<StorageState>();
         let state = handle.lock();
-        state.accounts[self.account]
-            .containers
-            .get(container)
-            .ok_or_else(container_not_found)?
-            .blobs
-            .get(blob)
-            .cloned()
-            .ok_or_else(blob_not_found)
+        let found = state.accounts[self.account].containers.get(container).ok_or_else(container_not_found)?;
+        let target = match self.query.get("snapshot") {
+            Some(stamp) => found.snapshots.get(blob).and_then(|s| s.get(stamp)),
+            None => found.blobs.get(blob),
+        }
+        .ok_or_else(blob_not_found)?;
+        self.preconditions(Some(target), false)?;
+        Ok(target.clone())
     }
 
     fn get_blob(&self, container: &str, blob: &str, with_body: bool) -> Result<Response, BlobError> {
@@ -1062,7 +1135,14 @@ impl BlobRequest<'_> {
         if let Some(policy) = &found.replica_of {
             headers.push((name("x-ms-or-policy-id"), policy.clone()));
         }
-        lease_headers(&mut headers);
+        lease_headers(&mut headers, found.lease.as_ref());
+        if let Some(copy) = &found.copy {
+            headers.push((name("x-ms-copy-id"), copy.id.clone()));
+            headers.push((name("x-ms-copy-source"), copy.source.clone()));
+            headers.push((name("x-ms-copy-status"), "success".into()));
+            headers.push((name("x-ms-copy-progress"), format!("{0}/{0}", copy.length)));
+            headers.push((name("x-ms-copy-completion-time"), http_date(copy.completed)));
+        }
         for (key, value) in &found.content_headers {
             headers.push((name(key), value.clone()));
         }
@@ -1098,9 +1178,43 @@ impl BlobRequest<'_> {
         let mut state = handle.lock();
         let account = state.accounts.get_mut(self.account).expect("account checked");
         let found = account.containers.get_mut(container).ok_or_else(container_not_found)?;
+        if let Some(stamp) = self.query.get("snapshot") {
+            let snapshots = found.snapshots.get_mut(blob).ok_or_else(blob_not_found)?;
+            snapshots.remove(stamp).ok_or_else(blob_not_found)?;
+            if snapshots.is_empty() {
+                found.snapshots.remove(blob);
+            }
+            return Ok(respond(StatusCode::ACCEPTED, Vec::new(), Body::empty()));
+        }
         let existing = found.blobs.get(blob).ok_or_else(blob_not_found)?;
         if let Some(protection) = found.protection(existing, SystemTime::now()) {
             return Err(immutable(protection));
+        }
+        self.preconditions(Some(existing), true)?;
+        let has_snapshots = found.snapshots.get(blob).is_some_and(|s| !s.is_empty());
+        match self.header("x-ms-delete-snapshots") {
+            Some("only") => {
+                found.snapshots.remove(blob);
+                return Ok(respond(StatusCode::ACCEPTED, Vec::new(), Body::empty()));
+            }
+            Some("include") => {
+                found.snapshots.remove(blob);
+            }
+            None if has_snapshots => {
+                return Err(error(
+                    StatusCode::CONFLICT,
+                    "SnapshotsPresent",
+                    "This operation is not permitted because the blob has snapshots.",
+                ))
+            }
+            None => {}
+            Some(_) => {
+                return Err(error(
+                    StatusCode::BAD_REQUEST,
+                    "InvalidHeaderValue",
+                    "The value for one of the HTTP headers is not in the correct format.",
+                ))
+            }
         }
         found.blobs.remove(blob);
         Ok(respond(
@@ -1115,7 +1229,8 @@ impl BlobRequest<'_> {
         let prefix = param("prefix").unwrap_or("");
         let delimiter = param("delimiter");
         let marker = param("marker");
-        let with_metadata = param("include").is_some_and(|i| i.split(',').any(|p| p == "metadata"));
+        let included = |what: &str| param("include").is_some_and(|i| i.split(',').any(|p| p == what));
+        let (with_metadata, with_snapshots) = (included("metadata"), included("snapshots"));
         let max_results = match param("maxresults").map(str::parse::<usize>) {
             None => 5000,
             Some(Ok(n)) if (1..=5000).contains(&n) => n,
@@ -1172,14 +1287,15 @@ impl BlobRequest<'_> {
             out.push_str(&format!("<MaxResults>{requested}</MaxResults>"));
         }
         out.push_str("<Blobs>");
-        for (entry, blob) in page {
-            let Some(blob) = blob else {
-                out.push_str(&format!("<BlobPrefix><Name>{}</Name></BlobPrefix>", xml_escape(entry)));
-                continue;
-            };
+        let write_blob = |out: &mut String, entry: &str, blob: &Blob, snapshot: Option<&str>| {
+            let (status, state, duration) = lease_properties(blob.lease.as_ref());
+            let duration = duration.map(|d| format!("<LeaseDuration>{d}</LeaseDuration>")).unwrap_or_default();
+            out.push_str(&format!("<Blob><Name>{}</Name>", xml_escape(entry)));
+            if let Some(snapshot) = snapshot {
+                out.push_str(&format!("<Snapshot>{snapshot}</Snapshot>"));
+            }
             out.push_str(&format!(
-                "<Blob><Name>{}</Name><Properties><Creation-Time>{}</Creation-Time><Last-Modified>{}</Last-Modified><Etag>{}</Etag><Content-Length>{}</Content-Length><Content-Type>{}</Content-Type><Content-MD5>{}</Content-MD5><BlobType>BlockBlob</BlobType><LeaseStatus>unlocked</LeaseStatus><LeaseState>available</LeaseState><ServerEncrypted>true</ServerEncrypted></Properties>",
-                xml_escape(entry),
+                "<Properties><Creation-Time>{}</Creation-Time><Last-Modified>{}</Last-Modified><Etag>{}</Etag><Content-Length>{}</Content-Length><Content-Type>{}</Content-Type><Content-MD5>{}</Content-MD5><BlobType>BlockBlob</BlobType><LeaseStatus>{status}</LeaseStatus><LeaseState>{state}</LeaseState>{duration}<ServerEncrypted>true</ServerEncrypted></Properties>",
                 http_date(blob.created),
                 http_date(blob.last_modified),
                 xml_escape(blob.etag.trim_matches('"')),
@@ -1195,6 +1311,19 @@ impl BlobRequest<'_> {
                 out.push_str("</Metadata>");
             }
             out.push_str("</Blob>");
+        };
+        for (entry, blob) in page {
+            let Some(blob) = blob else {
+                out.push_str(&format!("<BlobPrefix><Name>{}</Name></BlobPrefix>", xml_escape(entry)));
+                continue;
+            };
+            // Snapshots come before the blob they were taken of, oldest first.
+            if with_snapshots {
+                for (stamp, snapshot) in found.snapshots.get(entry).into_iter().flatten() {
+                    write_blob(&mut out, entry, snapshot, Some(stamp));
+                }
+            }
+            write_blob(&mut out, entry, blob, None);
         }
         out.push_str("</Blobs>");
         match next_marker {
@@ -1203,5 +1332,431 @@ impl BlobRequest<'_> {
         }
         out.push_str("</EnumerationResults>");
         Ok(xml(StatusCode::OK, out))
+    }
+}
+
+/// Leases, snapshots, copies, and the lease and conditional headers every
+/// operation on a blob honours.
+impl BlobRequest<'_> {
+    /// The lease and conditional headers, checked against `blob` (`None`:
+    /// it does not exist). `write` is whether the request changes it.
+    fn preconditions(&self, blob: Option<&Blob>, write: bool) -> Result<(), BlobError> {
+        self.check_lease(blob, write)?;
+        self.check_conditions(blob.map(|b| (b.etag.as_str(), b.last_modified)), write, "")
+    }
+
+    /// An active lease lets a write through only with its id; any request
+    /// that names a lease must name the active one.
+    fn check_lease(&self, blob: Option<&Blob>, write: bool) -> Result<(), BlobError> {
+        let now = SystemTime::now();
+        let active = blob.and_then(|b| b.lease.as_ref()).filter(|l| lease_state(Some(l), now).blocks());
+        let failed = |code, message| Err(error(StatusCode::PRECONDITION_FAILED, code, message));
+        match (self.header("x-ms-lease-id"), active) {
+            (None, Some(_)) if write => failed(
+                "LeaseIdMissing",
+                "There is currently a lease on the blob and no lease ID was specified in the request.",
+            ),
+            (None, _) => Ok(()),
+            (Some(_), None) => failed("LeaseNotPresentWithBlobOperation", "There is currently no lease on the blob."),
+            (Some(sent), Some(lease)) if !sent.eq_ignore_ascii_case(&lease.id) => failed(
+                "LeaseIdMismatchWithBlobOperation",
+                "The lease ID specified did not match the lease ID for the blob.",
+            ),
+            _ => Ok(()),
+        }
+    }
+
+    /// `If-Match`, `If-None-Match`, `If-Modified-Since` and
+    /// `If-Unmodified-Since`, or with `prefix` `x-ms-source-` the same for a
+    /// copy's source. A read that fails `If-None-Match` or
+    /// `If-Modified-Since` is answered 304; everything else that fails, 412.
+    fn check_conditions(&self, target: Option<(&str, SystemTime)>, write: bool, prefix: &str) -> Result<(), BlobError> {
+        let get = |key: &str| self.header(&format!("{prefix}{key}"));
+        let failed = || match prefix {
+            "" => error(
+                StatusCode::PRECONDITION_FAILED,
+                "ConditionNotMet",
+                "The condition specified using HTTP conditional header(s) is not met.",
+            ),
+            _ => error(
+                StatusCode::PRECONDITION_FAILED,
+                "SourceConditionNotMet",
+                "The source condition specified using HTTP conditional header(s) is not met.",
+            ),
+        };
+        let unchanged = || match write || !prefix.is_empty() {
+            true => failed(),
+            false => error(StatusCode::NOT_MODIFIED, "ConditionNotMet", "The condition specified using HTTP conditional header(s) is not met."),
+        };
+        let listed = |list: &str, etag: &str| list.split(',').any(|tag| tag.trim() == "*" || bare_etag(tag) == bare_etag(etag));
+        if let Some(list) = get("if-match") {
+            if !target.is_some_and(|(etag, _)| listed(list, etag)) {
+                return Err(failed());
+            }
+        }
+        if let (Some(list), Some((etag, _))) = (get("if-none-match"), target) {
+            if listed(list, etag) {
+                return Err(unchanged());
+            }
+        }
+        let date = |key: &str| get(key).and_then(|v| httpdate::parse_http_date(v).ok()).map(unix_seconds);
+        if let (Some(since), Some((_, modified))) = (date("if-modified-since"), target) {
+            if unix_seconds(modified) <= since {
+                return Err(unchanged());
+            }
+        }
+        if let (Some(since), Some((_, modified))) = (date("if-unmodified-since"), target) {
+            if unix_seconds(modified) > since {
+                return Err(failed());
+            }
+        }
+        Ok(())
+    }
+
+    /// Lease Blob and Lease Container: acquire, renew, change, release and
+    /// break, on whichever lease `lease` is.
+    fn lease_action(&self, lease: &mut Option<Lease>, what: &str) -> Result<(StatusCode, Headers), BlobError> {
+        let now = SystemTime::now();
+        let state = lease_state(lease.as_ref(), now);
+        let conflict = |code: &'static str, message: &'static str| Err(error(StatusCode::CONFLICT, code, message));
+        let invalid = || {
+            error(
+                StatusCode::BAD_REQUEST,
+                "InvalidHeaderValue",
+                "The value for one of the HTTP headers is not in the correct format.",
+            )
+        };
+        let required = |key: &str| {
+            self.header(key).ok_or_else(|| {
+                error(
+                    StatusCode::BAD_REQUEST,
+                    "MissingRequiredHeader",
+                    "An HTTP header that's mandatory for this request is not specified.",
+                )
+            })
+        };
+        let not_present = if what == "blob" { "There is currently no lease on the blob." } else { "There is currently no lease on the container." };
+        let current = lease.as_ref().map(|l| l.id.clone());
+        let is_current = |id: &str| current.as_deref().is_some_and(|c| c.eq_ignore_ascii_case(id));
+        let lease_id = |id: String| vec![(name("x-ms-lease-id"), id)];
+        match required("x-ms-lease-action")?.to_ascii_lowercase().as_str() {
+            "acquire" => {
+                let duration = match self.header("x-ms-lease-duration").map(str::parse::<i64>) {
+                    Some(Ok(-1)) => None,
+                    Some(Ok(seconds)) if (15..=60).contains(&seconds) => Some(seconds as u64),
+                    _ => return Err(invalid()),
+                };
+                let proposed = self.header("x-ms-proposed-lease-id");
+                if proposed.is_some_and(|id| uuid::Uuid::parse_str(id).is_err()) {
+                    return Err(invalid());
+                }
+                match state {
+                    LeaseState::Breaking => {
+                        return conflict("LeaseIsBreakingAndCannotBeAcquired", "There is already a lease present.")
+                    }
+                    LeaseState::Leased if !proposed.is_some_and(is_current) => {
+                        return conflict("LeaseAlreadyPresent", "There is already a lease present.")
+                    }
+                    _ => {}
+                }
+                let id = proposed.map(str::to_string).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                *lease = Some(Lease { id: id.clone(), duration, acquired: now, broken_at: None });
+                Ok((StatusCode::CREATED, lease_id(id)))
+            }
+            "renew" => {
+                let id = required("x-ms-lease-id")?;
+                match (state, lease.as_mut()) {
+                    (_, None) => conflict("LeaseNotPresentWithLeaseOperation", not_present),
+                    _ if !is_current(id) => conflict(
+                        "LeaseIdMismatchWithLeaseOperation",
+                        "The lease ID specified did not match the lease ID for the lease.",
+                    ),
+                    (LeaseState::Breaking | LeaseState::Broken, _) => conflict(
+                        "LeaseIsBrokenAndCannotBeRenewed",
+                        "The lease ID matched, but the lease has been broken explicitly and cannot be renewed.",
+                    ),
+                    (_, Some(held)) => {
+                        held.acquired = now;
+                        Ok((StatusCode::OK, lease_id(held.id.clone())))
+                    }
+                }
+            }
+            "change" => {
+                let id = required("x-ms-lease-id")?;
+                let proposed = required("x-ms-proposed-lease-id")?;
+                if uuid::Uuid::parse_str(proposed).is_err() {
+                    return Err(invalid());
+                }
+                match (state, lease.as_mut()) {
+                    (LeaseState::Leased, Some(held)) if is_current(id) || is_current(proposed) => {
+                        held.id = proposed.to_string();
+                        Ok((StatusCode::OK, lease_id(proposed.to_string())))
+                    }
+                    (LeaseState::Leased, _) => conflict(
+                        "LeaseIdMismatchWithLeaseOperation",
+                        "The lease ID specified did not match the lease ID for the lease.",
+                    ),
+                    (LeaseState::Breaking, _) => conflict("LeaseIsBreakingAndCannotBeChanged", "The lease is breaking and cannot be changed."),
+                    (LeaseState::Broken, _) => conflict("LeaseIsBrokenAndCannotBeRenewed", "The lease has been broken and cannot be changed."),
+                    _ => conflict("LeaseNotPresentWithLeaseOperation", not_present),
+                }
+            }
+            "release" => {
+                let id = required("x-ms-lease-id")?;
+                if lease.is_none() {
+                    return conflict("LeaseNotPresentWithLeaseOperation", not_present);
+                }
+                if !is_current(id) {
+                    return conflict(
+                        "LeaseIdMismatchWithLeaseOperation",
+                        "The lease ID specified did not match the lease ID for the lease.",
+                    );
+                }
+                *lease = None;
+                Ok((StatusCode::OK, Vec::new()))
+            }
+            "break" => {
+                let period = match self.header("x-ms-lease-break-period").map(str::parse::<u64>) {
+                    None => None,
+                    Some(Ok(seconds)) if seconds <= 60 => Some(seconds),
+                    Some(_) => return Err(invalid()),
+                };
+                let Some(held) = lease.as_mut() else {
+                    return conflict("LeaseNotPresentWithLeaseOperation", not_present);
+                };
+                let broken_at = match state {
+                    LeaseState::Leased => {
+                        let remaining = held.duration.map(|d| (held.acquired + std::time::Duration::from_secs(d)).duration_since(now).unwrap_or_default().as_secs());
+                        let wait = match (period, remaining) {
+                            (Some(p), Some(r)) => p.min(r),
+                            (Some(p), None) => p,
+                            (None, Some(r)) => r,
+                            (None, None) => 0,
+                        };
+                        now + std::time::Duration::from_secs(wait)
+                    }
+                    LeaseState::Breaking => {
+                        let at = held.broken_at.unwrap_or(now);
+                        period.map(|p| at.min(now + std::time::Duration::from_secs(p))).unwrap_or(at)
+                    }
+                    _ => held.broken_at.unwrap_or(now),
+                };
+                held.broken_at = Some(broken_at);
+                let left = broken_at.duration_since(now).map(|d| d.as_secs()).unwrap_or(0);
+                Ok((StatusCode::ACCEPTED, vec![(name("x-ms-lease-time"), left.to_string())]))
+            }
+            _ => Err(invalid()),
+        }
+    }
+
+    fn lease_blob(&self, container: &str, blob: &str) -> Result<Response, BlobError> {
+        if self.query.contains_key("snapshot") {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "InvalidQueryParameterValue",
+                "Value for one of the query parameters specified in the request URI is invalid.",
+            ));
+        }
+        let handle = self.engine.state::<StorageState>();
+        let mut state = handle.lock();
+        let account = state.accounts.get_mut(self.account).expect("account checked");
+        let found = account.containers.get_mut(container).ok_or_else(container_not_found)?;
+        let target = found.blobs.get_mut(blob).ok_or_else(blob_not_found)?;
+        self.check_conditions(Some((&target.etag, target.last_modified)), true, "")?;
+        let (status, mut headers) = self.lease_action(&mut target.lease, "blob")?;
+        headers.push((header::ETAG, target.etag.clone()));
+        headers.push((header::LAST_MODIFIED, http_date(target.last_modified)));
+        Ok(respond(status, headers, Body::empty()))
+    }
+
+    fn lease_container(&self, container: &str) -> Result<Response, BlobError> {
+        let handle = self.engine.state::<StorageState>();
+        let mut state = handle.lock();
+        let account = state.accounts.get_mut(self.account).expect("account checked");
+        let found = account.containers.get_mut(container).ok_or_else(container_not_found)?;
+        self.check_conditions(Some((&found.etag, found.last_modified)), true, "")?;
+        let (status, mut headers) = self.lease_action(&mut found.lease, "container")?;
+        headers.push((header::ETAG, found.etag.clone()));
+        headers.push((header::LAST_MODIFIED, http_date(found.last_modified)));
+        Ok(respond(status, headers, Body::empty()))
+    }
+
+    /// Snapshot Blob: a read-only copy of the blob as it is now, with new
+    /// metadata if the request gives any.
+    fn snapshot_blob(&self, container: &str, blob: &str) -> Result<Response, BlobError> {
+        let handle = self.engine.state::<StorageState>();
+        let mut state = handle.lock();
+        let account = state.accounts.get_mut(self.account).expect("account checked");
+        let found = account.containers.get_mut(container).ok_or_else(container_not_found)?;
+        let base = found.blobs.get(blob).ok_or_else(blob_not_found)?;
+        self.check_lease(Some(base), false)?;
+        self.check_conditions(Some((&base.etag, base.last_modified)), true, "")?;
+        let mut snapshot = base.clone();
+        snapshot.lease = None;
+        let metadata = self.metadata();
+        if !metadata.is_empty() {
+            snapshot.metadata = metadata;
+        }
+        let stamp = snapshot_time(found.snapshots.get(blob));
+        let headers = vec![
+            (name("x-ms-snapshot"), stamp.clone()),
+            (header::ETAG, snapshot.etag.clone()),
+            (header::LAST_MODIFIED, http_date(snapshot.last_modified)),
+            (name("x-ms-request-server-encrypted"), "false".into()),
+        ];
+        found.snapshots.entry(blob.to_string()).or_default().insert(stamp, snapshot);
+        Ok(respond(StatusCode::CREATED, headers, Body::empty()))
+    }
+
+    /// Copy Blob, Copy Blob From URL and Put Blob From URL from a blob (or
+    /// snapshot) this emulator holds. Every copy completes before the
+    /// response, so a copy is never pending.
+    fn copy_blob(&self, container: &str, blob: &str) -> Result<Response, BlobError> {
+        let put_from_url = self.header("x-ms-blob-type").is_some();
+        if put_from_url && self.header("x-ms-blob-type") != Some("BlockBlob") {
+            return Err(not_implemented());
+        }
+        let source_url = self.header("x-ms-copy-source").unwrap_or_default().to_string();
+        let cannot_verify = |status, message: &'static str| error(status, "CannotVerifyCopySource", message);
+        let uri: http::Uri = source_url
+            .parse()
+            .map_err(|_| cannot_verify(StatusCode::BAD_REQUEST, "The copy source is not a valid URL."))?;
+        let host = request_host(&HeaderMap::new(), &uri);
+        let config = self.engine.config();
+        let source_account = host
+            .strip_suffix(&config.blob_host_suffix())
+            .or_else(|| host.strip_suffix(".blob.core.windows.net"))
+            .ok_or_else(|| cannot_verify(StatusCode::BAD_REQUEST, "The emulator copies only from blobs it holds."))?
+            .to_string();
+        let path = uri.path().trim_start_matches('/');
+        let (source_container, source_blob) = path
+            .split_once('/')
+            .map(|(c, b)| (percent_decode(c, false), percent_decode(b, false)))
+            .ok_or_else(|| cannot_verify(StatusCode::BAD_REQUEST, "The copy source is not a blob."))?;
+        let source_query: std::collections::BTreeMap<String, String> =
+            parse_query(uri.query()).into_iter().map(|(k, v)| (k.to_ascii_lowercase(), v)).collect();
+
+        let handle = self.engine.state::<StorageState>();
+        let mut state = handle.lock();
+        let source = {
+            let missing = || cannot_verify(StatusCode::NOT_FOUND, "The specified blob does not exist.");
+            let account = state.accounts.get(&source_account).ok_or_else(missing)?;
+            let holder = account.containers.get(&source_container).ok_or_else(missing)?;
+            let source = match source_query.get("snapshot") {
+                Some(stamp) => holder.snapshots.get(&source_blob).and_then(|s| s.get(stamp)),
+                None => holder.blobs.get(&source_blob),
+            }
+            .ok_or_else(missing)?;
+            // Another account's blob must be public or come with a SAS.
+            if source_account != self.account && holder.public_access == "None" {
+                let allowed = source_query.contains_key("sig")
+                    && sas::authorize(&source_query, &source_account, &account.keys, &source_container, &source_blob, Route::GetBlob.needed()).is_ok();
+                if !allowed {
+                    return Err(cannot_verify(StatusCode::FORBIDDEN, "Server failed to authenticate the request."));
+                }
+            }
+            self.check_conditions(Some((&source.etag, source.last_modified)), true, "x-ms-source-")?;
+            source.clone()
+        };
+
+        let etag = state.next_etag();
+        let account = state.accounts.get_mut(self.account).expect("account checked");
+        let found = account.containers.get_mut(container).ok_or_else(container_not_found)?;
+        let existing = found.blobs.get(blob);
+        if let Some(protection) = existing.and_then(|b| found.protection(b, SystemTime::now())) {
+            return Err(immutable(protection));
+        }
+        if existing.is_some() && self.header("if-none-match") == Some("*") {
+            return Err(error(StatusCode::CONFLICT, "BlobAlreadyExists", "The specified blob already exists."));
+        }
+        self.preconditions(existing, true)?;
+        let now = SystemTime::now();
+        let metadata = self.metadata();
+        // Put Blob From URL takes its properties from the request unless told
+        // to copy the source's; Copy Blob takes the source's.
+        let copy_properties = !put_from_url || self.header("x-ms-copy-source-blob-properties") != Some("false");
+        let content_headers = self.content_headers();
+        let copy_id = uuid::Uuid::new_v4().to_string();
+        let stored = Blob {
+            data: source.data.clone(),
+            content_type: match self.header("x-ms-blob-content-type") {
+                Some(sent) if put_from_url => sent.to_string(),
+                _ if copy_properties => source.content_type.clone(),
+                _ => "application/octet-stream".into(),
+            },
+            content_md5: source.content_md5.clone(),
+            etag: etag.clone(),
+            created: existing.map(|b| b.created).unwrap_or(now),
+            last_modified: now,
+            metadata: if metadata.is_empty() && !put_from_url { source.metadata.clone() } else { metadata },
+            content_headers: if (put_from_url && !content_headers.is_empty()) || !copy_properties {
+                content_headers
+            } else {
+                source.content_headers.clone()
+            },
+            blocks: source.blocks.clone(),
+            replicated_by: Vec::new(),
+            replica_of: None,
+            lease: existing.and_then(|b| b.lease.clone()),
+            copy: (!put_from_url).then(|| CopyInfo {
+                id: copy_id.clone(),
+                source: source_url.clone(),
+                length: source.data.len(),
+                completed: now,
+            }),
+        };
+        found.uncommitted.remove(blob);
+        found.blobs.insert(blob.to_string(), stored);
+        crate::replication::replicate(&mut state, self.account, container, blob);
+        let mut headers = vec![(header::ETAG, etag), (header::LAST_MODIFIED, http_date(now))];
+        if put_from_url {
+            if !source.content_md5.is_empty() {
+                headers.push((name("content-md5"), source.content_md5.clone()));
+            }
+            headers.push((name("x-ms-request-server-encrypted"), "true".into()));
+            return Ok(respond(StatusCode::CREATED, headers, Body::empty()));
+        }
+        headers.push((name("x-ms-copy-id"), copy_id));
+        headers.push((name("x-ms-copy-status"), "success".into()));
+        Ok(respond(StatusCode::ACCEPTED, headers, Body::empty()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_times_have_seven_digits_and_increase() {
+        let first = snapshot_time(None);
+        assert_eq!(first.len(), "2024-01-02T03:04:05.1234567Z".len());
+        assert!(first.ends_with('Z'));
+        let now = SystemTime::now();
+        let blob = Blob {
+            data: Bytes::new(),
+            content_type: String::new(),
+            content_md5: String::new(),
+            etag: String::new(),
+            created: now,
+            last_modified: now,
+            metadata: Vec::new(),
+            content_headers: Vec::new(),
+            blocks: Vec::new(),
+            replicated_by: Vec::new(),
+            replica_of: None,
+            lease: None,
+            copy: None,
+        };
+        // A snapshot taken in the same instant as the last one still sorts after it.
+        let latest = snapshot_time(None);
+        let mut taken = std::collections::BTreeMap::new();
+        taken.insert(latest.clone(), blob);
+        assert!(snapshot_time(Some(&taken)) > latest);
+    }
+
+    #[test]
+    fn etags_compare_without_quotes() {
+        assert_eq!(bare_etag("W/\"0x1\""), "0x1");
+        assert_eq!(bare_etag(" \"0x1\" "), "0x1");
     }
 }

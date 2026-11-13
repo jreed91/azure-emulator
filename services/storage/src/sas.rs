@@ -51,7 +51,7 @@ const SIGNS_ENCRYPTION_SCOPE_FROM: &str = "2020-12-06";
 pub(crate) struct Fields<'a>(pub &'a BTreeMap<String, String>);
 
 impl Fields<'_> {
-    fn get(&self, name: &str) -> &str {
+    pub(crate) fn get(&self, name: &str) -> &str {
         self.0.get(name).map(String::as_str).unwrap_or("")
     }
 }
@@ -109,7 +109,7 @@ pub(crate) fn sign(key: &str, string_to_sign: &str) -> Option<String> {
     Some(STANDARD.encode(mac.finalize().into_bytes()))
 }
 
-fn signature_matches(keys: &[String; 2], string_to_sign: &str, signature: &str) -> bool {
+pub(crate) fn signature_matches(keys: &[String; 2], string_to_sign: &str, signature: &str) -> bool {
     let Ok(signature) = STANDARD.decode(signature) else {
         return false;
     };
