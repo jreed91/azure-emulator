@@ -23,6 +23,10 @@ use crate::Config;
 pub const TOKEN_LIFETIME_SECS: u64 = 3600;
 const KEY_ID: &str = "azure-emulator-key-1";
 
+/// The client id the emulator uses for its own startup provisioning; it is
+/// allowed everything when role assignments are enforced.
+pub const PROVISIONING_CLIENT: &str = "azure-emulator-config";
+
 struct SigningKeys {
     encoding: EncodingKey,
     decoding: DecodingKey,

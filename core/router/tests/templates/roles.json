@@ -1,0 +1,63 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.30.23.60470",
+      "templateHash": "158102413798817526"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]"
+    }
+  },
+  "variables": {
+    "blobReader": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2023-01-31",
+      "name": "reader-id",
+      "location": "[parameters('location')]"
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2023-01-01",
+      "name": "[format('roles{0}', uniqueString(resourceGroup().id))]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Standard_LRS"
+      },
+      "kind": "StorageV2"
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[format('Microsoft.Storage/storageAccounts/{0}', format('roles{0}', uniqueString(resourceGroup().id)))]",
+      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', format('roles{0}', uniqueString(resourceGroup().id))), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'reader-id'), variables('blobReader'))]",
+      "properties": {
+        "roleDefinitionId": "[variables('blobReader')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'reader-id'), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'reader-id')]",
+        "[resourceId('Microsoft.Storage/storageAccounts', format('roles{0}', uniqueString(resourceGroup().id)))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "assignmentId": {
+      "type": "string",
+      "value": "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts', format('roles{0}', uniqueString(resourceGroup().id))), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Storage/storageAccounts', format('roles{0}', uniqueString(resourceGroup().id))), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'reader-id'), variables('blobReader')))]"
+    },
+    "principalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'reader-id'), '2023-01-31').principalId]"
+    }
+  }
+}

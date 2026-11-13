@@ -22,7 +22,10 @@ use crate::auth::{self, AuthFailure};
 use crate::http_util::{json_response, parse_query, percent_decode, read_body, request_id};
 use crate::{ArmError, Engine};
 
+mod authorization;
 mod deployments;
+
+pub use authorization::AuthorizationState;
 
 /// A stored ARM resource.
 #[derive(Clone, Debug)]
@@ -565,7 +568,11 @@ impl ArmRegistry {
         let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
         out.insert(
             "Microsoft.Resources".into(),
-            vec!["resourceGroups".into(), "subscriptions".into()],
+            vec!["deployments".into(), "resourceGroups".into(), "subscriptions".into()],
+        );
+        out.insert(
+            "Microsoft.Authorization".into(),
+            vec!["roleAssignments".into(), "roleDefinitions".into()],
         );
         for handler in self.types.values() {
             if let Some((namespace, kind)) = handler.resource_type().split_once('/') {
@@ -717,7 +724,7 @@ async fn serve(
         "https://management.core.windows.net".to_string(),
         config.management_endpoint(),
     ];
-    auth::authorize(&parts.headers, &audiences).map_err(|f| auth_error(engine, f))?;
+    let claims = auth::authorize(&parts.headers, &audiences).map_err(|f| auth_error(engine, f))?;
 
     let api_version = api_version.ok_or_else(|| {
         ArmError::bad_request(
@@ -754,6 +761,11 @@ async fn serve(
         headers: &parts.headers,
         api_version,
         body: &body,
+        principal: Some(&claims.oid),
+        filter: query
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("$filter"))
+            .map(|(_, v)| v.clone()),
     };
     request
         .route(&segments, &lower)
@@ -767,6 +779,11 @@ struct ArmRequest<'a> {
     headers: &'a http::HeaderMap,
     api_version: &'a str,
     body: &'a Value,
+    /// The caller's object id; checked against role assignments when RBAC is
+    /// enforced. Internal requests (a deployment's resources) carry the caller's.
+    principal: Option<&'a str>,
+    /// The request's `$filter`, for the APIs that take one.
+    filter: Option<String>,
 }
 
 fn ok(body: Value) -> Result<Response, ArmError> {
@@ -867,6 +884,15 @@ impl ArmRequest<'_> {
     }
 
     fn route(&self, segments: &[String], lower: &[&str]) -> Result<Response, ArmError> {
+        self.check_access(segments)?;
+        // Role assignments and definitions are extension resources: they hang off
+        // any scope, `{scope}/providers/Microsoft.Authorization/{kind}/...`.
+        if let Some(at) = lower.windows(3).position(|w| {
+            w[0] == "providers" && w[1] == "microsoft.authorization" && matches!(w[2], "roleassignments" | "roledefinitions")
+        }) {
+            let scope = format!("/{}", segments[..at].join("/"));
+            return self.authorization(&scope, lower[at + 2], &segments[at + 3..]);
+        }
         if let Some((handler, params)) = self.registry.match_operation(self.method, segments) {
             return self.direct_operation(handler, &params);
         }
@@ -1067,6 +1093,7 @@ impl ArmRequest<'_> {
                 };
                 self.notify_deleted(name, &removed);
                 deployments::forget_group(self.engine, &self.group_id(name));
+                authorization::forget_scope(self.engine, &self.group_id(name));
                 let location = format!(
                     "{}/subscriptions/{}/operationresults/{}?api-version={}",
                     self.engine.config().management_endpoint(),
@@ -1357,6 +1384,9 @@ impl ArmRequest<'_> {
                     ids.iter().filter_map(|id| state.resources.remove(id)).collect()
                 };
                 self.notify_deleted(&group.name, &removed);
+                if let Some(resource) = removed.iter().find(|r| r.id.eq_ignore_ascii_case(&target.id)) {
+                    authorization::forget_scope(self.engine, &resource.id);
+                }
                 Ok(StatusCode::OK.into_response())
             }
             _ => Err(self.unsupported(rest)),

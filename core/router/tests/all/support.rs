@@ -40,8 +40,12 @@ pub struct Client {
 
 impl Client {
     pub fn new() -> Self {
+        Self::with_config(Config::default())
+    }
+
+    pub fn with_config(config: Config) -> Self {
         Self {
-            emulator: Emulator::new(Config::default()),
+            emulator: Emulator::new(config),
         }
     }
 
@@ -79,8 +83,13 @@ impl Client {
 
     /// A client-credentials access token for `scope` from the v2 token endpoint.
     pub async fn token(&self, scope: &str) -> String {
+        self.token_for(scope, "test-app").await
+    }
+
+    /// A client-credentials access token for `scope`, for the application `client_id`.
+    pub async fn token_for(&self, scope: &str, client_id: &str) -> String {
         let form = format!(
-            "grant_type=client_credentials&client_id=test-app&client_secret=s3cret&scope={}",
+            "grant_type=client_credentials&client_id={client_id}&client_secret=s3cret&scope={}",
             scope.replace(':', "%3A").replace('/', "%2F")
         );
         let path = format!("/{}/oauth2/v2.0/token", self.config().tenant_id);
@@ -93,7 +102,12 @@ impl Client {
 
     /// An authenticated Resource Manager request with a JSON body.
     pub async fn arm(&self, method: Method, path: &str, body: Option<Value>) -> Reply {
-        let token = self.token(ARM_SCOPE).await;
+        self.arm_as("test-app", method, path, body).await
+    }
+
+    /// An authenticated Resource Manager request made by the application `client_id`.
+    pub async fn arm_as(&self, client_id: &str, method: Method, path: &str, body: Option<Value>) -> Reply {
+        let token = self.token_for(ARM_SCOPE, client_id).await;
         let authorization = format!("Bearer {token}");
         let body = body.map(|b| Body::from(b.to_string())).unwrap_or_else(Body::empty);
         self.send(

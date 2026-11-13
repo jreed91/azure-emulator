@@ -411,3 +411,23 @@ async fn template_functions() {
     assert!(out.get("conditional").is_none());
     assert_eq!(out["sum"]["type"], "Int");
 }
+
+#[tokio::test]
+async fn bicep_role_assignment_on_a_resource() {
+    let client = Client::new();
+    client.create_group("roles").await;
+    let deployment = deploy(&client, "roles", "main", template("roles"), json!({})).await;
+    let out = outputs(&deployment);
+    let id = out["assignmentId"]["value"].as_str().expect("assignment id");
+    assert!(id.contains("/providers/Microsoft.Storage/storageAccounts/roles"), "{id}");
+    let reply = client.arm(Method::GET, &format!("{id}?api-version=2022-04-01"), None).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    let assignment = reply.json();
+    assert_eq!(assignment["properties"]["principalId"], out["principalId"]["value"]);
+    assert_eq!(assignment["properties"]["principalType"], "ServicePrincipal");
+    assert!(assignment["properties"]["roleDefinitionId"].as_str().unwrap().ends_with("/2a2b9908-6ea1-4ae2-8e65-a410df84e7d1"));
+
+    // Deploying again finds the same assignment, named by guid(), unchanged.
+    let again = deploy(&client, "roles", "main", template("roles"), json!({})).await;
+    assert_eq!(outputs(&again)["assignmentId"], out["assignmentId"]);
+}
