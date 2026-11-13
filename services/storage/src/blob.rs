@@ -17,6 +17,7 @@ use emulator_core::Engine;
 use http::{header, HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
 use md5::{Digest, Md5};
 
+use crate::sas::{self, Level, Needed, SasFailure};
 use crate::shared_key;
 use crate::state::{Blob, Container, StorageState};
 
@@ -135,7 +136,78 @@ pub async fn handle(engine: Arc<Engine>, account: String, request: Request<Body>
     response
 }
 
-fn authorize(engine: &Engine, account: &str, parts: &http::request::Parts) -> Result<(), BlobError> {
+/// The operations this data plane implements.
+#[derive(Clone, Copy)]
+enum Route {
+    ListContainers,
+    CreateContainer,
+    ContainerProperties,
+    DeleteContainer,
+    ListBlobs,
+    PutBlob,
+    GetBlob,
+    HeadBlob,
+    DeleteBlob,
+}
+
+impl Route {
+    fn of(method: &str, container: &str, blob: &str, restype: Option<&str>, comp: Option<&str>) -> Option<Self> {
+        if container.is_empty() {
+            return matches!((method, comp), ("GET", Some("list"))).then_some(Self::ListContainers);
+        }
+        if blob.is_empty() {
+            if restype != Some("container") {
+                return None;
+            }
+            return match (method, comp) {
+                ("PUT", None) => Some(Self::CreateContainer),
+                ("GET" | "HEAD", None) => Some(Self::ContainerProperties),
+                ("DELETE", None) => Some(Self::DeleteContainer),
+                ("GET", Some("list")) => Some(Self::ListBlobs),
+                _ => None,
+            };
+        }
+        if comp.is_some() {
+            return None;
+        }
+        match method {
+            "PUT" => Some(Self::PutBlob),
+            "GET" => Some(Self::GetBlob),
+            "HEAD" => Some(Self::HeadBlob),
+            "DELETE" => Some(Self::DeleteBlob),
+            _ => None,
+        }
+    }
+
+    /// What a shared access signature must grant for this operation.
+    fn needed(self) -> Needed {
+        let (level, permissions, service_sas_on_container) = match self {
+            Self::ListContainers => (Level::Service, "l", false),
+            Self::CreateContainer => (Level::Container, "cw", false),
+            Self::ContainerProperties => (Level::Container, "r", false),
+            Self::DeleteContainer => (Level::Container, "d", false),
+            Self::ListBlobs => (Level::Container, "l", true),
+            Self::PutBlob => (Level::Object, "wc", false),
+            Self::GetBlob | Self::HeadBlob => (Level::Object, "r", false),
+            Self::DeleteBlob => (Level::Object, "d", false),
+        };
+        Needed {
+            level,
+            permissions,
+            service_sas_on_container,
+        }
+    }
+}
+
+fn authorize(
+    engine: &Engine,
+    account: &str,
+    parts: &http::request::Parts,
+    query: &std::collections::BTreeMap<String, String>,
+    container: &str,
+    blob: &str,
+    route: Option<Route>,
+) -> Result<(), BlobError> {
     let config = engine.config();
     let failed = || {
         error(
@@ -167,12 +239,36 @@ fn authorize(engine: &Engine, account: &str, parts: &http::request::Parts) -> Re
         };
     }
 
-    if parse_query(parts.uri.query()).contains_key("sig") {
-        return Err(error(
-            StatusCode::NOT_IMPLEMENTED,
-            "NotImplemented",
-            "The emulator does not verify shared access signatures yet.",
-        ));
+    if query.contains_key("sig") {
+        let route = route.ok_or_else(not_implemented)?;
+        let keys = {
+            let state = engine.state::<StorageState>();
+            let state = state.lock();
+            state.accounts.get(account).map(|a| a.keys.clone()).ok_or_else(failed)?
+        };
+        return sas::authorize(query, account, &keys, container, blob, route.needed()).map_err(|failure| match failure {
+            SasFailure::Authentication => failed(),
+            SasFailure::Permission => error(
+                StatusCode::FORBIDDEN,
+                "AuthorizationPermissionMismatch",
+                "This request is not authorized to perform this operation using this permission.",
+            ),
+            SasFailure::ResourceType => error(
+                StatusCode::FORBIDDEN,
+                "AuthorizationResourceTypeMismatch",
+                "This request is not authorized to perform this operation using this resource type.",
+            ),
+            SasFailure::Service => error(
+                StatusCode::FORBIDDEN,
+                "AuthorizationServiceMismatch",
+                "This request is not authorized to perform this operation using this service.",
+            ),
+            SasFailure::Unsupported => error(
+                StatusCode::NOT_IMPLEMENTED,
+                "NotImplemented",
+                "The emulator verifies account and service shared access signatures signed with an account key only.",
+            ),
+        });
     }
 
     let audiences = [
@@ -226,8 +322,6 @@ async fn serve(
             "The specified resource does not exist.",
         ));
     }
-    authorize(engine, account, parts)?;
-
     let query: std::collections::BTreeMap<String, String> = parse_query(parts.uri.query())
         .into_iter()
         .map(|(k, v)| (k.to_ascii_lowercase(), v))
@@ -238,37 +332,23 @@ async fn serve(
         Some((container, blob)) => (percent_decode(container, false), percent_decode(blob, false)),
         None => (percent_decode(path, false), String::new()),
     };
+    let route = Route::of(parts.method.as_str(), &container, &blob, param("restype"), param("comp"));
+    authorize(engine, account, parts, &query, &container, &blob, route)?;
+    let route = route.ok_or_else(not_implemented)?;
+
     let request = BlobRequest {
         engine,
         account,
         headers: &parts.headers,
         query: &query,
     };
-    let method = parts.method.as_str();
-
-    if container.is_empty() {
-        return match (method, param("comp")) {
-            ("GET", Some("list")) => request.list_containers(),
-            _ => Err(not_implemented()),
-        };
-    }
-    if blob.is_empty() {
-        if param("restype") != Some("container") {
-            return Err(not_implemented());
-        }
-        return match (method, param("comp")) {
-            ("PUT", None) => request.create_container(&container),
-            ("GET" | "HEAD", None) => request.container_properties(&container),
-            ("DELETE", None) => request.delete_container(&container),
-            ("GET", Some("list")) => request.list_blobs(&container),
-            _ => Err(not_implemented()),
-        };
-    }
-    if param("comp").is_some() {
-        return Err(not_implemented());
-    }
-    match method {
-        "PUT" => {
+    match route {
+        Route::ListContainers => request.list_containers(),
+        Route::CreateContainer => request.create_container(&container),
+        Route::ContainerProperties => request.container_properties(&container),
+        Route::DeleteContainer => request.delete_container(&container),
+        Route::ListBlobs => request.list_blobs(&container),
+        Route::PutBlob => {
             let data = read_body(body).await.map_err(|_| {
                 error(
                     StatusCode::PAYLOAD_TOO_LARGE,
@@ -278,10 +358,9 @@ async fn serve(
             })?;
             request.put_blob(&container, &blob, data)
         }
-        "GET" => request.get_blob(&container, &blob, true),
-        "HEAD" => request.get_blob(&container, &blob, false),
-        "DELETE" => request.delete_blob(&container, &blob),
-        _ => Err(not_implemented()),
+        Route::GetBlob => request.get_blob(&container, &blob, true),
+        Route::HeadBlob => request.get_blob(&container, &blob, false),
+        Route::DeleteBlob => request.delete_blob(&container, &blob),
     }
 }
 

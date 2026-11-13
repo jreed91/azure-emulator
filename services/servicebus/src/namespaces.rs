@@ -55,6 +55,61 @@ fn apply_settable(properties: &mut Value, body: &Value) {
     properties["updatedAt"] = json!(iso_timestamp());
 }
 
+const NETWORK_RULE_SET_TYPE: &str = "Microsoft.ServiceBus/namespaces/networkRuleSets";
+
+/// A namespace's network rule set: a singleton named `default` that exists from
+/// the moment the namespace does.
+pub(crate) struct NetworkRuleSets;
+
+impl ResourceTypeHandler for NetworkRuleSets {
+    fn resource_type(&self) -> &'static str {
+        NETWORK_RULE_SET_TYPE
+    }
+
+    fn put(&self, _ctx: &ArmContext<'_>, request: &PutRequest<'_>) -> Result<Value, ArmError> {
+        let existing = request.existing.ok_or_else(|| {
+            ArmError::not_found(
+                "ResourceNotFound",
+                format!("The network rule set '{}' does not exist; the only name is 'default'.", request.name),
+            )
+        })?;
+        let mut properties = existing.properties.clone();
+        let given = request.body.get("properties").and_then(Value::as_object);
+        for (member, allowed) in [
+            ("defaultAction", &["Allow", "Deny"][..]),
+            ("publicNetworkAccess", &["Enabled", "Disabled", "SecuredByPerimeter"][..]),
+        ] {
+            if let Some(value) = given.and_then(|g| g.get(member)).filter(|v| !v.is_null()) {
+                if !value.as_str().is_some_and(|v| allowed.contains(&v)) {
+                    return Err(invalid(format!(
+                        "The value of 'properties.{member}' must be one of: {}.",
+                        allowed.join(", ")
+                    )));
+                }
+            }
+        }
+        for member in ["publicNetworkAccess", "defaultAction", "virtualNetworkRules", "ipRules", "trustedServiceAccessEnabled"] {
+            if let Some(value) = given.and_then(|g| g.get(member)).filter(|v| !v.is_null()) {
+                properties[member] = value.clone();
+            }
+        }
+        Ok(properties)
+    }
+
+    fn patch(&self, ctx: &ArmContext<'_>, existing: &Resource, body: &Value) -> Result<Value, ArmError> {
+        self.put(
+            ctx,
+            &PutRequest {
+                id: &existing.id,
+                name: &existing.name,
+                location: None,
+                existing: Some(existing),
+                body,
+            },
+        )
+    }
+}
+
 pub(crate) struct Namespaces;
 
 impl ResourceTypeHandler for Namespaces {
@@ -132,6 +187,24 @@ impl ResourceTypeHandler for Namespaces {
             sku: None,
             identity: None,
             properties: json!({"rights": ["Listen", "Manage", "Send"]}),
+        });
+        // ... and with an open network rule set.
+        ctx.engine.state::<ArmState>().lock().insert(Resource {
+            id: format!("{}/networkRuleSets/default", resource.id),
+            name: "default".into(),
+            resource_type: NETWORK_RULE_SET_TYPE.into(),
+            location: None,
+            tags: None,
+            kind: None,
+            sku: None,
+            identity: None,
+            properties: json!({
+                "publicNetworkAccess": "Enabled",
+                "defaultAction": "Allow",
+                "virtualNetworkRules": [],
+                "ipRules": [],
+                "trustedServiceAccessEnabled": false,
+            }),
         });
     }
 

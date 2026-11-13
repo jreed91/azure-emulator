@@ -17,11 +17,11 @@ workloads or to test security.
 |---|---|
 | Entra ID (login) | OpenID Connect discovery, instance discovery, signing keys, client-credentials tokens (v1 and v2 endpoints), managed-identity (IMDS) tokens |
 | Resource Manager | Bearer-token verification, `api-version` checks, subscriptions, tenants, resource groups (create, get, exists, tag, list, delete with cascade), providers, generic resource listing, cloud metadata document |
-| `Microsoft.Storage` | Storage accounts with `listKeys`, `regenerateKey` and `checkNameAvailability`; blob, file, queue and table service properties; blob containers (the same store as the data plane); queues, tables and file shares (Resource Manager only); encryption scopes; lifecycle-management and inventory policies |
-| Blob service | Containers: create, delete, properties, list. Block blobs: upload (single request), download with ranges, properties, metadata, delete, list with prefix, delimiter and paging. Authorization by Entra token or verified Shared Key |
+| `Microsoft.Storage` | Storage accounts with `listKeys`, `regenerateKey` and `checkNameAvailability`; blob, file, queue and table service properties; blob containers (the same store as the data plane); queues, tables and file shares (Resource Manager only); encryption scopes; lifecycle-management and inventory policies; local users; `listAccountSas` and `listServiceSas` |
+| Blob service | Containers: create, delete, properties, list. Block blobs: upload (single request), download with ranges, properties, metadata, delete, list with prefix, delimiter and paging. Authorization by Entra token, verified Shared Key, or shared access signature (account SAS and container or blob service SAS signed with an account key) |
 | `Microsoft.KeyVault` | Vaults: create, get, update, delete, list, `checkNameAvailability`; soft delete with list, get, recover and purge of deleted vaults; access-policy updates; secrets through Resource Manager (the same store as the data plane) |
 | `Microsoft.ManagedIdentity` | User-assigned identities and federated identity credentials |
-| `Microsoft.ServiceBus` | Namespaces, queues, topics, subscriptions, rules, authorization rules with `listKeys` and `regenerateKeys`, `checkNameAvailability` (control plane only: nothing serves messaging) |
+| `Microsoft.ServiceBus` | Namespaces, queues, topics, subscriptions, rules, authorization rules with `listKeys` and `regenerateKeys`, network rule sets, `checkNameAvailability` (control plane only: nothing serves messaging) |
 | Key Vault secrets | Set, get (latest or by version), update attributes, list, list versions, soft delete, get and list deleted, recover, purge |
 
 Beyond these, every resource type in the Storage, Key Vault, Managed Identity and
@@ -32,9 +32,9 @@ until someone implements it. `azure-emulator coverage` prints the current score:
 Provider                                  Types     Operations
 Microsoft.KeyVault                         4/16          15/51
 Microsoft.ManagedIdentity                   2/2          10/14
-Microsoft.ServiceBus                       8/21          42/91
-Microsoft.Storage                         12/32         60/153
-Total                                     26/71        127/309
+Microsoft.ServiceBus                       9/21          45/91
+Microsoft.Storage                         13/32         68/153
+Total                                     28/71        138/309
 ```
 
 That score counts control-plane (Resource Manager) operations only; data planes
@@ -63,8 +63,9 @@ tried yet.
 - Storage queues, tables and file shares have no data plane. Container legal
   holds, immutability policies and leases through Resource Manager are stubs.
 - Blob: block lists (large uploads), page and append blobs, leases, snapshots,
-  shared access signatures, copy, and conditional headers other than
-  `If-None-Match: *`.
+  copy, and conditional headers other than `If-None-Match: *`. Shared access
+  signatures that name a stored access policy or use a user delegation key are
+  not verified, and a token's IP and protocol restrictions are not enforced.
 - Key Vault: keys, certificates, managed HSMs, private endpoints, and listing
   pages. Purge protection is stored but does not block a purge.
 - Some error codes and messages are best-effort and have not been compared with

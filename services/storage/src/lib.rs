@@ -3,6 +3,7 @@
 
 pub mod blob;
 mod management;
+mod sas;
 pub mod scaffold;
 mod shared_key;
 mod state;
@@ -37,7 +38,7 @@ fn now_iso() -> String {
 }
 
 /// A new 512-bit account key, base64 encoded as the service returns it.
-fn new_key() -> String {
+pub(crate) fn new_key() -> String {
     let mut bytes = [0u8; 64];
     rand::thread_rng().fill_bytes(&mut bytes);
     base64::engine::general_purpose::STANDARD.encode(bytes)
@@ -142,7 +143,7 @@ impl ResourceTypeHandler for StorageAccounts {
     }
 
     fn actions(&self) -> &'static [&'static str] {
-        &["listKeys", "regenerateKey"]
+        &["listKeys", "regenerateKey", "listAccountSas", "listServiceSas"]
     }
 
     fn created(&self, ctx: &ArmContext<'_>, resource: &Resource) {
@@ -185,11 +186,114 @@ impl ResourceTypeHandler for StorageAccounts {
                 account.key_created[index] = now_iso();
                 Ok(keys_json(account))
             }
+            "listaccountsas" => {
+                let token = sas_token(&resource.name, account, body, true)?;
+                Ok(json!({"accountSasToken": token}))
+            }
+            "listservicesas" => {
+                let token = sas_token(&resource.name, account, body, false)?;
+                Ok(json!({"serviceSasToken": token}))
+            }
             other => Err(ArmError::not_implemented(format_args!(
                 "the '{other}' action on {RESOURCE_TYPE}"
             ))),
         }
     }
+}
+
+/// The service version the tokens Resource Manager issues are signed for.
+const ISSUED_SAS_VERSION: &str = "2015-04-05";
+
+/// Issues an account SAS (`for_account`) or a service SAS from the request's
+/// `signed*` members, signed with the account key the request names.
+fn sas_token(account_name: &str, account: &Account, body: &Value, for_account: bool) -> Result<String, ArmError> {
+    let text = |member: &str| body.get(member).and_then(Value::as_str).unwrap_or("").to_string();
+    let missing = |member: &str| {
+        ArmError::bad_request(
+            "InvalidValuesForRequestParameters",
+            format!("Values for request parameters are invalid: {member}."),
+        )
+    };
+    // Token parameter name, then the request member it comes from.
+    let members: &[(&str, &str)] = if for_account {
+        &[
+            ("ss", "signedServices"),
+            ("srt", "signedResourceTypes"),
+            ("sp", "signedPermission"),
+            ("st", "signedStart"),
+            ("se", "signedExpiryTime"),
+            ("sip", "signedIp"),
+            ("spr", "signedProtocol"),
+        ]
+    } else {
+        &[
+            ("sr", "signedResource"),
+            ("sp", "signedPermission"),
+            ("st", "signedStart"),
+            ("se", "signedExpiryTime"),
+            ("sip", "signedIp"),
+            ("spr", "signedProtocol"),
+            ("rscc", "rscc"),
+            ("rscd", "rscd"),
+            ("rsce", "rsce"),
+            ("rscl", "rscl"),
+            ("rsct", "rsct"),
+        ]
+    };
+    let required: &[&str] = if for_account {
+        &["signedServices", "signedResourceTypes", "signedPermission", "signedExpiryTime"]
+    } else {
+        &["canonicalizedResource", "signedResource", "signedPermission", "signedExpiryTime"]
+    };
+    for member in required {
+        if text(member).is_empty() {
+            return Err(missing(member));
+        }
+    }
+    if !text("signedIdentifier").is_empty() {
+        return Err(ArmError::not_implemented("shared access signatures that name a stored access policy"));
+    }
+    for member in ["signedExpiryTime", "signedStart"] {
+        if !text(member).is_empty() && sas::parse_time(&text(member)).is_none() {
+            return Err(missing(member));
+        }
+    }
+    let key = match text("keyToSign").as_str() {
+        "" | "key1" => &account.keys[0],
+        "key2" => &account.keys[1],
+        _ => return Err(missing("keyToSign")),
+    };
+
+    let mut fields: std::collections::BTreeMap<String, String> = members
+        .iter()
+        .map(|(parameter, member)| (parameter.to_string(), text(member)))
+        .filter(|(_, value)| !value.is_empty())
+        .collect();
+    fields.insert("sv".into(), ISSUED_SAS_VERSION.into());
+    let string_to_sign = if for_account {
+        sas::account_string_to_sign(account_name, &sas::Fields(&fields))
+    } else {
+        sas::service_string_to_sign(&text("canonicalizedResource"), &sas::Fields(&fields))
+    };
+    let signature = sas::sign(key, &string_to_sign)
+        .ok_or_else(|| ArmError::new(http::StatusCode::INTERNAL_SERVER_ERROR, "InternalError", "The account key is not valid base64."))?;
+
+    let encode = |value: &str| {
+        const KEEP: percent_encoding::AsciiSet = percent_encoding::NON_ALPHANUMERIC
+            .remove(b'-')
+            .remove(b'.')
+            .remove(b'_')
+            .remove(b'~');
+        percent_encoding::utf8_percent_encode(value, &KEEP).to_string()
+    };
+    let mut token = format!("sv={ISSUED_SAS_VERSION}");
+    for (parameter, _) in members {
+        if let Some(value) = fields.get(*parameter) {
+            token.push_str(&format!("&{parameter}={}", encode(value)));
+        }
+    }
+    token.push_str(&format!("&sig={}", encode(&signature)));
+    Ok(token)
 }
 
 fn check_name_availability(ctx: &ArmContext<'_>, body: &Value) -> Result<Value, ArmError> {

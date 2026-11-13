@@ -393,3 +393,102 @@ async fn encryption_scopes_and_policies() {
     assert_eq!(client.arm(Method::PUT, &inventory, Some(body)).await.status, StatusCode::OK);
     assert_eq!(client.arm(Method::GET, &child("inventoryPolicies"), None).await.json()["value"].as_array().unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn shared_access_signatures_issued_by_resource_manager() {
+    let client = management_client().await;
+    let host = "mgmtacct.blob.core.azure.localhost:10443";
+    let bearer = format!("Bearer {}", client.token(STORAGE_SCOPE).await);
+    let put = [("authorization", bearer.as_str()), ("x-ms-blob-type", "BlockBlob")];
+    client.send(Method::PUT, host, "/reports?restype=container", &put[..1], "").await;
+    client.send(Method::PUT, host, "/reports/q1.csv", &put, "a,b").await;
+    client.send(Method::PUT, host, "/other?restype=container", &put[..1], "").await;
+    let action = |name: &str| format!("{}/{name}?{API}", account_path("rg", "mgmtacct"));
+    let client = &client;
+    let anonymous = |path: String| async move { client.send(Method::GET, host, &path, &[], "").await };
+
+    // An account SAS: read and list on containers and objects, not the service.
+    let request = json!({"signedServices": "b", "signedResourceTypes": "co", "signedPermission": "rl", "signedExpiryTime": "2099-01-01T00:00:00Z", "keyToSign": "key2"});
+    let reply = client.arm(Method::POST, &action("listAccountSas"), Some(request)).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    let token = reply.json()["accountSasToken"].as_str().unwrap().to_string();
+    assert!(token.starts_with("sv=2015-04-05&ss=b&srt=co&sp=rl&se=2099-01-01T00%3A00%3A00Z&sig="), "{token}");
+
+    let reply = anonymous(format!("/reports/q1.csv?{token}")).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(reply.text(), "a,b");
+    assert_eq!(anonymous(format!("/reports?restype=container&comp=list&{token}")).await.status, StatusCode::OK);
+    let reply = anonymous(format!("/?comp=list&{token}")).await;
+    assert_eq!(reply.header("x-ms-error-code"), "AuthorizationResourceTypeMismatch");
+    let reply = client.send(Method::DELETE, host, &format!("/reports/q1.csv?{token}"), &[], "").await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN);
+    assert_eq!(reply.header("x-ms-error-code"), "AuthorizationPermissionMismatch");
+
+    // Changing anything the signature covers invalidates the token.
+    let widened = token.replace("sp=rl", "sp=rld");
+    let reply = anonymous(format!("/reports/q1.csv?{widened}")).await;
+    assert_eq!(reply.header("x-ms-error-code"), "AuthenticationFailed");
+
+    // A service SAS is bound to its container.
+    let request = json!({"canonicalizedResource": "/blob/mgmtacct/reports", "signedResource": "c", "signedPermission": "rl", "signedExpiryTime": "2099-01-01"});
+    let reply = client.arm(Method::POST, &action("listServiceSas"), Some(request)).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    let token = reply.json()["serviceSasToken"].as_str().unwrap().to_string();
+    assert_eq!(anonymous(format!("/reports/q1.csv?{token}")).await.text(), "a,b");
+    assert!(anonymous(format!("/reports?restype=container&comp=list&{token}")).await.text().contains("q1.csv"));
+    assert_eq!(anonymous(format!("/other?restype=container&comp=list&{token}")).await.header("x-ms-error-code"), "AuthenticationFailed");
+    // ... and cannot manage the container itself.
+    let reply = client.send(Method::DELETE, host, &format!("/reports?restype=container&{token}"), &[], "").await;
+    assert_eq!(reply.header("x-ms-error-code"), "AuthorizationPermissionMismatch");
+
+    // Expired tokens are issued as asked and then refused.
+    let request = json!({"signedServices": "b", "signedResourceTypes": "o", "signedPermission": "r", "signedExpiryTime": "2001-01-01T00:00:00Z"});
+    let token = client.arm(Method::POST, &action("listAccountSas"), Some(request)).await.json()["accountSasToken"].as_str().unwrap().to_string();
+    assert_eq!(anonymous(format!("/reports/q1.csv?{token}")).await.header("x-ms-error-code"), "AuthenticationFailed");
+
+    // Regenerating the signing key revokes what it signed.
+    let request = json!({"signedServices": "b", "signedResourceTypes": "o", "signedPermission": "r", "signedExpiryTime": "2099-01-01"});
+    let token = client.arm(Method::POST, &action("listAccountSas"), Some(request)).await.json()["accountSasToken"].as_str().unwrap().to_string();
+    assert_eq!(anonymous(format!("/reports/q1.csv?{token}")).await.status, StatusCode::OK);
+    client.arm(Method::POST, &action("regenerateKey"), Some(json!({"keyName": "key1"}))).await;
+    assert_eq!(anonymous(format!("/reports/q1.csv?{token}")).await.status, StatusCode::FORBIDDEN);
+
+    for bad in [json!({"signedServices": "b"}), json!({"signedServices": "b", "signedResourceTypes": "o", "signedPermission": "r", "signedExpiryTime": "soon"})] {
+        assert_eq!(client.arm(Method::POST, &action("listAccountSas"), Some(bad)).await.status, StatusCode::BAD_REQUEST);
+    }
+}
+
+#[tokio::test]
+async fn local_users() {
+    let client = management_client().await;
+    let user = child("localUsers/sftpuser");
+    assert_eq!(client.arm(Method::PUT, &child("localUsers/Bad-Name"), Some(json!({}))).await.status, StatusCode::BAD_REQUEST);
+
+    let body = json!({"properties": {
+        "homeDirectory": "uploads/",
+        "hasSharedKey": true,
+        "permissionScopes": [{"permissions": "rw", "service": "blob", "resourceName": "uploads"}],
+        "sshAuthorizedKeys": [{"description": "laptop", "key": "ssh-ed25519 AAAA"}],
+        "sid": "forged",
+    }});
+    let reply = client.arm(Method::PUT, &user, Some(body)).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    let created = reply.json();
+    assert!(created["properties"]["sid"].as_str().unwrap().starts_with("S-1-2-0-"));
+    assert_eq!(created["properties"]["hasSshKey"], true);
+    assert_eq!(created["properties"]["hasSshPassword"], false);
+    assert!(created["properties"].get("sshAuthorizedKeys").is_none(), "keys are only returned by listKeys");
+
+    let keys = client.arm(Method::POST, &child("localUsers/sftpuser/listKeys"), None).await.json();
+    assert_eq!(keys["sshAuthorizedKeys"][0]["description"], "laptop");
+    let shared = keys["sharedKey"].as_str().unwrap().to_string();
+    assert_eq!(client.arm(Method::POST, &child("localUsers/sftpuser/listKeys"), None).await.json()["sharedKey"], shared.as_str());
+
+    let first = client.arm(Method::POST, &child("localUsers/sftpuser/regeneratePassword"), None).await.json();
+    let second = client.arm(Method::POST, &child("localUsers/sftpuser/regeneratePassword"), None).await.json();
+    assert_eq!(first["sshPassword"].as_str().unwrap().len(), 32);
+    assert_ne!(first["sshPassword"], second["sshPassword"]);
+    let stored = client.arm(Method::GET, &user, None).await.json();
+    assert_eq!(stored["properties"]["hasSshPassword"], true);
+    assert_eq!(stored["properties"]["sid"], created["properties"]["sid"]);
+}
