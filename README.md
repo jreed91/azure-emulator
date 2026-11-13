@@ -17,7 +17,7 @@ workloads or to test security.
 |---|---|
 | Entra ID (login) | OpenID Connect discovery, instance discovery, signing keys, client-credentials tokens (v1 and v2 endpoints), managed-identity (IMDS) tokens |
 | Resource Manager | Bearer-token verification, `api-version` checks, subscriptions, tenants, resource groups (create, get, exists, tag, list, delete with cascade), providers, generic resource listing, cloud metadata document |
-| `Microsoft.Storage` | Storage accounts: create, get, update, delete, list, `listKeys`, `regenerateKey`, `checkNameAvailability` |
+| `Microsoft.Storage` | Storage accounts with `listKeys`, `regenerateKey` and `checkNameAvailability`; blob, file, queue and table service properties; blob containers (the same store as the data plane); queues, tables and file shares (Resource Manager only); encryption scopes; lifecycle-management and inventory policies |
 | Blob service | Containers: create, delete, properties, list. Block blobs: upload (single request), download with ranges, properties, metadata, delete, list with prefix, delimiter and paging. Authorization by Entra token or verified Shared Key |
 | `Microsoft.KeyVault` | Vaults: create, get, update, delete, list, `checkNameAvailability`; soft delete with list, get, recover and purge of deleted vaults; access-policy updates; secrets through Resource Manager (the same store as the data plane) |
 | `Microsoft.ManagedIdentity` | User-assigned identities and federated identity credentials |
@@ -33,8 +33,8 @@ Provider                                  Types     Operations
 Microsoft.KeyVault                         4/16          15/51
 Microsoft.ManagedIdentity                   2/2          10/14
 Microsoft.ServiceBus                       8/21          42/91
-Microsoft.Storage                          1/32          9/153
-Total                                     15/71         76/309
+Microsoft.Storage                         12/32         60/153
+Total                                     26/71        127/309
 ```
 
 That score counts control-plane (Resource Manager) operations only; data planes
@@ -60,6 +60,8 @@ tried yet.
 - Service Bus has no data plane: the endpoint and connection strings a namespace
   reports point at the emulator's domain, but nothing accepts AMQP there. Tier
   restrictions (such as topics on a Basic namespace) are not enforced.
+- Storage queues, tables and file shares have no data plane. Container legal
+  holds, immutability policies and leases through Resource Manager are stubs.
 - Blob: block lists (large uploads), page and append blobs, leases, snapshots,
   shared access signatures, copy, and conditional headers other than
   `If-None-Match: *`.

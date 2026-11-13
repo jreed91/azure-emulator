@@ -60,6 +60,26 @@ fn entity_properties(
     Ok(properties)
 }
 
+/// Serves a `PATCH` with the type's own `PUT` logic over the stored entity, so an
+/// update is validated the same way and cannot set service-owned properties.
+fn patch_as_put(
+    handler: &dyn ResourceTypeHandler,
+    ctx: &ArmContext<'_>,
+    existing: &Resource,
+    body: &Value,
+) -> Result<Value, ArmError> {
+    handler.put(
+        ctx,
+        &PutRequest {
+            id: &existing.id,
+            name: &existing.name,
+            location: None,
+            existing: Some(existing),
+            body,
+        },
+    )
+}
+
 pub(crate) struct Queues;
 
 impl ResourceTypeHandler for Queues {
@@ -110,6 +130,10 @@ impl ResourceTypeHandler for Queues {
             &["requiresDuplicateDetection", "requiresSession", "enablePartitioning"],
         )
     }
+
+    fn patch(&self, ctx: &ArmContext<'_>, existing: &Resource, body: &Value) -> Result<Value, ArmError> {
+        patch_as_put(self, ctx, existing, body)
+    }
 }
 
 pub(crate) struct Topics;
@@ -153,6 +177,10 @@ impl ResourceTypeHandler for Topics {
             ],
             &["requiresDuplicateDetection", "enablePartitioning"],
         )
+    }
+
+    fn patch(&self, ctx: &ArmContext<'_>, existing: &Resource, body: &Value) -> Result<Value, ArmError> {
+        patch_as_put(self, ctx, existing, body)
     }
 
     fn view(&self, ctx: &ArmContext<'_>, resource: &mut Resource) {
@@ -205,6 +233,10 @@ impl ResourceTypeHandler for Subscriptions {
             ],
             &["requiresSession"],
         )
+    }
+
+    fn patch(&self, ctx: &ArmContext<'_>, existing: &Resource, body: &Value) -> Result<Value, ArmError> {
+        patch_as_put(self, ctx, existing, body)
     }
 
     fn created(&self, ctx: &ArmContext<'_>, resource: &Resource) {
@@ -271,5 +303,9 @@ impl ResourceTypeHandler for Rules {
             properties["action"] = action;
         }
         Ok(properties)
+    }
+
+    fn patch(&self, ctx: &ArmContext<'_>, existing: &Resource, body: &Value) -> Result<Value, ArmError> {
+        patch_as_put(self, ctx, existing, body)
     }
 }

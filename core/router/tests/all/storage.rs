@@ -230,3 +230,166 @@ async fn shared_key_signatures_are_verified() {
     let reply = client.send(Method::GET, "ghost.blob.core.azure.localhost:10443", "/?comp=list", &headers, "").await;
     assert_eq!(reply.status, StatusCode::NOT_FOUND);
 }
+
+fn child(rest: &str) -> String {
+    format!("{}/{rest}?{API}", account_path("rg", "mgmtacct"))
+}
+
+async fn management_client() -> Client {
+    let client = Client::new();
+    client.create_group("rg").await;
+    create_account(&client, "rg", "mgmtacct").await;
+    client
+}
+
+#[tokio::test]
+async fn service_singletons_come_with_the_account() {
+    let client = management_client().await;
+    for service in ["blobServices", "fileServices", "queueServices", "tableServices"] {
+        let reply = client.arm(Method::GET, &child(&format!("{service}/default")), None).await;
+        assert_eq!(reply.status, StatusCode::OK, "{service}: {}", reply.text());
+        let body = reply.json();
+        assert_eq!(body["name"], "default");
+        assert_eq!(body["sku"]["name"], "Standard_LRS", "a service reports its account's SKU");
+        assert_eq!(body["properties"]["cors"]["corsRules"], json!([]));
+        let listed = client.arm(Method::GET, &child(service), None).await.json();
+        assert_eq!(listed["value"].as_array().unwrap().len(), 1);
+    }
+
+    // Setting properties changes what is named and keeps the rest.
+    let update = json!({"properties": {"deleteRetentionPolicy": {"enabled": true, "days": 14}, "isVersioningEnabled": true}});
+    let reply = client.arm(Method::PUT, &child("blobServices/default"), Some(update)).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    let stored = client.arm(Method::GET, &child("blobServices/default"), None).await.json();
+    assert_eq!(stored["properties"]["deleteRetentionPolicy"]["days"], 14);
+    assert_eq!(stored["properties"]["isVersioningEnabled"], true);
+    assert_eq!(stored["properties"]["cors"]["corsRules"], json!([]));
+
+    // There is no other service to create.
+    let reply = client.arm(Method::PUT, &child("blobServices/other"), Some(json!({"properties": {}}))).await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn containers_are_one_store_seen_from_both_planes() {
+    let client = management_client().await;
+    let host = "mgmtacct.blob.core.azure.localhost:10443";
+    let authorization = format!("Bearer {}", client.token(STORAGE_SCOPE).await);
+    let auth = [("authorization", authorization.as_str())];
+    let container = |name: &str| child(&format!("blobServices/default/containers/{name}"));
+
+    assert_eq!(client.arm(Method::PUT, &container("Bad_Name"), Some(json!({}))).await.status, StatusCode::BAD_REQUEST);
+    let reply = client
+        .arm(Method::PUT, &container("from-arm"), Some(json!({"properties": {"metadata": {"owner": "ops"}, "publicAccess": "Blob"}})))
+        .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.text());
+    let created = reply.json();
+    assert_eq!(created["type"], "Microsoft.Storage/storageAccounts/blobServices/containers");
+    assert_eq!(created["properties"]["publicAccess"], "Blob");
+    assert_eq!(created["properties"]["leaseState"], "Available");
+    assert_eq!(created["properties"]["defaultEncryptionScope"], "$account-encryption-key");
+
+    // Created through Resource Manager, usable on the data plane, metadata included.
+    let reply = client.send(Method::GET, host, "/from-arm?restype=container", &auth, "").await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(reply.header("x-ms-meta-owner"), "ops");
+    let put = [auth[0], ("x-ms-blob-type", "BlockBlob")];
+    assert_eq!(client.send(Method::PUT, host, "/from-arm/a.txt", &put, "x").await.status, StatusCode::CREATED);
+
+    // Created on the data plane, visible through Resource Manager.
+    client.send(Method::PUT, host, "/from-data-plane?restype=container", &auth, "").await;
+    let listed = client.arm(Method::GET, &container("").replace("/containers/?", "/containers?"), None).await.json();
+    let names: Vec<&str> = listed["value"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["from-arm", "from-data-plane"]);
+
+    // An update changes the entity tag and keeps the blobs; a refused one changes nothing.
+    let reply = client.arm(Method::PATCH, &container("from-arm"), Some(json!({"properties": {"publicAccess": "None"}}))).await;
+    assert_eq!(reply.json()["properties"]["publicAccess"], "None");
+    assert_ne!(reply.json()["etag"], created["etag"]);
+    let reply = client.arm(Method::PATCH, &container("from-arm"), Some(json!({"properties": {"publicAccess": "World"}}))).await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+    assert_eq!(client.send(Method::GET, host, "/from-arm/a.txt", &auth, "").await.text(), "x");
+    assert_eq!(client.arm(Method::PATCH, &container("missing"), Some(json!({}))).await.error_code(), "ContainerNotFound");
+
+    assert_eq!(client.arm(Method::DELETE, &container("from-arm"), None).await.status, StatusCode::OK);
+    assert_eq!(client.arm(Method::DELETE, &container("from-arm"), None).await.status, StatusCode::NO_CONTENT);
+    let reply = client.send(Method::GET, host, "/from-arm?restype=container", &auth, "").await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+    let orphan = format!("{}/blobServices/default/containers/x?{API}", account_path("rg", "ghostacct"));
+    assert_eq!(client.arm(Method::GET, &orphan, None).await.error_code(), "ResourceNotFound");
+}
+
+#[tokio::test]
+async fn queues_tables_and_shares() {
+    let client = management_client().await;
+
+    let reply = client.arm(Method::PUT, &child("queueServices/default/queues/jobs"), Some(json!({"properties": {"metadata": {"a": "b"}}}))).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(reply.json()["properties"]["approximateMessageCount"], 0);
+    assert_eq!(client.arm(Method::PUT, &child("queueServices/default/queues/Bad_Queue"), Some(json!({}))).await.status, StatusCode::BAD_REQUEST);
+
+    // A table is created with no request body at all.
+    let reply = client.arm(Method::PUT, &child("tableServices/default/tables/Customers"), None).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(reply.json()["properties"]["tableName"], "Customers");
+    assert_eq!(client.arm(Method::PUT, &child("tableServices/default/tables/1bad"), Some(json!({}))).await.status, StatusCode::BAD_REQUEST);
+
+    let share = child("fileServices/default/shares/docs");
+    let reply = client.arm(Method::PUT, &share, Some(json!({"properties": {"shareQuota": 100}}))).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(reply.json()["properties"]["shareQuota"], 100);
+    assert_eq!(reply.json()["properties"]["enabledProtocols"], "SMB");
+    let reply = client.arm(Method::PATCH, &share, Some(json!({"properties": {"shareQuota": 200}}))).await;
+    assert_eq!(reply.json()["properties"]["shareQuota"], 200);
+    assert_eq!(client.arm(Method::PUT, &share, Some(json!({"properties": {"shareQuota": 0}}))).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(client.arm(Method::PUT, &share, Some(json!({"properties": {"enabledProtocols": "NFS"}}))).await.status, StatusCode::BAD_REQUEST);
+
+    // An update cannot set what the service owns.
+    let reply = client
+        .arm(Method::PATCH, &child("queueServices/default/queues/jobs"), Some(json!({"properties": {"approximateMessageCount": 99, "metadata": {"c": "d"}}})))
+        .await;
+    assert_eq!(reply.json()["properties"]["approximateMessageCount"], 0);
+    assert_eq!(reply.json()["properties"]["metadata"], json!({"c": "d"}));
+
+    for (collection, count) in [("queueServices/default/queues", 1), ("tableServices/default/tables", 1), ("fileServices/default/shares", 1)] {
+        let listed = client.arm(Method::GET, &child(collection), None).await.json();
+        assert_eq!(listed["value"].as_array().unwrap().len(), count, "{collection}");
+    }
+    // The resource group's generic listing shows the account, not its children.
+    let listed = client.arm(Method::GET, &format!("{SUB}/resourceGroups/rg/resources?api-version=2021-04-01"), None).await.json();
+    assert_eq!(listed["value"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn encryption_scopes_and_policies() {
+    let client = management_client().await;
+
+    let scope = child("encryptionScopes/tenant-a");
+    let reply = client.arm(Method::PUT, &scope, Some(json!({"properties": {"requireInfrastructureEncryption": true}}))).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(reply.json()["properties"]["source"], "Microsoft.Storage");
+    assert_eq!(reply.json()["properties"]["state"], "Enabled");
+    let reply = client.arm(Method::PATCH, &scope, Some(json!({"properties": {"state": "Disabled", "requireInfrastructureEncryption": false}}))).await;
+    assert_eq!(reply.json()["properties"]["state"], "Disabled");
+    assert_eq!(reply.json()["properties"]["requireInfrastructureEncryption"], true, "fixed at creation");
+    let reply = client.arm(Method::PATCH, &scope, Some(json!({"properties": {"state": "Paused"}}))).await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+    let reply = client.arm(Method::PUT, &child("encryptionScopes/byok"), Some(json!({"properties": {"source": "Microsoft.KeyVault"}}))).await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST, "a customer-managed scope needs a key");
+
+    let rules = json!({"rules": [{"name": "expire", "enabled": true, "type": "Lifecycle", "definition": {"actions": {"baseBlob": {"delete": {"daysAfterModificationGreaterThan": 30}}}, "filters": {"blobTypes": ["blockBlob"]}}}]});
+    let policy = child("managementPolicies/default");
+    assert_eq!(client.arm(Method::GET, &policy, None).await.status, StatusCode::NOT_FOUND);
+    let reply = client.arm(Method::PUT, &policy, Some(json!({"properties": {"policy": rules}}))).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(reply.json()["properties"]["policy"]["rules"][0]["name"], "expire");
+    assert!(reply.json()["properties"]["lastModifiedTime"].is_string());
+    assert_eq!(client.arm(Method::PUT, &child("managementPolicies/other"), Some(json!({"properties": {"policy": rules}}))).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(client.arm(Method::PUT, &policy, Some(json!({"properties": {}}))).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(client.arm(Method::DELETE, &policy, None).await.status, StatusCode::OK);
+
+    let inventory = child("inventoryPolicies/default");
+    let body = json!({"properties": {"policy": {"enabled": true, "type": "Inventory", "rules": []}}});
+    assert_eq!(client.arm(Method::PUT, &inventory, Some(body)).await.status, StatusCode::OK);
+    assert_eq!(client.arm(Method::GET, &child("inventoryPolicies"), None).await.json()["value"].as_array().unwrap().len(), 1);
+}

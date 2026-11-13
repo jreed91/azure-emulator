@@ -91,6 +91,27 @@ for label, blob_credential in [("Entra token", credential), ("shared key", key)]
     container.delete_container()
     step(f"blob container / upload / download / range / list / delete with {label}")
 
+assert storage.blob_services.get_service_properties(GROUP, ACCOUNT).sku.name == "Standard_LRS"
+storage.blob_containers.create(GROUP, ACCOUNT, "from-arm", {"properties": {"metadata": {"made": "by-arm"}}})
+arm_container = BlobServiceClient(blob_url, credential=credential).get_container_client("from-arm")
+assert arm_container.get_container_properties().metadata == {"made": "by-arm"}
+arm_container.upload_blob("x.txt", b"x")
+BlobServiceClient(blob_url, credential=credential).create_container("from-data-plane")
+assert sorted(c.name for c in storage.blob_containers.list(GROUP, ACCOUNT)) == ["from-arm", "from-data-plane"]
+storage.blob_containers.delete(GROUP, ACCOUNT, "from-data-plane")
+storage.queue.create(GROUP, ACCOUNT, "jobs", {})
+storage.table.create(GROUP, ACCOUNT, "Customers")
+share = storage.file_shares.create(GROUP, ACCOUNT, "docs", {"properties": {"shareQuota": 10}})
+assert share.share_quota == 10 and share.enabled_protocols == "SMB"
+scope = storage.encryption_scopes.put(GROUP, ACCOUNT, "tenant-a", {})
+assert scope.state == "Enabled" and scope.source == "Microsoft.Storage"
+storage.management_policies.create_or_update(
+    GROUP, ACCOUNT, "default",
+    {"properties": {"policy": {"rules": [{"name": "expire", "enabled": True, "type": "Lifecycle", "definition": {"actions": {"baseBlob": {"delete": {"daysAfterModificationGreaterThan": 30}}}, "filters": {"blobTypes": ["blockBlob"]}}}]}}},
+)
+assert storage.management_policies.get(GROUP, ACCOUNT, "default").policy.rules[0].name == "expire"
+step("storage management: service properties / containers / queue / table / share / encryption scope / lifecycle policy")
+
 try:
     BlobServiceClient(blob_url, credential="A" * 88).create_container("nope")
     sys.exit("a wrong account key was accepted")
