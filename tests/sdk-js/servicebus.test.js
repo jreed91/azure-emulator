@@ -122,3 +122,29 @@ test("a provisioned namespace takes a hand-written localhost connection string",
     provisioned.stop();
   }
 });
+
+test("sessions: a named session, the next available one, and state", async () => {
+  await queue("sessions", { requiresSession: true });
+  const sender = client.createSender("sessions");
+  await sender.sendMessages([
+    { body: "a1", sessionId: "a" },
+    { body: "b1", sessionId: "b" },
+    { body: "a2", sessionId: "a" },
+  ]);
+  await assert.rejects(sender.sendMessages({ body: "no session" }));
+
+  const b = await client.acceptSession("sessions", "b");
+  assert.deepEqual((await b.receiveMessages(5, { maxWaitTimeInMs: 2000 })).map((m) => m.body), ["b1"]);
+  await b.setSessionState("step-1");
+  assert.equal(String(await b.getSessionState()), "step-1");
+  await b.renewSessionLock();
+  await b.close();
+
+  const next = await client.acceptNextSession("sessions");
+  assert.equal(next.sessionId, "a");
+  const got = await next.receiveMessages(5, { maxWaitTimeInMs: 2000 });
+  assert.deepEqual(got.map((m) => m.body), ["a1", "a2"]);
+  for (const message of got) await next.completeMessage(message);
+  await next.close();
+  await sender.close();
+});
