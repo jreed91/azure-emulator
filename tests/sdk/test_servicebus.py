@@ -297,3 +297,36 @@ def test_sessions(servicebus, group, namespace):
         with client.get_queue_receiver("orders", max_wait_time=1) as receiver:
             with pytest.raises(ServiceBusError):
                 receiver.receive_messages(max_message_count=1, max_wait_time=1)
+
+
+def test_tls_with_entra_id_and_with_a_shared_access_signature(emulator):
+    """Clients that connect by namespace name use TLS on port 5671, which they
+    do not let a test change: this test runs its own emulator listening there
+    (sharing the suite's CA), and is the only one that does."""
+    from azure.identity import ClientSecretCredential
+    from azure.mgmt.resource.resources import ResourceManagementClient
+    from azure.mgmt.servicebus import ServiceBusManagementClient
+
+    from conftest import TENANT, run_emulator
+
+    with run_emulator(emulator.home, amqps_port=5671) as tls:
+        credential = ClientSecretCredential(TENANT, "sdk-tests", "secret", authority=tls.base, disable_instance_discovery=True)
+        ResourceManagementClient(credential, tls.subscription, **tls.arm).resource_groups.create_or_update("tls", {"location": "eastus"})
+        management = ServiceBusManagementClient(credential, tls.subscription, **tls.arm)
+        name = unique("tls-")
+        management.namespaces.begin_create_or_update("tls", name, {"location": "eastus"}).result()
+        management.queues.create_or_update("tls", name, "jobs", {})
+        host = f"{name}.servicebus.azure.localhost"
+
+        with ServiceBusClient(host, credential, connection_verify=tls.ca) as client:
+            with client.get_queue_sender("jobs") as sender:
+                sender.send_messages(ServiceBusMessage("entra"))
+
+        # Without UseDevelopmentEmulator the SDKs connect over TLS.
+        keys = management.namespaces.list_keys("tls", name, "RootManageSharedAccessKey")
+        connection = keys.primary_connection_string.replace(";UseDevelopmentEmulator=true", "")
+        with ServiceBusClient.from_connection_string(connection, connection_verify=tls.ca) as client:
+            with client.get_queue_receiver("jobs", max_wait_time=2) as receiver:
+                got = receiver.receive_messages(max_message_count=5, max_wait_time=2)
+                assert [str(m) for m in got] == ["entra"]
+                receiver.complete_message(got[0])

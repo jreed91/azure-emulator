@@ -49,15 +49,23 @@ pub use store::BrokerState;
 /// The message format of a batch: data sections that each hold one message.
 const BATCH_FORMAT: u32 = 0x8001_3700;
 
-/// Serves AMQP connections from `listener` until the listener fails.
-pub async fn serve(engine: Arc<Engine>, listener: TcpListener) {
+/// Serves AMQP connections from `listener` until the listener fails: over
+/// TLS (`amqps`) when given a TLS acceptor, else plain AMQP.
+pub async fn serve(engine: Arc<Engine>, listener: TcpListener, tls: Option<tokio_rustls::TlsAcceptor>) {
     loop {
         let Ok((stream, _)) = listener.accept().await else {
             continue;
         };
         let engine = engine.clone();
+        let tls = tls.clone();
         tokio::spawn(async move {
-            let _ = connection(engine, stream).await;
+            let _ = match tls {
+                Some(tls) => match tls.accept(stream).await {
+                    Ok(stream) => connection(engine, stream).await,
+                    Err(_) => return,
+                },
+                None => connection(engine, stream).await,
+            };
         });
     }
 }
@@ -103,7 +111,10 @@ impl Context {
     }
 }
 
-async fn connection(engine: Arc<Engine>, stream: tokio::net::TcpStream) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn connection<Io>(engine: Arc<Engine>, stream: Io) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + std::fmt::Debug + Send + Unpin + 'static,
+{
     let acceptor = ConnectionAcceptor::builder()
         .container_id("azure-emulator")
         .sasl_acceptor(SaslAnonymousMechanism::new())
