@@ -330,3 +330,54 @@ def test_tls_with_entra_id_and_with_a_shared_access_signature(emulator):
                 got = receiver.receive_messages(max_message_count=5, max_wait_time=2)
                 assert [str(m) for m in got] == ["entra"]
                 receiver.complete_message(got[0])
+
+
+def test_amqp_over_websockets(emulator, credential, servicebus, group, namespace):
+    from azure.servicebus import TransportType
+
+    servicebus.queues.create_or_update(group, namespace.name, "jobs", {})
+    host = f"{namespace.name}.servicebus.azure.localhost"
+    # Over WebSockets the SDKs reach the emulator's HTTPS port, at
+    # /$servicebus/websocket.
+    with ServiceBusClient(
+        host,
+        credential,
+        transport_type=TransportType.AmqpOverWebsocket,
+        custom_endpoint_address=f"https://{host}:{emulator.port}",
+        connection_verify=emulator.ca,
+    ) as client:
+        with client.get_queue_sender("jobs") as sender:
+            sender.send_messages(ServiceBusMessage("over websockets"))
+        with client.get_queue_receiver("jobs", max_wait_time=2) as receiver:
+            got = receiver.receive_messages(max_message_count=5, max_wait_time=2)
+            assert [str(m) for m in got] == ["over websockets"]
+            receiver.complete_message(got[0])
+
+
+def test_tier_restrictions(servicebus, group):
+    from azure.core.exceptions import HttpResponseError
+
+    basic = servicebus.namespaces.begin_create_or_update(group, unique("sb-"), {"location": "eastus", "sku": {"name": "Basic"}}).result()
+    servicebus.queues.create_or_update(group, basic.name, "jobs", {})
+    for refused in [
+        lambda: servicebus.topics.create_or_update(group, basic.name, "events", {}),
+        lambda: servicebus.queues.create_or_update(group, basic.name, "sessions", {"properties": {"requiresSession": True}}),
+        lambda: servicebus.queues.create_or_update(group, basic.name, "dedup", {"properties": {"requiresDuplicateDetection": True}}),
+        lambda: servicebus.queues.create_or_update(group, basic.name, "forward", {"properties": {"forwardTo": "jobs"}}),
+        lambda: servicebus.queues.create_or_update(group, basic.name, "big", {"properties": {"maxMessageSizeInKilobytes": 2048}}),
+    ]:
+        with pytest.raises(HttpResponseError):
+            refused()
+
+    premium = servicebus.namespaces.begin_create_or_update(group, unique("sb-"), {"location": "eastus", "sku": {"name": "Premium"}}).result()
+    assert servicebus.queues.create_or_update(group, premium.name, "jobs", {}).max_message_size_in_kilobytes == 1024
+    big = servicebus.queues.create_or_update(group, premium.name, "big", {"properties": {"maxMessageSizeInKilobytes": 4096}})
+    assert big.max_message_size_in_kilobytes == 4096
+    with pytest.raises(HttpResponseError):
+        servicebus.queues.create_or_update(group, premium.name, "huge", {"properties": {"maxMessageSizeInKilobytes": 200000}})
+
+    keys = servicebus.namespaces.list_keys(group, premium.name, "RootManageSharedAccessKey")
+    with ServiceBusClient.from_connection_string(keys.primary_connection_string) as client:
+        with client.get_queue_sender("big") as sender:
+            # Well above the Standard limit, within this queue's 4 MB.
+            sender.send_messages(ServiceBusMessage(b"x" * 3 * 1024 * 1024))
