@@ -295,6 +295,30 @@ pub struct OperationCoverage {
     pub implemented: bool,
 }
 
+/// A child resource type that only Microsoft.Network creates: private endpoint
+/// connections (made by creating a private endpoint) and network security
+/// perimeter configurations (made by associating a perimeter). The emulator does
+/// not model Microsoft.Network, so none can exist: listings are empty, reads are
+/// `404`, and a `PUT` — which can only update an existing one — is `404` too.
+pub struct CreatedByNetwork(pub &'static str);
+
+impl ResourceTypeHandler for CreatedByNetwork {
+    fn resource_type(&self) -> &'static str {
+        self.0
+    }
+
+    fn put(&self, _ctx: &ArmContext<'_>, request: &PutRequest<'_>) -> Result<Value, ArmError> {
+        let kind = self.0.rsplit('/').next().unwrap_or(self.0);
+        Err(ArmError::not_found(
+            "ResourceNotFound",
+            format!(
+                "The {kind} resource '{}' was not found. These resources are created by Microsoft.Network, which this emulator does not model, so none exist.",
+                request.name
+            ),
+        ))
+    }
+}
+
 /// Stands in for a modeled resource type nobody has implemented yet.
 struct ScaffoldStub(&'static str);
 
@@ -722,10 +746,27 @@ impl ArmRequest<'_> {
             body: self.body,
         };
         let (status, body) = handler(&self.context(&group), &request)?;
-        Ok(match body {
+        let mut response = match body {
             Value::Null => status.into_response(),
             body => json_response(status, &body),
-        })
+        };
+        // A long-running operation answers 202 with a status URL. Work in the
+        // emulator is done before the first response, so that URL reports success.
+        if status == StatusCode::ACCEPTED {
+            let config = self.engine.config();
+            let location = format!(
+                "{}/subscriptions/{}/operationresults/{}?api-version={}",
+                config.management_endpoint(),
+                config.subscription_id,
+                request_id(),
+                self.api_version
+            );
+            if let Ok(value) = HeaderValue::from_str(&location) {
+                response.headers_mut().insert(header::LOCATION, value);
+            }
+            response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from_static("0"));
+        }
+        Ok(response)
     }
 
     fn route(&self, segments: &[String], lower: &[&str]) -> Result<Response, ArmError> {

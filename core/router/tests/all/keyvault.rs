@@ -291,3 +291,68 @@ async fn secrets_are_one_store_seen_from_both_planes() {
     let orphan = vault_path("no-such-vault/secrets/x");
     assert_eq!(client.arm(Method::GET, &orphan, None).await.error_code(), "ResourceNotFound");
 }
+
+fn hsm_path(name: &str) -> String {
+    format!("{SUB}/resourceGroups/rg/providers/Microsoft.KeyVault/managedHSMs/{name}?api-version=2023-07-01")
+}
+
+#[tokio::test]
+async fn managed_hsm_lifecycle() {
+    let (client, _) = vault_client().await;
+    let body = |admins: Value| {
+        json!({"location": "eastus", "properties": {"tenantId": client.config().tenant_id, "initialAdminObjectIds": admins}})
+    };
+    assert_eq!(client.arm(Method::PUT, &hsm_path("1bad"), Some(body(json!(["a"])))).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(client.arm(Method::PUT, &hsm_path("payments-hsm"), Some(body(json!([])))).await.status, StatusCode::BAD_REQUEST);
+
+    let reply = client.arm(Method::PUT, &hsm_path("payments-hsm"), Some(body(json!(["00000000-0000-0000-0000-0000000000aa"])))).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    let hsm = reply.json();
+    assert_eq!(hsm["sku"], json!({"family": "B", "name": "Standard_B1"}));
+    assert_eq!(hsm["properties"]["hsmUri"], "https://payments-hsm.managedhsm.azure.localhost:10443/");
+    assert_eq!(hsm["properties"]["securityDomainProperties"]["activationStatus"], "NotActivated");
+    assert_eq!(hsm["properties"]["enableSoftDelete"], true);
+
+    // Settings change; the tenant and administrators do not.
+    let patched = client
+        .arm(Method::PATCH, &hsm_path("payments-hsm"), Some(json!({"properties": {"publicNetworkAccess": "Disabled", "tenantId": "other"}})))
+        .await
+        .json();
+    assert_eq!(patched["properties"]["publicNetworkAccess"], "Disabled");
+    assert_eq!(patched["properties"]["tenantId"], client.config().tenant_id);
+
+    let regions = client.arm(Method::GET, &hsm_path("payments-hsm/regions"), None).await.json();
+    assert_eq!(regions["value"], json!([{"name": "eastus", "isPrimary": true, "provisioningState": "Succeeded"}]));
+    let links = client.arm(Method::GET, &hsm_path("payments-hsm/privateLinkResources"), None).await.json();
+    assert_eq!(links["value"][0]["properties"]["groupId"], "managedhsm");
+
+    let check = format!("{SUB}/providers/Microsoft.KeyVault/checkMhsmNameAvailability?api-version=2023-07-01");
+    assert_eq!(client.arm(Method::POST, &check, Some(json!({"name": "payments-hsm"}))).await.json()["nameAvailable"], false);
+
+    // Soft delete keeps the name until a purge; recovery restores the settings.
+    assert_eq!(client.arm(Method::DELETE, &hsm_path("payments-hsm"), None).await.status, StatusCode::OK);
+    let deleted = format!("{SUB}/providers/Microsoft.KeyVault/locations/eastus/deletedManagedHSMs/payments-hsm?api-version=2023-07-01");
+    let reply = client.arm(Method::GET, &deleted, None).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert!(reply.json()["properties"]["mhsmId"].as_str().unwrap().ends_with("/managedHSMs/payments-hsm"));
+    let listed = client.arm(Method::GET, &format!("{SUB}/providers/Microsoft.KeyVault/deletedManagedHSMs?api-version=2023-07-01"), None).await.json();
+    assert_eq!(listed["value"].as_array().unwrap().len(), 1);
+    assert_eq!(client.arm(Method::POST, &check, Some(json!({"name": "payments-hsm"}))).await.json()["nameAvailable"], false);
+    let reply = client.arm(Method::PUT, &hsm_path("payments-hsm"), Some(body(json!(["x"])))).await;
+    assert_eq!(reply.status, StatusCode::CONFLICT);
+
+    let mut recover = body(json!(["x"]));
+    recover["properties"]["createMode"] = json!("recover");
+    let reply = client.arm(Method::PUT, &hsm_path("payments-hsm"), Some(recover)).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(reply.json()["properties"]["publicNetworkAccess"], "Disabled");
+    assert_eq!(client.arm(Method::GET, &deleted, None).await.status, StatusCode::NOT_FOUND);
+
+    client.arm(Method::DELETE, &hsm_path("payments-hsm"), None).await;
+    let purge = deleted.replace("?", "/purge?");
+    let reply = client.arm(Method::POST, &purge, None).await;
+    assert_eq!(reply.status, StatusCode::ACCEPTED);
+    let status_url = reply.header("location").strip_prefix("https://localhost:10443").expect("a status URL on the emulator").to_string();
+    assert_eq!(client.arm(Method::GET, &status_url, None).await.status, StatusCode::OK);
+    assert_eq!(client.arm(Method::POST, &check, Some(json!({"name": "payments-hsm"}))).await.json()["nameAvailable"], true);
+}

@@ -5,10 +5,14 @@
 //! recovered (`createMode: recover`) or purged. Secrets are reachable through both
 //! planes and share one store.
 //!
-//! Not implemented yet: keys, certificates, managed HSMs, private endpoints, and
+//! Managed HSMs are modeled on Resource Manager (with soft delete), but their data
+//! plane and security-domain activation are not.
+//!
+//! Not implemented yet: keys, certificates, managed HSM keys, and
 //! data-plane authorization (access policies and RBAC are stored but not
 //! enforced). Purge protection is stored but does not block a purge.
 
+mod managed_hsm;
 mod management;
 pub mod scaffold;
 pub mod secrets;
@@ -30,6 +34,18 @@ pub struct KeyVaultState {
     pub(crate) vaults: BTreeMap<String, Vault>,
     /// Soft-deleted vaults, keyed the same way. Their names stay taken.
     pub(crate) deleted: BTreeMap<String, DeletedVault>,
+    /// Managed HSM names in use, live or soft-deleted (lowercased); they are
+    /// global, separately from vault names.
+    pub(crate) hsm_names: std::collections::BTreeSet<String>,
+    /// Soft-deleted managed HSMs, keyed by lowercased name.
+    pub(crate) deleted_hsms: BTreeMap<String, DeletedHsm>,
+}
+
+/// A managed HSM between deletion and recovery or purge.
+pub(crate) struct DeletedHsm {
+    pub resource: Resource,
+    pub deletion_date: String,
+    pub scheduled_purge_date: String,
 }
 
 /// A vault between deletion and recovery or purge.
@@ -49,6 +65,14 @@ pub fn register(registry: &mut ArmRegistry) {
         Arc::new(check_name_availability),
     );
     management::register(registry);
+    managed_hsm::register(registry);
+    for kind in [
+        "Microsoft.KeyVault/vaults/privateEndpointConnections",
+        "Microsoft.KeyVault/managedHSMs/privateEndpointConnections",
+        "Microsoft.KeyVault/vaults/networkSecurityPerimeterConfigurations",
+    ] {
+        registry.register_type(emulator_core::arm::CreatedByNetwork(kind));
+    }
     // Everything else in the specification is mounted as a 501 stub.
     registry.register_scaffold(&scaffold::PROVIDER);
 }

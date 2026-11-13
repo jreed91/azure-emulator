@@ -118,3 +118,29 @@ async fn implementing_a_scaffolded_type_only_takes_a_handler() {
     assert!(!done("UserAssignedIdentities_RevokeTokens"));
     assert!(done("FederatedIdentityCredentials_CreateOrUpdate"));
 }
+
+#[tokio::test]
+async fn resources_only_microsoft_network_creates_never_exist() {
+    let client = Client::new();
+    client.create_group("rg").await;
+    let account = format!("{SUB}/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/acct");
+    let body = json!({"location": "eastus", "kind": "StorageV2", "sku": {"name": "Standard_LRS"}});
+    client.arm(Method::PUT, &format!("{account}?api-version=2024-01-01"), Some(body)).await;
+
+    for collection in ["privateEndpointConnections", "networkSecurityPerimeterConfigurations"] {
+        let list = format!("{account}/{collection}?api-version=2024-01-01");
+        let reply = client.arm(Method::GET, &list, None).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+        assert_eq!(reply.json(), json!({"value": []}));
+        let one = list.replace("?", "/some-connection?");
+        assert_eq!(client.arm(Method::GET, &one, None).await.status, StatusCode::NOT_FOUND);
+    }
+    // Approving a connection that cannot exist is a 404, never a made-up success.
+    let connection = format!("{account}/privateEndpointConnections/pe1?api-version=2024-01-01");
+    let approve = json!({"properties": {"privateLinkServiceConnectionState": {"status": "Approved"}}});
+    let reply = client.arm(Method::PUT, &connection, Some(approve)).await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+    assert!(reply.json()["error"]["message"].as_str().unwrap().contains("Microsoft.Network"));
+    let reconcile = format!("{account}/networkSecurityPerimeterConfigurations/nsp1/reconcile?api-version=2024-01-01");
+    assert_eq!(client.arm(Method::POST, &reconcile, None).await.status, StatusCode::NOT_FOUND);
+}

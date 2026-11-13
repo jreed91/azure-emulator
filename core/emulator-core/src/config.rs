@@ -82,6 +82,18 @@ impl Config {
         )
     }
 
+    /// Address a managed HSM reports. Nothing serves its data plane yet; it is on
+    /// the emulator's own domain so that clients never reach the real service.
+    pub fn managed_hsm_uri(&self, name: &str) -> String {
+        format!(
+            "{}://{}.managedhsm.{}{}/",
+            self.scheme,
+            name,
+            self.dns_suffix,
+            self.port_suffix()
+        )
+    }
+
     /// Address a Service Bus namespace reports. Nothing serves the messaging
     /// protocol there yet; it is on the emulator's own domain so that clients
     /// never reach the real service by mistake.

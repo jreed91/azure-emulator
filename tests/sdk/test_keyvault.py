@@ -50,3 +50,27 @@ def test_vault_soft_delete_and_purge(keyvault, group, vault):
     assert keyvault.vaults.get_deleted(vault.name, "eastus").properties.vault_id.endswith(f"/vaults/{vault.name}")
     keyvault.vaults.begin_purge_deleted(vault.name, "eastus").result()
     assert vault.name not in [v.name for v in keyvault.vaults.list_deleted()]
+
+
+def test_managed_hsm_soft_delete_and_purge(emulator, keyvault, group):
+    from conftest import unique
+
+    name = unique("hsm-")
+    hsm = keyvault.managed_hsms.begin_create_or_update(
+        group,
+        name,
+        {"location": "eastus", "properties": {"tenantId": emulator.tenant, "initialAdminObjectIds": ["00000000-0000-0000-0000-0000000000aa"]}},
+    ).result()
+    assert hsm.properties.hsm_uri == f"https://{name}.managedhsm.azure.localhost:{emulator.port}/"
+    assert hsm.sku.name == "Standard_B1"
+    assert not keyvault.managed_hsms.check_mhsm_name_availability({"name": name}).name_available
+
+    keyvault.managed_hsms.begin_delete(group, name).result()
+    assert name in [h.name for h in keyvault.managed_hsms.list_deleted()]
+    assert keyvault.managed_hsms.get_deleted(name, "eastus").properties.mhsm_id.endswith(f"/managedHSMs/{name}")
+    keyvault.managed_hsms.begin_purge_deleted(name, "eastus").result()
+    assert keyvault.managed_hsms.check_mhsm_name_availability({"name": name}).name_available
+
+
+def test_no_private_endpoint_connections_without_microsoft_network(keyvault, group, vault):
+    assert list(keyvault.private_endpoint_connections.list_by_resource(group, vault.name)) == []

@@ -19,7 +19,7 @@ workloads or to test security.
 | Resource Manager | Bearer-token verification, `api-version` checks, subscriptions, tenants, resource groups (create, get, exists, tag, list, delete with cascade), providers, generic resource listing, cloud metadata document |
 | `Microsoft.Storage` | Storage accounts with `listKeys`, `regenerateKey` and `checkNameAvailability`; blob, file, queue and table service properties; blob containers (the same store as the data plane); queues, tables and file shares (Resource Manager only); encryption scopes; lifecycle-management and inventory policies; local users; `listAccountSas` and `listServiceSas` |
 | Blob service | Containers: create, delete, properties, list. Block blobs: upload (single request), download with ranges, properties, metadata, delete, list with prefix, delimiter and paging. Authorization by Entra token, verified Shared Key, or shared access signature (account SAS and container or blob service SAS signed with an account key) |
-| `Microsoft.KeyVault` | Vaults: create, get, update, delete, list, `checkNameAvailability`; soft delete with list, get, recover and purge of deleted vaults; access-policy updates; secrets through Resource Manager (the same store as the data plane) |
+| `Microsoft.KeyVault` | Vaults: create, get, update, delete, list, `checkNameAvailability`; soft delete with list, get, recover and purge of deleted vaults; access-policy updates; secrets through Resource Manager (the same store as the data plane); managed HSMs with soft delete, regions and name availability (no HSM data plane) |
 | `Microsoft.ManagedIdentity` | User-assigned identities and federated identity credentials |
 | `Microsoft.ServiceBus` | Namespaces, queues, topics, subscriptions, rules, authorization rules with `listKeys` and `regenerateKeys`, network rule sets, geo-disaster-recovery aliases with failover and break-pairing, legacy IP filter and virtual network rules, private link resources, `checkNameAvailability` (control plane only: nothing serves messaging) |
 | Key Vault secrets | Set, get (latest or by version), update attributes, list, list versions, soft delete, get and list deleted, recover, purge |
@@ -30,12 +30,17 @@ until someone implements it. `azure-emulator coverage` prints the current score:
 
 ```
 Provider                                  Types     Operations
-Microsoft.KeyVault                         5/16          16/51
+Microsoft.KeyVault                        12/16          39/51
 Microsoft.ManagedIdentity                   2/2          10/14
-Microsoft.ServiceBus                      14/21          64/91
-Microsoft.Storage                         14/32         69/153
-Total                                     35/71        159/309
+Microsoft.ServiceBus                      16/21          70/91
+Microsoft.Storage                         16/32         75/153
+Total                                     46/71        194/309
 ```
+
+Private endpoint connections and network security perimeter configurations
+count as implemented: they are created only by Microsoft.Network, which the
+emulator does not model, so they answer as they would in a subscription without
+it (empty listings, `404` for any single one).
 
 That score counts control-plane (Resource Manager) operations only; data planes
 such as Blob and Key Vault secrets are not in it. Add `--operations` to list every
