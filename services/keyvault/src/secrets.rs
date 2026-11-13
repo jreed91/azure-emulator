@@ -28,6 +28,8 @@ pub(crate) struct Vault {
     deleted: BTreeMap<String, DeletedSecret>,
     /// Keyed by lowercased key name.
     pub(crate) keys: crate::keys::KeyStore,
+    /// Soft-deleted keys, keyed the same way.
+    pub(crate) deleted_keys: BTreeMap<String, crate::keys::DeletedKey>,
 }
 
 #[derive(Clone)]
@@ -414,12 +416,18 @@ fn unauthorized(engine: &Engine, message: &str) -> Response {
 /// What a secrets operation needs: its data action under role-based access
 /// control, and its permission under an access policy.
 struct Needed {
+    /// `secrets` or `keys`: the access policy permission list it is in.
+    kind: &'static str,
     action: &'static str,
+    /// The access-policy permission, lowercased.
     policy: &'static str,
 }
 
 fn permission_for(method: &Method, collection: &str, rest: &[&str]) -> Option<Needed> {
-    let needed = |action, policy| Some(Needed { action, policy });
+    if matches!(collection, "keys" | "deletedkeys") {
+        return key_permission_for(method, collection, rest);
+    }
+    let needed = |action, policy| Some(Needed { kind: "secrets", action, policy });
     const READ_METADATA: &str = "Microsoft.KeyVault/vaults/secrets/readMetadata/action";
     match (collection, rest, method.as_str()) {
         ("secrets", [], "GET") | ("secrets", [_, "versions"], "GET") => needed(READ_METADATA, "list"),
@@ -430,6 +438,36 @@ fn permission_for(method: &Method, collection: &str, rest: &[&str]) -> Option<Ne
         ("deletedsecrets", [] | [_], "GET") => needed(READ_METADATA, "list"),
         ("deletedsecrets", [_], "DELETE") => needed("Microsoft.KeyVault/vaults/secrets/purge/action", "purge"),
         ("deletedsecrets", [_, "recover"], "POST") => needed("Microsoft.KeyVault/vaults/secrets/recover/action", "recover"),
+        _ => None,
+    }
+}
+
+fn key_permission_for(method: &Method, collection: &str, rest: &[&str]) -> Option<Needed> {
+    let needed = |action, policy| Some(Needed { kind: "keys", action, policy });
+    const READ: &str = "Microsoft.KeyVault/vaults/keys/read";
+    let lower: Vec<String> = rest.iter().map(|s| s.to_ascii_lowercase()).collect();
+    let lower: Vec<&str> = lower.iter().map(String::as_str).collect();
+    let crypto = |op: &str| match op {
+        "encrypt" => needed("Microsoft.KeyVault/vaults/keys/encrypt/action", "encrypt"),
+        "decrypt" => needed("Microsoft.KeyVault/vaults/keys/decrypt/action", "decrypt"),
+        "sign" => needed("Microsoft.KeyVault/vaults/keys/sign/action", "sign"),
+        "verify" => needed("Microsoft.KeyVault/vaults/keys/verify/action", "verify"),
+        "wrapkey" => needed("Microsoft.KeyVault/vaults/keys/wrap/action", "wrapkey"),
+        "unwrapkey" => needed("Microsoft.KeyVault/vaults/keys/unwrap/action", "unwrapkey"),
+        _ => None,
+    };
+    match (collection, lower.as_slice(), method.as_str()) {
+        ("keys", [], "GET") | ("keys", [_, "versions"], "GET") => needed(READ, "list"),
+        ("keys", [_, "create"], "POST") => needed("Microsoft.KeyVault/vaults/keys/create/action", "create"),
+        ("keys", [_, "rotate"], "POST") => needed("Microsoft.KeyVault/vaults/keys/rotate/action", "rotate"),
+        ("keys", [_, op], "POST") | ("keys", [_, _, op], "POST") => crypto(op),
+        ("keys", [_], "PUT") => needed("Microsoft.KeyVault/vaults/keys/import/action", "import"),
+        ("keys", [_] | [_, _], "GET") => needed(READ, "get"),
+        ("keys", [_] | [_, _], "PATCH") => needed("Microsoft.KeyVault/vaults/keys/update/action", "update"),
+        ("keys", [_], "DELETE") => needed("Microsoft.KeyVault/vaults/keys/delete", "delete"),
+        ("deletedkeys", [] | [_], "GET") => needed(READ, "list"),
+        ("deletedkeys", [_], "DELETE") => needed("Microsoft.KeyVault/vaults/keys/purge/action", "purge"),
+        ("deletedkeys", [_, "recover"], "POST") => needed("Microsoft.KeyVault/vaults/keys/recover/action", "recover"),
         _ => None,
     }
 }
@@ -460,7 +498,7 @@ fn check_access(engine: &Engine, vault: &str, claims: &auth::Claims, needed: &Ne
     };
     if properties.get("enableRbacAuthorization").and_then(Value::as_bool) == Some(true) {
         let scope = match secret {
-            Some(name) => format!("{vault_id}/secrets/{name}"),
+            Some(name) => format!("{vault_id}/{}/{name}", needed.kind),
             None => vault_id.clone(),
         };
         if data_access(engine, &claims.oid, &[Permission::Data(needed.action)], &scope) {
@@ -485,7 +523,7 @@ fn check_access(engine: &Engine, vault: &str, claims: &auth::Claims, needed: &Ne
         .flatten()
         .filter(|p| p.get("tenantId").and_then(Value::as_str).is_none_or(|t| t.eq_ignore_ascii_case(tenant)))
         .filter(|p| p.get("objectId").and_then(Value::as_str).is_some_and(|o| ids.iter().any(|id| id.eq_ignore_ascii_case(o))))
-        .flat_map(|p| p.pointer("/permissions/secrets").and_then(Value::as_array).cloned().unwrap_or_default())
+        .flat_map(|p| p.pointer(&format!("/permissions/{}", needed.kind)).and_then(Value::as_array).cloned().unwrap_or_default())
         .filter_map(|p| p.as_str().map(str::to_ascii_lowercase))
         .any(|p| p == needed.policy || p == "all");
     if allowed {
@@ -493,7 +531,8 @@ fn check_access(engine: &Engine, vault: &str, claims: &auth::Claims, needed: &Ne
     }
     Err(forbidden(
         format!(
-            "The user, group or application '{caller}' does not have secrets {} permission on key vault '{vault};location={}'. For help resolving this issue, please see https://go.microsoft.com/fwlink/?linkid=2125287",
+            "The user, group or application '{caller}' does not have {} {} permission on key vault '{vault};location={}'. For help resolving this issue, please see https://go.microsoft.com/fwlink/?linkid=2125287",
+            needed.kind,
             needed.policy,
             location,
         ),
@@ -571,6 +610,14 @@ async fn serve(
     let method = &parts.method;
     if let Some(needed) = permission_for(method, &collection, &rest) {
         check_access(engine, vault, &claims, &needed, rest.first().copied())?;
+    }
+    if matches!(collection.as_str(), "keys" | "deletedkeys" | "rng") {
+        return crate::keys_data::serve(engine, vault, method, &collection, &rest, &body)
+            .map(|reply| match reply {
+                Some(body) => json_response(StatusCode::OK, &body),
+                None => StatusCode::NO_CONTENT.into_response(),
+            })
+            .map_err(fail);
     }
     let request = SecretRequest {
         engine,

@@ -15,6 +15,8 @@ ROLES = {
     "Key Vault Secrets Officer": "b86a8fe4-44ce-4948-aee5-eccb2c155cd7",
     "Key Vault Secrets User": "4633458b-17de-408a-b874-0445c86b69e6",
     "Azure Service Bus Data Sender": "69a216fc-b8fb-44d8-bc22-1f3c2cd27a39",
+    "Key Vault Crypto Officer": "14b46e9e-c2b7-41b4-b07b-48a6ebf60603",
+    "Key Vault Crypto User": "12338af0-0e69-4776-bea7-57ae8d297424",
 }
 
 
@@ -179,3 +181,50 @@ def test_service_bus_data_roles(enforced):
     with client() as c, pytest.raises(ServiceBusError):
         with c.get_queue_receiver("jobs", max_wait_time=1) as receiver:
             receiver.receive_messages(max_message_count=1, max_wait_time=1)
+
+
+def test_key_vault_keys(enforced):
+    from azure.keyvault.keys import KeyClient
+    from azure.keyvault.keys.crypto import CryptographyClient, EncryptionAlgorithm
+
+    keyvault = enforced.client("azure.mgmt.keyvault", "KeyVaultManagementClient")
+    vault = keyvault.vaults.begin_create_or_update(
+        enforced.group,
+        unique("kv-"),
+        {"location": "eastus", "properties": {"tenantId": TENANT, "sku": {"family": "A", "name": "standard"}, "enableRbacAuthorization": True}},
+    ).result()
+    worker = KeyClient(vault.properties.vault_uri, enforced.worker)
+    with pytest.raises(HttpResponseError) as error:
+        worker.create_rsa_key("signing")
+    assert "ForbiddenByRbac" in str(error.value)
+    enforced.grant("Key Vault Crypto Officer", vault.id)
+    key = worker.create_rsa_key("signing")
+
+    # Crypto User may use a key but not create one.
+    user = ClientSecretCredential(TENANT, "crypto-user", "secret", authority=enforced.emulator.base, disable_instance_discovery=True)
+    enforced.grant("Key Vault Crypto User", f"{vault.id}/keys/signing", principal="crypto-user")
+    crypto = CryptographyClient(key.id, user)
+    sealed = crypto.encrypt(EncryptionAlgorithm.rsa_oaep_256, b"for the user")
+    assert crypto.decrypt(EncryptionAlgorithm.rsa_oaep_256, sealed.ciphertext).plaintext == b"for the user"
+    with pytest.raises(HttpResponseError):
+        KeyClient(vault.properties.vault_uri, user).create_rsa_key("other")
+
+    # In an access-policy vault, the policy's key permissions decide.
+    policy_vault = keyvault.vaults.begin_create_or_update(
+        enforced.group,
+        unique("kv-"),
+        {
+            "location": "eastus",
+            "properties": {
+                "tenantId": TENANT,
+                "sku": {"family": "A", "name": "standard"},
+                "accessPolicies": [{"tenantId": TENANT, "objectId": "worker", "permissions": {"keys": ["create", "get"]}}],
+            },
+        },
+    ).result()
+    policy_client = KeyClient(policy_vault.properties.vault_uri, enforced.worker)
+    created = policy_client.create_ec_key("ec")
+    with pytest.raises(HttpResponseError) as error:
+        policy_client.begin_delete_key("ec").result()
+    assert "does not have keys delete permission" in str(error.value)
+    assert policy_client.get_key("ec").id == created.id
