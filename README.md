@@ -80,11 +80,11 @@ tried yet.
   refused. Every accepted version gets the same behaviour.
 - Operations the ARM layer cannot route yet (tenant-, location- and
   extension-scoped ones) are listed by `coverage` as `501`.
-- Service Bus messaging has no sessions (session-enabled entities refuse sends
-  and receives), does not forward to topics, and answers `501` to the
-  management operations it lacks (rules, sessions). Plain AMQP only (no TLS,
-  no WebSockets). Tier restrictions (such as topics on a Basic namespace) are
-  not enforced.
+- Service Bus messaging does not forward to topics, does not list sessions
+  (`get-message-sessions`), and answers `501` to the rule management
+  operations over AMQP (rules are managed through Resource Manager). Plain
+  AMQP only (no TLS, no WebSockets). Tier restrictions (such as topics on a
+  Basic namespace) are not enforced.
 - Template deployments run to completion before the first response; there is
   no `Running` state and `cancel` always answers `409`. A `templateLink`,
   `parametersLink` or Key Vault reference in parameters answers `501`, as do
@@ -276,8 +276,15 @@ time to live and dead-lettering on expiry, duplicate detection, status,
 maximum message size and `forwardTo`. Supported: single and batched sends,
 peek-lock (complete, abandon, defer, dead-letter, lock renewal) and
 receive-and-delete, the dead-letter subqueue, scheduled messages (and
-cancelling them), deferred messages by sequence number, peeking, and topic
-fan-out through `$Default`, SQL filters, correlation filters and rule actions
+cancelling them), deferred messages by sequence number, and peeking.
+
+Sessions: a session-enabled queue or subscription
+takes only messages with a session id; a receiver locks a named session or the
+next one with messages (waiting up to 30 seconds for one), receives only its
+messages, and can renew the session lock and get or set the session state;
+the lock is released when the receiver closes.
+
+Topic fan-out works through `$Default`, SQL filters, correlation filters and rule actions
 (`SET`/`REMOVE`; a subscription gets a copy per matching rule with an action).
 The SQL dialect covers comparison, `AND`/`OR`/`NOT`, arithmetic, `IS [NOT]
 NULL`, `[NOT] IN`, `[NOT] LIKE` with `ESCAPE`, `EXISTS`, and `sys.`/`user.`

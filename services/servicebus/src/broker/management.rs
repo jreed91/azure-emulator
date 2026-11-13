@@ -4,8 +4,10 @@
 //! Implemented: `peek-message`, `renew-lock`, `update-disposition` (how the
 //! SDKs complete, abandon, defer and dead-letter by lock token),
 //! `schedule-message`, `cancel-scheduled-message` and
-//! `receive-by-sequence-number` (deferred messages). Every other operation
-//! (sessions, rules) answers status 501 rather than pretending.
+//! `receive-by-sequence-number` (deferred messages), and for sessions
+//! `renew-session-lock`, `get-session-state` and `set-session-state`. Every
+//! other operation (rules, listing sessions) answers status 501 rather than
+//! pretending.
 
 use std::time::SystemTime;
 
@@ -84,7 +86,8 @@ pub(crate) fn handle(engine: &Engine, entity: &Entity, request: &AmqpMessage) ->
         "com.microsoft:peek-message" => {
             let from = integer(member(request, "from-sequence-number")).unwrap_or(1);
             let count = integer(member(request, "message-count")).unwrap_or(1).clamp(1, 1000) as usize;
-            let messages = store::peek(engine, entity, from, count);
+            let session = text(member(request, "session-id"));
+            let messages = store::peek(engine, entity, from, count, session.as_deref());
             if messages.is_empty() {
                 return reply(request, 204, "No messages", Value::Null);
             }
@@ -111,6 +114,46 @@ pub(crate) fn handle(engine: &Engine, entity: &Entity, request: &AmqpMessage) ->
             }
             body.insert(Value::String("expirations".into()), Value::Array(Array::from(expirations)));
             reply(request, 200, "OK", Value::Map(body))
+        }
+        "com.microsoft:renew-session-lock" => {
+            let Some(id) = text(member(request, "session-id")) else {
+                return reply(request, 400, "A session-id is required.", Value::Null);
+            };
+            match store::renew_session(engine, entity, &id) {
+                Some(until) => {
+                    body.insert(Value::String("expiration".into()), Value::Timestamp(timestamp(until)));
+                    reply(request, 200, "OK", Value::Map(body))
+                }
+                None => session_lock_lost(request),
+            }
+        }
+        "com.microsoft:get-session-state" => {
+            let Some(id) = text(member(request, "session-id")) else {
+                return reply(request, 400, "A session-id is required.", Value::Null);
+            };
+            match store::session_state(engine, entity, &id) {
+                Some(state) => {
+                    let state = state.map_or(Value::Null, |bytes| Value::Binary(ByteBuf::from(bytes)));
+                    body.insert(Value::String("session-state".into()), state);
+                    reply(request, 200, "OK", Value::Map(body))
+                }
+                None => session_lock_lost(request),
+            }
+        }
+        "com.microsoft:set-session-state" => {
+            let Some(id) = text(member(request, "session-id")) else {
+                return reply(request, 400, "A session-id is required.", Value::Null);
+            };
+            let state = match member(request, "session-state") {
+                Some(Value::Binary(bytes)) => Some(bytes.to_vec()),
+                Some(Value::String(text)) => Some(text.clone().into_bytes()),
+                _ => None,
+            };
+            if store::set_session_state(engine, entity, &id, state) {
+                reply(request, 200, "OK", Value::Null)
+            } else {
+                session_lock_lost(request)
+            }
         }
         "com.microsoft:update-disposition" => {
             let tokens = uuids(member(request, "lock-tokens"));
@@ -200,6 +243,23 @@ pub(crate) fn handle(engine: &Engine, entity: &Entity, request: &AmqpMessage) ->
 fn as_uuid(value: &Value) -> Option<uuid::Uuid> {
     match value {
         Value::Uuid(uuid) => Some(uuid::Uuid::from_bytes(*uuid.as_inner())),
+        _ => None,
+    }
+}
+
+fn session_lock_lost(request: &AmqpMessage) -> AmqpMessage {
+    reply(
+        request,
+        410,
+        "The session lock has expired on the MessageSession. Accept a new MessageSession.",
+        Value::Null,
+    )
+}
+
+fn text(value: Option<&Value>) -> Option<String> {
+    match value? {
+        Value::String(s) => Some(s.clone()),
+        Value::Symbol(s) => Some(s.0.clone()),
         _ => None,
     }
 }

@@ -250,3 +250,50 @@ def test_sql_filters_and_actions(servicebus, group, namespace):
             assert properties[b"quantity"] == 24
             assert b"color" not in properties
             receiver.complete_message(got[0])
+
+
+def test_sessions(servicebus, group, namespace):
+    from azure.servicebus import NEXT_AVAILABLE_SESSION
+    from azure.servicebus.exceptions import ServiceBusError
+
+    servicebus.queues.create_or_update(group, namespace.name, "orders", {"properties": {"requiresSession": True}})
+    with _client(servicebus, group, namespace) as client:
+        with client.get_queue_sender("orders") as sender:
+            sender.send_messages([
+                ServiceBusMessage("a1", session_id="a"),
+                ServiceBusMessage("b1", session_id="b"),
+                ServiceBusMessage("a2", session_id="a"),
+            ])
+            with pytest.raises(ServiceBusError):
+                sender.send_messages(ServiceBusMessage("no session"))
+
+        with client.get_queue_receiver("orders", session_id="b", max_wait_time=2) as receiver:
+            got = receiver.receive_messages(max_message_count=5, max_wait_time=2)
+            assert [str(m) for m in got] == ["b1"]
+            assert receiver.session.session_id == "b"
+            receiver.session.set_state(b"step-1")
+            assert receiver.session.get_state() == b"step-1"
+            before = receiver.session.locked_until_utc
+            receiver.session.renew_lock()
+            assert receiver.session.locked_until_utc >= before
+            for message in got:
+                receiver.complete_message(message)
+
+        with client.get_queue_receiver("orders", session_id=NEXT_AVAILABLE_SESSION, max_wait_time=2) as receiver:
+            assert receiver.session.session_id == "a"
+            # While this receiver holds session a, nobody else can lock it.
+            with client.get_queue_receiver("orders", session_id="a", max_wait_time=2) as other:
+                with pytest.raises(ServiceBusError):
+                    other.receive_messages(max_message_count=1, max_wait_time=1)
+            got = receiver.receive_messages(max_message_count=5, max_wait_time=2)
+            assert [str(m) for m in got] == ["a1", "a2"]
+            for message in got:
+                receiver.complete_message(message)
+
+        # The lock was released when the receiver closed, and the state kept.
+        with client.get_queue_receiver("orders", session_id="b", max_wait_time=2) as receiver:
+            assert receiver.session.get_state() == b"step-1"
+
+        with client.get_queue_receiver("orders", max_wait_time=1) as receiver:
+            with pytest.raises(ServiceBusError):
+                receiver.receive_messages(max_message_count=1, max_wait_time=1)

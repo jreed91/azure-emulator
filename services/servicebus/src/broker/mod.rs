@@ -118,11 +118,16 @@ async fn connection(engine: Arc<Engine>, stream: tokio::net::TcpStream) -> Resul
     Ok(())
 }
 
+/// An AMQP error as Service Bus writes one: with a tracking id in `info`.
+/// The Python SDK reads `info` positionally, and an error without it (which
+/// the encoder shortens to two fields) fails inside the SDK and hangs the send.
 fn error(condition: &str, description: impl Into<String>) -> AmqpError {
+    let mut info = Fields::new();
+    info.insert(Symbol::from("com.microsoft:tracking-id"), Value::String(uuid::Uuid::new_v4().to_string()));
     AmqpError {
         condition: ErrorCondition::Custom(Symbol::from(condition)),
         description: Some(description.into()),
-        info: None,
+        info: Some(Box::new(info)),
     }
 }
 
@@ -130,8 +135,96 @@ fn refusal_error(refusal: &Refusal) -> AmqpError {
     error(refusal.condition, refusal.description.clone())
 }
 
+/// Identifies a receiver link that holds a session lock.
+static NEXT_LINK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// How long a receiver asking for the next available session waits for one
+/// before its attach is refused, as Service Bus refuses it after a timeout.
+const SESSION_WAIT: Duration = Duration::from_secs(30);
+
+/// What a receiver link on a session-enabled entity was given at attach.
+enum SessionGrant {
+    /// The entity does not use sessions, and the receiver asked for none.
+    None,
+    /// The receiver holds the lock on this session of `entity`.
+    Held { id: String, owner: u64, entity: Box<Entity> },
+    /// The attach cannot be served; the link is closed with this error.
+    Refused(Refusal),
+}
+
+/// .NET ticks (100 ns since 0001-01-01), how Service Bus writes the session
+/// lock's expiry on the attach.
+fn dotnet_ticks(time: std::time::SystemTime) -> i64 {
+    const UNIX_EPOCH_TICKS: i64 = 621_355_968_000_000_000;
+    let millis = time.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64);
+    UNIX_EPOCH_TICKS + millis * 10_000
+}
+
+fn source_address(attach: &fe2o3_amqp_types::performatives::Attach) -> Option<String> {
+    attach.source.as_ref().and_then(|s| s.address.clone())
+}
+
+/// Locks a session for a receiver attaching to a session-enabled entity:
+/// the session it names in its filter, or the next one with messages.
+async fn grant_session(
+    engine: &Engine,
+    context: &Context,
+    attach: &mut fe2o3_amqp_types::performatives::Attach,
+) -> (SessionGrant, Option<std::time::SystemTime>) {
+    const FILTER: &str = "com.microsoft:session-filter";
+    let filter = attach.source.as_ref().and_then(|s| s.filter.as_ref()).and_then(|f| f.get(&Symbol::from(FILTER)).cloned());
+    let Some((namespace, path)) = source_address(attach).and_then(|a| context.entity_address(&a)) else {
+        return (SessionGrant::None, None);
+    };
+    let Ok(entity) = store::resolve(engine, &namespace, &path) else {
+        return (SessionGrant::None, None);
+    };
+    if !context.allows(&namespace, &path, Right::Listen) {
+        return (SessionGrant::None, None);
+    }
+    let refused = |condition, description: &str| (SessionGrant::Refused(store::refuse(condition, description)), None);
+    match (entity.requires_session(), &filter) {
+        (false, None) => return (SessionGrant::None, None),
+        (false, Some(_)) => {
+            return refused("amqp:not-allowed", "It is not possible for an entity that does not require sessions to create a session receiver.")
+        }
+        (true, None) => {
+            return refused("amqp:not-allowed", "It is not possible for an entity that requires sessions to create a non-sessionful message receiver.")
+        }
+        (true, Some(_)) => {}
+    }
+    let requested = match filter {
+        Some(Value::String(id)) => Some(id),
+        Some(Value::Symbol(id)) => Some(id.0),
+        _ => None,
+    };
+    let owner = NEXT_LINK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let notify = engine.state::<BrokerState>().lock().notifier(&entity.key);
+    let deadline = tokio::time::Instant::now() + SESSION_WAIT;
+    loop {
+        match store::acquire_session(engine, &entity, requested.as_deref(), owner) {
+            Ok((id, until)) => {
+                if let Some(filters) = attach.source.as_mut().and_then(|s| s.filter.as_mut()) {
+                    filters.insert(Symbol::from(FILTER), Value::String(id.clone()));
+                }
+                return (SessionGrant::Held { id, owner, entity: Box::new(entity) }, Some(until));
+            }
+            Err(store::SessionRefusal::Locked(refusal)) => return (SessionGrant::Refused(refusal), None),
+            Err(store::SessionRefusal::NoneAvailable) if tokio::time::Instant::now() >= deadline => {
+                return refused("com.microsoft:timeout", "No session is available to accept: no unlocked session has messages.")
+            }
+            Err(store::SessionRefusal::NoneAvailable) => {
+                tokio::select! {
+                    _ = notify.notified() => {}
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                }
+            }
+        }
+    }
+}
+
 async fn session_loop(engine: Arc<Engine>, context: Arc<Context>, mut session: ListenerSessionHandle) {
-    while let Some(attach) = session.next_incoming_attach().await {
+    while let Some(mut attach) = session.next_incoming_attach().await {
         // The largest message the link takes: what the SDKs size batches by.
         let max_message_size = attach
             .target
@@ -144,26 +237,54 @@ async fn session_loop(engine: Arc<Engine>, context: Arc<Context>, mut session: L
             .and_then(|address| context.entity_address(address))
             .and_then(|(namespace, path)| store::resolve(&engine, &namespace, &path).ok())
             .map_or(store::DEFAULT_MAX_MESSAGE_SIZE, |entity| entity.max_message_size());
-        let acceptor = LinkAcceptor::builder()
+        // A receiver on a session-enabled entity gets its session now: the
+        // attach the broker answers with names it.
+        let (grant, locked_until) = if attach.role == fe2o3_amqp_types::definitions::Role::Receiver {
+            grant_session(&engine, &context, &mut attach).await
+        } else {
+            (SessionGrant::None, None)
+        };
+        let mut acceptor = LinkAcceptor::builder()
             .supported_sender_settle_modes(SupportedSenderSettleModes::All)
             .supported_receiver_settle_modes(SupportedReceiverSettleModes::Both)
-            .max_message_size(max_message_size)
-            .build();
+            .max_message_size(max_message_size);
+        if let Some(until) = locked_until {
+            let mut properties = Fields::new();
+            properties.insert(Symbol::from("com.microsoft:locked-until-utc"), Value::Long(dotnet_ticks(until)));
+            acceptor = acceptor.properties(properties);
+        }
+        let acceptor = acceptor.build();
         let settled = attach.snd_settle_mode == SenderSettleMode::Settled;
-        let session_filter = attach
-            .source
-            .as_ref()
-            .and_then(|s| s.filter.as_ref())
-            .is_some_and(|f| f.keys().any(|k| k.0 == "com.microsoft:session-filter"));
         match acceptor.accept_incoming_attach(attach, &mut session).await {
             Ok(LinkEndpoint::Receiver(link)) => {
                 tokio::spawn(incoming(engine.clone(), context.clone(), link));
             }
             Ok(LinkEndpoint::Sender(link)) => {
-                tokio::spawn(outgoing(engine.clone(), context.clone(), link, settled, session_filter));
+                tokio::spawn(outgoing(engine.clone(), context.clone(), link, settled, grant));
             }
-            Err(_) => continue,
+            Err(_) => {
+                if let SessionGrant::Held { id, owner, entity } = grant {
+                    // Nothing will receive: let the session go at once.
+                    store::release_session(&engine, &entity, &id, owner);
+                }
+                continue;
+            }
         }
+    }
+}
+
+/// Releases a held session lock when dropped: when the receiver's link ends,
+/// however it ends.
+struct SessionRelease {
+    engine: Arc<Engine>,
+    entity: Entity,
+    id: String,
+    owner: u64,
+}
+
+impl Drop for SessionRelease {
+    fn drop(&mut self) {
+        store::release_session(&self.engine, &self.entity, &self.id, self.owner);
     }
 }
 
@@ -305,7 +426,7 @@ async fn management_requests(engine: Arc<Engine>, context: Arc<Context>, mut lin
 
 /// A link on which the client receives: replies from a node, or messages from
 /// an entity.
-async fn outgoing(engine: Arc<Engine>, context: Arc<Context>, link: Sender, remove: bool, session_filter: bool) {
+async fn outgoing(engine: Arc<Engine>, context: Arc<Context>, link: Sender, remove: bool, grant: SessionGrant) {
     let address = link.source().as_ref().and_then(|s| s.address.clone()).unwrap_or_default();
     let lower = address.to_ascii_lowercase();
     if lower == "$cbs" || lower.ends_with("/$management") {
@@ -330,11 +451,21 @@ async fn outgoing(engine: Arc<Engine>, context: Arc<Context>, link: Sender, remo
         let _ = link.close_with_error(error("amqp:unauthorized-access", "Unauthorized access. 'Listen' claim(s) are required to perform this operation.")).await;
         return;
     }
-    if session_filter || entity.requires_session() {
-        let _ = link.close_with_error(error("amqp:not-implemented", "Session receivers are not supported by the emulator yet.")).await;
-        return;
-    }
-    deliver(engine, link, entity, remove).await;
+    let session = match grant {
+        SessionGrant::None if entity.requires_session() => {
+            let _ = link
+                .close_with_error(error("amqp:not-allowed", "It is not possible for an entity that requires sessions to create a non-sessionful message receiver."))
+                .await;
+            return;
+        }
+        SessionGrant::None => None,
+        SessionGrant::Refused(refusal) => {
+            let _ = link.close_with_error(refusal_error(&refusal)).await;
+            return;
+        }
+        SessionGrant::Held { id, owner, entity: locked } => Some(SessionRelease { engine: engine.clone(), entity: *locked, id, owner }),
+    };
+    deliver(engine, link, entity, remove, session).await;
 }
 
 /// Sends a node's replies to the client's receiver link for it.
@@ -360,7 +491,7 @@ async fn replies(context: Arc<Context>, mut link: Sender, address: String) {
 const CREDIT_WAIT: Duration = Duration::from_millis(500);
 
 /// Delivers an entity's messages to a receiver link until it detaches.
-async fn deliver(engine: Arc<Engine>, mut link: Sender, entity: Entity, remove: bool) {
+async fn deliver(engine: Arc<Engine>, mut link: Sender, entity: Entity, remove: bool, session: Option<SessionRelease>) {
     let notify = engine.state::<BrokerState>().lock().notifier(&entity.key);
     loop {
         // Settings, including the status, are read fresh for each message.
@@ -379,7 +510,16 @@ async fn deliver(engine: Arc<Engine>, mut link: Sender, entity: Entity, remove: 
             }
             continue;
         }
-        let available = entity.check_receive().ok().and_then(|()| store::take(&engine, &entity, remove));
+        if let Some(held) = &session {
+            if !store::holds_session(&engine, &held.entity, &held.id, held.owner) {
+                let _ = link
+                    .close_with_error(error("com.microsoft:session-lock-lost", "The session lock has expired on the MessageSession. Accept a new MessageSession."))
+                    .await;
+                return;
+            }
+        }
+        let session_id = session.as_ref().map(|held| held.id.as_str());
+        let available = entity.check_receive().ok().and_then(|()| store::take(&engine, &entity, remove, session_id));
         let Some(delivery) = available else {
             tokio::select! {
                 _ = notify.notified() => {}

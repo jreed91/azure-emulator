@@ -218,10 +218,20 @@ struct Queue {
     seen: HashMap<String, SystemTime>,
 }
 
+/// One message session of a session-enabled entity.
+#[derive(Default)]
+struct Session {
+    /// The link holding the session lock, and until when.
+    lock: Option<(u64, SystemTime)>,
+    state: Option<Vec<u8>>,
+}
+
 /// Every entity's messages, and the sequence counters.
 #[derive(Default)]
 pub struct BrokerState {
     queues: HashMap<String, Queue>,
+    /// Sessions per entity key, by session id.
+    sessions: HashMap<String, HashMap<String, Session>>,
     /// Next sequence number per entity that assigns them (queues and topics).
     sequences: HashMap<String, i64>,
     notifiers: HashMap<String, Arc<Notify>>,
@@ -335,12 +345,6 @@ pub(crate) fn send(engine: &Engine, entity: &Entity, mut message: AmqpMessage) -
             format!("The message ({size} bytes) exceeds the entity's maximum message size ({max_bytes} bytes)."),
         ));
     }
-    if entity.requires_session() {
-        return Err(refuse(
-            "amqp:not-implemented",
-            "Session-enabled entities are not supported by the emulator yet.",
-        ));
-    }
 
     let now = SystemTime::now();
     let broker = engine.state::<BrokerState>();
@@ -370,6 +374,17 @@ pub(crate) fn send(engine: &Engine, entity: &Entity, mut message: AmqpMessage) -
         Kind::Subscription => Vec::new(),
     };
     let mut filled = std::collections::HashSet::new();
+    for (target, message) in &targets {
+        if target.requires_session() && session_of(message).is_none() {
+            return Err(refuse(
+                "amqp:not-allowed",
+                format!(
+                    "The SessionId was not set on a message, and it cannot be sent to the entity '{}'. Entities that have session support enabled can only receive messages that have the SessionId set.",
+                    target.path
+                ),
+            ));
+        }
+    }
     for (target, message) in targets {
         // A second copy for the same subscription (another rule's action)
         // needs a sequence number of its own.
@@ -531,9 +546,14 @@ fn delivered(stored: &Stored, locked_until: Option<SystemTime>) -> AmqpMessage {
     message
 }
 
+/// The session a message belongs to.
+pub(crate) fn session_of(message: &AmqpMessage) -> Option<&str> {
+    message.properties.as_ref().and_then(|p| p.group_id.as_deref())
+}
+
 /// Takes the next receivable message from `entity`: reserved (for peek-lock,
 /// locked once [`lock`] is called) or removed (receive-and-delete).
-pub(crate) fn take(engine: &Engine, entity: &Entity, remove: bool) -> Option<Delivery> {
+pub(crate) fn take(engine: &Engine, entity: &Entity, remove: bool, session: Option<&str>) -> Option<Delivery> {
     let now = SystemTime::now();
     let broker = engine.state::<BrokerState>();
     let mut broker = broker.lock();
@@ -542,7 +562,9 @@ pub(crate) fn take(engine: &Engine, entity: &Entity, remove: bool) -> Option<Del
     let sequence = *queue
         .messages
         .iter()
-        .find(|(_, m)| m.status == Status::Available && m.available_at <= now)?
+        .find(|(_, m)| {
+            m.status == Status::Available && m.available_at <= now && (session.is_none() || session_of(&m.message) == session)
+        })?
         .0;
     if remove {
         let stored = queue.messages.remove(&sequence)?;
@@ -670,7 +692,7 @@ pub(crate) fn renew(engine: &Engine, entity: &Entity, token: uuid::Uuid) -> Opti
 
 /// Up to `count` messages from sequence number `from`, in any state, without
 /// locking them: what peeking sees.
-pub(crate) fn peek(engine: &Engine, entity: &Entity, from: i64, count: usize) -> Vec<AmqpMessage> {
+pub(crate) fn peek(engine: &Engine, entity: &Entity, from: i64, count: usize, session: Option<&str>) -> Vec<AmqpMessage> {
     let now = SystemTime::now();
     let broker = engine.state::<BrokerState>();
     let mut broker = broker.lock();
@@ -678,7 +700,14 @@ pub(crate) fn peek(engine: &Engine, entity: &Entity, from: i64, count: usize) ->
     broker
         .queues
         .get(&entity.key)
-        .map(|q| q.messages.range(from..).take(count).map(|(_, m)| delivered(m, None)).collect())
+        .map(|q| {
+            q.messages
+                .range(from..)
+                .filter(|(_, m)| session.is_none() || session_of(&m.message) == session)
+                .take(count)
+                .map(|(_, m)| delivered(m, None))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -691,6 +720,7 @@ pub(crate) fn forget(engine: &Engine, prefix: &str) {
     let gone = |key: &String| key == &prefix || key.starts_with(&format!("{prefix}/"));
     broker.queues.retain(|key, _| !gone(key));
     broker.sequences.retain(|key, _| !gone(key));
+    broker.sessions.retain(|key, _| !gone(key));
 }
 
 /// The sequence number of the message locked with `token`, if the lock holds.
@@ -744,6 +774,125 @@ pub(crate) fn cancel_scheduled(engine: &Engine, entity: &Entity, sequences: &[i6
     }
 }
 
+
+/// Why a session could not be locked.
+pub(crate) enum SessionRefusal {
+    /// Another receiver holds it.
+    Locked(Refusal),
+    /// No session has messages to receive right now.
+    NoneAvailable,
+}
+
+/// Locks a session of `entity` for the link `owner`: the one `requested`, or
+/// else the session of the oldest receivable message whose session is free.
+/// Returns the session id and when the lock expires.
+pub(crate) fn acquire_session(
+    engine: &Engine,
+    entity: &Entity,
+    requested: Option<&str>,
+    owner: u64,
+) -> Result<(String, SystemTime), SessionRefusal> {
+    let now = SystemTime::now();
+    let until = now + entity.lock_duration();
+    let broker = engine.state::<BrokerState>();
+    let mut broker = broker.lock();
+    sweep(&mut broker, entity, now);
+    let free = |sessions: Option<&HashMap<String, Session>>, id: &str| {
+        sessions.and_then(|s| s.get(id)).and_then(|s| s.lock).is_none_or(|(holder, until)| holder == owner || now >= until)
+    };
+    let id = match requested {
+        Some(id) => {
+            if !free(broker.sessions.get(&entity.key), id) {
+                return Err(SessionRefusal::Locked(refuse(
+                    "com.microsoft:session-cannot-be-locked",
+                    format!("The requested session '{id}' cannot be accepted. It may be locked by another receiver."),
+                )));
+            }
+            id.to_string()
+        }
+        None => {
+            let sessions = broker.sessions.get(&entity.key);
+            broker
+                .queues
+                .get(&entity.key)
+                .and_then(|q| {
+                    q.messages
+                        .values()
+                        .filter(|m| m.status == Status::Available && m.available_at <= now)
+                        .filter_map(|m| session_of(&m.message))
+                        .find(|id| free(sessions, id))
+                        .map(str::to_string)
+                })
+                .ok_or(SessionRefusal::NoneAvailable)?
+        }
+    };
+    broker.sessions.entry(entity.key.clone()).or_default().entry(id.clone()).or_default().lock = Some((owner, until));
+    Ok((id, until))
+}
+
+/// Whether the link `owner` still holds the lock on session `id`.
+pub(crate) fn holds_session(engine: &Engine, entity: &Entity, id: &str, owner: u64) -> bool {
+    let now = SystemTime::now();
+    let broker = engine.state::<BrokerState>();
+    let broker = broker.lock();
+    broker
+        .sessions
+        .get(&entity.key)
+        .and_then(|s| s.get(id))
+        .and_then(|s| s.lock)
+        .is_some_and(|(holder, until)| holder == owner && now < until)
+}
+
+/// Releases the lock the link `owner` holds on session `id`.
+pub(crate) fn release_session(engine: &Engine, entity: &Entity, id: &str, owner: u64) {
+    let broker = engine.state::<BrokerState>();
+    let mut broker = broker.lock();
+    if let Some(session) = broker.sessions.get_mut(&entity.key).and_then(|s| s.get_mut(id)) {
+        if session.lock.is_some_and(|(holder, _)| holder == owner) {
+            session.lock = None;
+        }
+    }
+    broker.notifier(&entity.key).notify_waiters();
+}
+
+/// Renews a held session lock; its new expiry, or `None` if it is not held.
+pub(crate) fn renew_session(engine: &Engine, entity: &Entity, id: &str) -> Option<SystemTime> {
+    let now = SystemTime::now();
+    let broker = engine.state::<BrokerState>();
+    let mut broker = broker.lock();
+    let session = broker.sessions.get_mut(&entity.key)?.get_mut(id)?;
+    let (holder, until) = session.lock?;
+    if now >= until {
+        return None;
+    }
+    let until = now + entity.lock_duration();
+    session.lock = Some((holder, until));
+    Some(until)
+}
+
+/// A session's state, if it is locked (by anyone).
+pub(crate) fn session_state(engine: &Engine, entity: &Entity, id: &str) -> Option<Option<Vec<u8>>> {
+    let now = SystemTime::now();
+    let broker = engine.state::<BrokerState>();
+    let broker = broker.lock();
+    let session = broker.sessions.get(&entity.key)?.get(id)?;
+    session.lock.filter(|(_, until)| now < *until)?;
+    Some(session.state.clone())
+}
+
+/// Sets a locked session's state; false if the session is not locked.
+pub(crate) fn set_session_state(engine: &Engine, entity: &Entity, id: &str, state: Option<Vec<u8>>) -> bool {
+    let now = SystemTime::now();
+    let broker = engine.state::<BrokerState>();
+    let mut broker = broker.lock();
+    match broker.sessions.get_mut(&entity.key).and_then(|s| s.get_mut(id)) {
+        Some(session) if session.lock.is_some_and(|(_, until)| now < until) => {
+            session.state = state;
+            true
+        }
+        _ => false,
+    }
+}
 
 /// Encodes a message for the wire. The header is written by hand with every
 /// field present: the derived encoding leaves out fields at their defaults,
