@@ -5,9 +5,10 @@
 //! SDKs complete, abandon, defer and dead-letter by lock token),
 //! `schedule-message`, `cancel-scheduled-message` and
 //! `receive-by-sequence-number` (deferred messages), and for sessions
-//! `renew-session-lock`, `get-session-state` and `set-session-state`. Every
-//! other operation (rules, listing sessions) answers status 501 rather than
-//! pretending.
+//! `renew-session-lock`, `get-session-state`, `set-session-state` and
+//! `get-message-sessions`; and for a subscription's rules `add-rule`,
+//! `remove-rule` and `enumerate-rules` (the same rules Resource Manager
+//! shows). Any other operation answers status 501 rather than pretending.
 
 use std::time::SystemTime;
 
@@ -19,6 +20,7 @@ use serde_bytes::ByteBuf;
 
 use fe2o3_amqp_types::messaging::message::__private::Deserializable;
 
+use super::rules;
 use super::store::{self, AmqpMessage, Entity, Settlement};
 
 fn reply(request: &AmqpMessage, status: i32, description: &str, body: Value) -> AmqpMessage {
@@ -154,6 +156,63 @@ pub(crate) fn handle(engine: &Engine, entity: &Entity, request: &AmqpMessage) ->
             } else {
                 session_lock_lost(request)
             }
+        }
+        "com.microsoft:get-message-sessions" => {
+            let skip = integer(member(request, "skip")).unwrap_or(0).max(0) as usize;
+            let top = integer(member(request, "top")).unwrap_or(100).clamp(0, 1000) as usize;
+            let ids: Vec<Value> = store::session_ids(engine, entity).into_iter().skip(skip).take(top).map(Value::String).collect();
+            if ids.is_empty() {
+                return reply(request, 204, "No sessions", Value::Null);
+            }
+            body.insert(Value::String("skip".into()), Value::Int((skip + ids.len()) as i32));
+            body.insert(Value::String("sessions-ids".into()), Value::Array(Array::from(ids)));
+            reply(request, 200, "OK", Value::Map(body))
+        }
+        "com.microsoft:add-rule" | "com.microsoft:remove-rule" | "com.microsoft:enumerate-rules" if entity.kind != store::Kind::Subscription => {
+            reply(request, 400, "Rules belong to a topic's subscriptions.", Value::Null)
+        }
+        "com.microsoft:add-rule" => {
+            let Some(name) = text(member(request, "rule-name")).filter(|n| !n.is_empty()) else {
+                return reply(request, 400, "A rule-name is required.", Value::Null);
+            };
+            let properties = match member(request, "rule-description").map(rules::from_description) {
+                Some(Ok(properties)) => properties,
+                Some(Err(e)) => return reply(request, 400, &e, Value::Null),
+                None => return reply(request, 400, "A rule-description is required.", Value::Null),
+            };
+            match rules::add(engine, entity, &name, properties) {
+                Ok(()) => reply(request, 200, "OK", Value::Null),
+                Err((status, e)) => reply(request, status, &e, Value::Null),
+            }
+        }
+        "com.microsoft:remove-rule" => {
+            let Some(name) = text(member(request, "rule-name")) else {
+                return reply(request, 400, "A rule-name is required.", Value::Null);
+            };
+            if rules::remove(engine, entity, &name) {
+                reply(request, 200, "OK", Value::Null)
+            } else {
+                reply(request, 404, &format!("The rule '{name}' was not found."), Value::Null)
+            }
+        }
+        "com.microsoft:enumerate-rules" => {
+            let skip = integer(member(request, "skip")).unwrap_or(0).max(0) as usize;
+            let top = integer(member(request, "top")).unwrap_or(i64::MAX).max(0) as usize;
+            let listed: Vec<Value> = rules::list(engine, entity)
+                .into_iter()
+                .skip(skip)
+                .take(top)
+                .map(|(name, properties)| {
+                    let mut entry = OrderedMap::new();
+                    entry.insert(Value::String("rule-description".into()), rules::to_description(&name, &properties));
+                    Value::Map(entry)
+                })
+                .collect();
+            if listed.is_empty() {
+                return reply(request, 204, "No rules", Value::Null);
+            }
+            body.insert(Value::String("rules".into()), Value::List(listed));
+            reply(request, 200, "OK", Value::Map(body))
         }
         "com.microsoft:update-disposition" => {
             let tokens = uuids(member(request, "lock-tokens"));
