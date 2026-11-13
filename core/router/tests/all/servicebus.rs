@@ -184,3 +184,24 @@ async fn queues_topics_subscriptions_and_rules() {
     let reply = client.arm(Method::GET, &path(rule), None).await;
     assert_eq!(reply.error_code(), "ParentResourceNotFound");
 }
+
+#[tokio::test]
+async fn network_rule_set() {
+    let client = Client::new();
+    namespace(&client).await;
+    let rules = get(&client, "orders-bus/networkRuleSets/default").await;
+    assert_eq!(rules["properties"]["defaultAction"], "Allow");
+    assert_eq!(rules["properties"]["ipRules"], json!([]));
+
+    let update = json!({"properties": {"defaultAction": "Deny", "ipRules": [{"ipMask": "10.0.0.0/24", "action": "Allow"}]}});
+    let reply = put(&client, "orders-bus/networkRuleSets/default", update).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(reply.json()["properties"]["ipRules"][0]["ipMask"], "10.0.0.0/24");
+    assert_eq!(reply.json()["properties"]["publicNetworkAccess"], "Enabled", "unmentioned settings are kept");
+    assert_eq!(get(&client, "orders-bus/networkRuleSets").await["value"].as_array().unwrap().len(), 1);
+
+    let reply = put(&client, "orders-bus/networkRuleSets/default", json!({"properties": {"defaultAction": "Maybe"}})).await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+    let reply = put(&client, "orders-bus/networkRuleSets/other", json!({"properties": {}})).await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+}

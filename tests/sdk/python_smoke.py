@@ -9,6 +9,7 @@ The account and vault hostnames it uses must resolve to the emulator; see the
 README's section on hostnames.
 """
 
+import datetime
 import os
 import sys
 
@@ -20,7 +21,18 @@ from azure.mgmt.msi import ManagedServiceIdentityClient
 from azure.mgmt.servicebus import ServiceBusManagementClient
 from azure.mgmt.resource.resources import ResourceManagementClient
 from azure.mgmt.storage import StorageManagementClient
-from azure.storage.blob import BlobServiceClient
+from azure.storage.blob import (
+    AccountSasPermissions,
+    BlobClient,
+    BlobSasPermissions,
+    BlobServiceClient,
+    ContainerClient,
+    ContainerSasPermissions,
+    ResourceTypes,
+    generate_account_sas,
+    generate_blob_sas,
+    generate_container_sas,
+)
 
 BASE = os.environ.get("AZURE_EMULATOR_URL", "https://localhost:10443")
 PORT = BASE.rsplit(":", 1)[1]
@@ -111,6 +123,45 @@ storage.management_policies.create_or_update(
 )
 assert storage.management_policies.get(GROUP, ACCOUNT, "default").policy.rules[0].name == "expire"
 step("storage management: service properties / containers / queue / table / share / encryption scope / lifecycle policy")
+
+# Shared access signatures the SDK signs itself, verified by the emulator.
+expiry = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)
+account_sas = generate_account_sas(
+    ACCOUNT, key, ResourceTypes(service=True, container=True, object=True),
+    AccountSasPermissions(read=True, write=True, delete=True, list=True, create=True), expiry,
+)
+sas_service = BlobServiceClient(blob_url, credential=account_sas)
+sas_container = sas_service.create_container("sas")
+sas_container.upload_blob("a.txt", b"signed")
+assert "sas" in [c.name for c in sas_service.list_containers()]
+read_only = generate_account_sas(ACCOUNT, key, ResourceTypes(object=True), AccountSasPermissions(read=True), expiry)
+assert BlobClient(blob_url, "sas", "a.txt", credential=read_only).download_blob().readall() == b"signed"
+blob_sas = generate_blob_sas(ACCOUNT, "sas", "a.txt", account_key=key, permission=BlobSasPermissions(read=True), expiry=expiry)
+assert BlobClient(blob_url, "sas", "a.txt", credential=blob_sas).download_blob().readall() == b"signed"
+container_sas = generate_container_sas(ACCOUNT, "sas", account_key=key, permission=ContainerSasPermissions(read=True, list=True), expiry=expiry)
+assert [b.name for b in ContainerClient(blob_url, "sas", credential=container_sas).list_blobs()] == ["a.txt"]
+refusals = [
+    lambda: BlobClient(blob_url, "sas", "b.txt", credential=read_only).upload_blob(b"x"),
+    lambda: BlobClient(blob_url, "sas", "other.txt", credential=blob_sas).download_blob().readall(),
+    lambda: BlobClient(blob_url, "sas", "a.txt", credential=generate_blob_sas(
+        ACCOUNT, "sas", "a.txt", account_key=key, permission=BlobSasPermissions(read=True),
+        expiry=expiry - datetime.timedelta(hours=2))).download_blob().readall(),
+    lambda: BlobClient(blob_url, "sas", "a.txt", credential=generate_blob_sas(
+        ACCOUNT, "sas", "a.txt", account_key="A" * 88, permission=BlobSasPermissions(read=True), expiry=expiry)).download_blob().readall(),
+]
+for attempt in refusals:
+    try:
+        attempt()
+        sys.exit("a shared access signature was accepted that should have been refused")
+    except HttpResponseError as error:
+        assert error.status_code == 403, error
+# A token issued by Resource Manager, used by the SDK.
+issued = storage.storage_accounts.list_account_sas(
+    GROUP, ACCOUNT,
+    {"signedServices": "b", "signedResourceTypes": "o", "signedPermission": "r", "signedExpiryTime": expiry.strftime("%Y-%m-%dT%H:%M:%SZ")},
+).account_sas_token
+assert BlobClient(blob_url, "sas", "a.txt", credential=issued).download_blob().readall() == b"signed"
+step("shared access signatures: SDK-signed account, container and blob tokens; a token issued by Resource Manager")
 
 try:
     BlobServiceClient(blob_url, credential="A" * 88).create_container("nope")

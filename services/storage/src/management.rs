@@ -57,6 +57,7 @@ pub(crate) fn register(registry: &mut ArmRegistry) {
     registry.register_type(Tables);
     registry.register_type(FileShares);
     registry.register_type(EncryptionScopes);
+    registry.register_type(LocalUsers);
     registry.register_type(Policies {
         resource_type: "Microsoft.Storage/storageAccounts/managementPolicies",
     });
@@ -311,6 +312,127 @@ impl ResourceTypeHandler for EncryptionScopes {
 
     fn patch(&self, ctx: &ArmContext<'_>, existing: &Resource, body: &Value) -> Result<Value, ArmError> {
         patch_as_put(self, ctx, existing, body)
+    }
+}
+
+/// Local users: the SFTP and NFS identities of an account.
+struct LocalUsers;
+
+/// A random string of `len` characters from `alphabet`.
+fn random_text(len: usize, alphabet: &[u8]) -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    (0..len).map(|_| alphabet[rng.gen_range(0..alphabet.len())] as char).collect()
+}
+
+impl ResourceTypeHandler for LocalUsers {
+    fn resource_type(&self) -> &'static str {
+        "Microsoft.Storage/storageAccounts/localUsers"
+    }
+
+    fn put(&self, ctx: &ArmContext<'_>, request: &PutRequest<'_>) -> Result<Value, ArmError> {
+        // The specification: 3 to 64 lowercase letters and numbers.
+        let name = request.name.as_bytes();
+        let valid = (3..=64).contains(&name.len()) && name.iter().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
+        if !valid {
+            return Err(invalid(format!(
+                "The local user name '{}' is invalid. It must be 3 to 64 lowercase letters and numbers.",
+                request.name
+            )));
+        }
+        let defaults = match request.existing {
+            Some(_) => json!({}),
+            None => {
+                let state = ctx.engine.state::<StorageState>();
+                let mut state = state.lock();
+                state.local_user_count += 1;
+                // The service assigns these once.
+                json!({
+                    "sid": format!("S-1-2-0-{}-{}-{}-{}", random_text(10, b"123456789"), random_text(10, b"123456789"), random_text(10, b"123456789"), 999 + state.local_user_count),
+                    "userId": 999 + state.local_user_count,
+                    "hasSharedKey": false,
+                    "hasSshKey": false,
+                    "hasSshPassword": false,
+                })
+            }
+        };
+        let mut properties = overlay(
+            request,
+            defaults,
+            &[
+                "permissionScopes",
+                "homeDirectory",
+                "sshAuthorizedKeys",
+                "hasSharedKey",
+                "hasSshKey",
+                "hasSshPassword",
+                "groupId",
+                "allowAclAuthorization",
+                "extendedGroups",
+                "isNFSv3Enabled",
+            ],
+        );
+        // Supplying keys is what gives a user an SSH key.
+        if requested(request.body).get("sshAuthorizedKeys").is_some_and(|keys| keys.as_array().is_some_and(|k| !k.is_empty())) {
+            properties["hasSshKey"] = json!(true);
+        }
+        Ok(properties)
+    }
+
+    fn patch(&self, ctx: &ArmContext<'_>, existing: &Resource, body: &Value) -> Result<Value, ArmError> {
+        patch_as_put(self, ctx, existing, body)
+    }
+
+    fn view(&self, _ctx: &ArmContext<'_>, resource: &mut Resource) {
+        // Authorized keys are only ever returned by listKeys.
+        if let Some(properties) = resource.properties.as_object_mut() {
+            properties.remove("sshAuthorizedKeys");
+        }
+    }
+
+    fn actions(&self) -> &'static [&'static str] {
+        &["listKeys", "regeneratePassword"]
+    }
+
+    fn action(&self, ctx: &ArmContext<'_>, resource: &Resource, action: &str, _body: &Value) -> Result<Value, ArmError> {
+        match action.to_ascii_lowercase().as_str() {
+            "listkeys" => {
+                let mut out = json!({
+                    "sshAuthorizedKeys": resource.properties.get("sshAuthorizedKeys").cloned().unwrap_or_else(|| json!([])),
+                });
+                if resource.properties["hasSharedKey"] == true {
+                    let state = ctx.engine.state::<StorageState>();
+                    let mut state = state.lock();
+                    let key = state
+                        .local_user_keys
+                        .entry(resource.id.to_ascii_lowercase())
+                        .or_insert_with(crate::new_key);
+                    out["sharedKey"] = json!(key);
+                }
+                Ok(out)
+            }
+            "regeneratepassword" => {
+                // The password is shown once and never stored in readable form.
+                let password = random_text(32, b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789");
+                let state = ctx.engine.state::<ArmState>();
+                if let Some(user) = state.lock().resource_mut(&resource.id) {
+                    user.properties["hasSshPassword"] = json!(true);
+                }
+                Ok(json!({"sshPassword": password}))
+            }
+            other => Err(ArmError::not_implemented(format_args!(
+                "the '{other}' action on {}",
+                self.resource_type()
+            ))),
+        }
+    }
+
+    fn deleted(&self, ctx: &ArmContext<'_>, resource: &Resource) {
+        ctx.engine
+            .state::<StorageState>()
+            .lock()
+            .local_user_keys
+            .remove(&resource.id.to_ascii_lowercase());
     }
 }
 

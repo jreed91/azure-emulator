@@ -34,6 +34,7 @@ pub struct ServiceBusState {
 /// Mounts the provider on Resource Manager.
 pub fn register(registry: &mut ArmRegistry) {
     registry.register_type(namespaces::Namespaces);
+    registry.register_type(namespaces::NetworkRuleSets);
     for kind in namespaces::AUTHORIZATION_RULE_TYPES {
         registry.register_type(namespaces::AuthorizationRules(kind));
     }

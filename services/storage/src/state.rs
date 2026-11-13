@@ -9,6 +9,10 @@ use axum::body::Bytes;
 pub struct StorageState {
     /// Keyed by account name, which is globally unique.
     pub(crate) accounts: BTreeMap<String, Account>,
+    /// Lowercased local user id → its shared key, minted on first use.
+    pub(crate) local_user_keys: BTreeMap<String, String>,
+    /// How many local users have ever been created; numbers their user ids.
+    pub(crate) local_user_count: u64,
     etag_sequence: u64,
 }
 
