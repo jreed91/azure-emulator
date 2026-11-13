@@ -13,3 +13,10 @@ PrivateEndpointConnections_CreateOrUpdate / NameSpacePrivateEndPointConnectionCr
 # emulator refuses to pair with one that does not exist.
 DisasterRecoveryConfigs_CreateOrUpdate / SBAliasCreate -- the partner namespace in the example does not exist
 MigrationConfigs_CreateAndStartMigration / MigrationConfigurationsStartMigration -- the target namespace in the example does not exist
+
+# Object replication requires blob versioning on both accounts and the change
+# feed on the source; the examples' accounts enable neither.
+ObjectReplicationPolicies_CreateOrUpdate / StorageAccountCreateObjectReplicationPolicyOnDestination -- the example accounts do not enable blob versioning
+ObjectReplicationPolicies_CreateOrUpdate / StorageAccountCreateObjectReplicationPolicyOnSource -- the example accounts do not enable blob versioning
+ObjectReplicationPolicies_CreateOrUpdate / StorageAccountUpdateObjectReplicationPolicyOnDestination -- the example accounts do not enable blob versioning
+ObjectReplicationPolicies_CreateOrUpdate / StorageAccountUpdateObjectReplicationPolicyOnSource -- the example accounts do not enable blob versioning

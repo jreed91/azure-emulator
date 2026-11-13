@@ -31,6 +31,8 @@ pub(crate) struct Account {
     pub keys: [String; 2],
     pub key_created: [String; 2],
     pub containers: BTreeMap<String, Container>,
+    /// Object replication policies installed on this account, by policy id.
+    pub replication: BTreeMap<String, crate::replication::Policy>,
 }
 
 pub(crate) struct Container {
@@ -173,4 +175,8 @@ pub(crate) struct Blob {
     pub created: SystemTime,
     pub last_modified: SystemTime,
     pub metadata: Vec<(String, String)>,
+    /// On a source blob: the `{policy}_{rule}` pairs it has been replicated by.
+    pub replicated_by: Vec<String>,
+    /// On a replica: the policy that wrote it.
+    pub replica_of: Option<String>,
 }

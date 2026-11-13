@@ -259,3 +259,32 @@ def test_file_share_lease(storage, group, account):
 
 def test_revoke_user_delegation_keys(storage, group, account):
     storage.storage_accounts.revoke_user_delegation_keys(group, account.name)
+
+
+def test_object_replication(storage, credential, group):
+    from conftest import unique
+
+    accounts = []
+    for _ in range(2):
+        name = unique("st")
+        created = storage.storage_accounts.begin_create(
+            group, name, {"location": "eastus", "kind": "StorageV2", "sku": {"name": "Standard_LRS"}}
+        ).result()
+        storage.blob_services.set_service_properties(
+            group, name, {"properties": {"isVersioningEnabled": True, "changeFeed": {"enabled": True}}}
+        )
+        accounts.append((name, created.primary_endpoints.blob))
+    (source, source_url), (destination, destination_url) = accounts
+    storage.blob_containers.create(group, source, "outbox", {})
+    storage.blob_containers.create(group, destination, "inbox", {})
+
+    rules = [{"sourceContainer": "outbox", "destinationContainer": "inbox"}]
+    body = {"properties": {"sourceAccount": source, "destinationAccount": destination, "rules": rules}}
+    on_destination = storage.object_replication_policies.create_or_update(group, destination, "default", body)
+    body["properties"]["rules"][0]["ruleId"] = on_destination.rules[0].rule_id
+    on_source = storage.object_replication_policies.create_or_update(group, source, on_destination.policy_id, body)
+    assert on_source.enabled_time is not None
+
+    BlobServiceClient(source_url, credential=credential).get_container_client("outbox").upload_blob("a.txt", b"replicated")
+    replica = BlobServiceClient(destination_url, credential=credential).get_blob_client("inbox", "a.txt")
+    assert replica.download_blob().readall() == b"replicated"

@@ -4,6 +4,7 @@
 pub mod blob;
 mod management;
 mod protection;
+mod replication;
 mod sas;
 pub mod scaffold;
 mod shared_key;
@@ -43,6 +44,7 @@ pub fn register(registry: &mut ArmRegistry) {
     );
     management::register(registry);
     protection::register(registry);
+    replication::register(registry);
     // Everything else in the specification is mounted as a 501 stub.
     registry.register_type(emulator_core::arm::CreatedByNetwork("Microsoft.Storage/storageAccounts/privateEndpointConnections"));
     registry.register_type(emulator_core::arm::CreatedByNetwork("Microsoft.Storage/storageAccounts/networkSecurityPerimeterConfigurations"));
@@ -122,6 +124,7 @@ impl ResourceTypeHandler for StorageAccounts {
                     keys: [new_key(), new_key()],
                     key_created: [created.clone(), created],
                     containers: Default::default(),
+                    replication: Default::default(),
                 },
             );
         }

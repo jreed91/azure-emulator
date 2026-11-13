@@ -621,8 +621,11 @@ impl BlobRequest<'_> {
             created: existing.map(|b| b.created).unwrap_or(now),
             last_modified: now,
             metadata: self.metadata(),
+            replicated_by: Vec::new(),
+            replica_of: None,
         };
         found.blobs.insert(blob.to_string(), stored);
+        crate::replication::replicate(&mut state, self.account, container, blob);
         Ok(respond(
             StatusCode::CREATED,
             vec![
@@ -673,6 +676,14 @@ impl BlobRequest<'_> {
             (name("x-ms-blob-type"), "BlockBlob".into()),
             (name("x-ms-server-encrypted"), "true".into()),
         ];
+        for pair in &found.replicated_by {
+            if let Ok(key) = HeaderName::try_from(format!("x-ms-or-{pair}")) {
+                headers.push((key, "complete".into()));
+            }
+        }
+        if let Some(policy) = &found.replica_of {
+            headers.push((name("x-ms-or-policy-id"), policy.clone()));
+        }
         lease_headers(&mut headers);
         for (key, value) in &found.metadata {
             if let Ok(key) = HeaderName::try_from(format!("x-ms-meta-{key}")) {
