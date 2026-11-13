@@ -40,6 +40,7 @@ impl Emulator {
         service_keyvault::register(&mut registry);
         service_managedidentity::register(&mut registry);
         service_servicebus::register(&mut registry);
+        service_cosmosdb::register(&mut registry);
         // emulator-scaffold: new services are registered above this line.
         Self {
             engine: Arc::new(Engine::new(config)),
@@ -80,6 +81,10 @@ async fn dispatch(State(emulator): State<Emulator>, request: Request<Body>) -> R
     }
     if service_entra::matches(request.uri().path()) {
         return service_entra::handle(engine, request).await;
+    }
+    if host.ends_with(&format!(".documents.{}", config.dns_suffix)) || service_cosmosdb::data::is_cosmos_request(request.headers()) {
+        let host = request.headers().get(http::header::HOST).and_then(|h| h.to_str().ok()).unwrap_or(&host).to_string();
+        return service_cosmosdb::data::handle(engine, host, request).await;
     }
     if request.uri().path() == "/$servicebus/websocket" {
         return servicebus_websocket(engine, request).await;

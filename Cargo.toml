@@ -8,6 +8,7 @@ members = [
     "services/keyvault",
     "services/managedidentity",
     "services/servicebus",
+    "services/cosmosdb",
     "tools/scaffold",
 ]
 
@@ -20,6 +21,7 @@ tokio-rustls = "0.26"
 rustls-pemfile = "2"
 bytes = "1"
 emulator-core = { path = "core/emulator-core" }
+service-cosmosdb = { path = "services/cosmosdb" }
 service-servicebus = { path = "services/servicebus" }
 service-managedidentity = { path = "services/managedidentity" }
 service-entra = { path = "services/entra" }

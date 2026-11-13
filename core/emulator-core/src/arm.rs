@@ -207,6 +207,12 @@ pub trait ResourceTypeHandler: Send + Sync {
     /// Called after the resource has been removed from the store.
     fn deleted(&self, _ctx: &ArmContext<'_>, _resource: &Resource) {}
 
+    /// The status a successful `DELETE` answers with. Most types answer
+    /// `200`; some specifications allow only `202` or `204`.
+    fn delete_status(&self) -> StatusCode {
+        StatusCode::OK
+    }
+
     /// The actions [`ResourceTypeHandler::action`] implements, as the spec names
     /// them. Used to report coverage; dispatch does not depend on it.
     fn actions(&self) -> &'static [&'static str] {
@@ -1357,7 +1363,7 @@ impl ArmRequest<'_> {
                     ids.iter().filter_map(|id| state.resources.remove(id)).collect()
                 };
                 self.notify_deleted(&group.name, &removed);
-                Ok(StatusCode::OK.into_response())
+                Ok(handler.delete_status().into_response())
             }
             _ => Err(self.unsupported(rest)),
         }
