@@ -38,6 +38,9 @@ pub(crate) struct Account {
     pub queues: BTreeMap<String, crate::queue::Queue>,
     /// Tables by lowercased name: the Table data plane's, and Resource Manager's.
     pub tables: BTreeMap<String, crate::table::Table>,
+    /// File shares by name: the Files data plane's, and Resource Manager's.
+    #[serde(default)]
+    pub shares: BTreeMap<String, crate::files::Share>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
