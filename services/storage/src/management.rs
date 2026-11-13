@@ -230,7 +230,7 @@ impl ResourceTypeHandler for Tables {
         "Microsoft.Storage/storageAccounts/tableServices/tables"
     }
 
-    fn put(&self, _ctx: &ArmContext<'_>, request: &PutRequest<'_>) -> Result<Value, ArmError> {
+    fn put(&self, ctx: &ArmContext<'_>, request: &PutRequest<'_>) -> Result<Value, ArmError> {
         // The specification's pattern: ^[A-Za-z][A-Za-z0-9]{2,62}$
         let name = request.name.as_bytes();
         let valid = (3..=63).contains(&name.len())
@@ -242,7 +242,27 @@ impl ResourceTypeHandler for Tables {
                 request.name
             )));
         }
+        let account = request.id.split('/').skip_while(|p| !p.eq_ignore_ascii_case("storageAccounts")).nth(1).unwrap_or_default().to_string();
+        let state = ctx.engine.state::<StorageState>();
+        let mut state = state.lock();
+        if let Some(account) = state.accounts.get_mut(&account) {
+            account.tables.entry(request.name.to_ascii_lowercase()).or_insert_with(|| crate::table::Table::new(request.name));
+        }
         Ok(overlay(request, json!({"tableName": request.name}), &["signedIdentifiers"]))
+    }
+
+    /// The specification answers a table delete with 204 only.
+    fn delete_status(&self) -> http::StatusCode {
+        http::StatusCode::NO_CONTENT
+    }
+
+    fn deleted(&self, ctx: &ArmContext<'_>, resource: &Resource) {
+        let account = resource.id.split('/').skip_while(|p| !p.eq_ignore_ascii_case("storageAccounts")).nth(1).unwrap_or_default().to_string();
+        let state = ctx.engine.state::<StorageState>();
+        let mut state = state.lock();
+        if let Some(account) = state.accounts.get_mut(&account) {
+            account.tables.remove(&resource.name.to_ascii_lowercase());
+        }
     }
 
     fn patch(&self, ctx: &ArmContext<'_>, existing: &Resource, body: &Value) -> Result<Value, ArmError> {

@@ -3,6 +3,7 @@
 
 pub mod blob;
 pub mod queue;
+pub mod table;
 mod management;
 mod protection;
 mod replication;
@@ -127,6 +128,7 @@ impl ResourceTypeHandler for StorageAccounts {
                     containers: Default::default(),
                     replication: Default::default(),
                     queues: Default::default(),
+                    tables: Default::default(),
                 },
             );
         }
@@ -162,6 +164,7 @@ impl ResourceTypeHandler for StorageAccounts {
         properties["primaryEndpoints"] = json!({
             "blob": ctx.engine.config().blob_endpoint(name),
             "queue": ctx.engine.config().queue_endpoint(name),
+            "table": ctx.engine.config().table_endpoint(name),
         });
         Ok(properties)
     }

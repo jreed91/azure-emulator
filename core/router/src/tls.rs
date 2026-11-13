@@ -78,6 +78,7 @@ pub fn identity(config: &Config, bind_address: &str) -> Result<TlsIdentity, Erro
         format!("*{}", config.blob_host_suffix()),
         format!("*{}", config.vault_host_suffix()),
         format!("*{}", config.queue_host_suffix()),
+        format!("*{}", config.table_host_suffix()),
         format!("*.servicebus.{}", config.dns_suffix),
         format!("*.documents.{}", config.dns_suffix),
     ];
