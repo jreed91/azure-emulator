@@ -148,3 +148,55 @@ test("sessions: a named session, the next available one, and state", async () =>
   await next.close();
   await sender.close();
 });
+
+test("rules managed over AMQP are the subscription's rules", async () => {
+  await emulator.arm("PUT", `${namespace}/topics/rules`, {});
+  await emulator.arm("PUT", `${namespace}/topics/rules/subscriptions/audit`, {});
+  const rules = client.createRuleManager("rules", "audit");
+  const listRules = async () => {
+    const all = [];
+    for await (const rule of rules.listRules()) all.push(rule);
+    return all;
+  };
+  assert.deepEqual((await listRules()).map((r) => r.name), ["$Default"]);
+  await rules.deleteRule("$Default");
+  await rules.createRule("errors", { sqlExpression: "level = 'error'" }, { sqlExpression: "SET seen = TRUE" });
+  await rules.createRule("orders", { subject: "order", applicationProperties: { region: "eu" } });
+  const listed = await listRules();
+  assert.deepEqual(listed.map((r) => r.name), ["errors", "orders"]);
+  assert.equal(listed[0].filter.sqlExpression, "level = 'error'");
+  assert.equal(listed[0].action.sqlExpression, "SET seen = TRUE");
+  assert.equal(listed[1].filter.subject, "order");
+  // Resource Manager sees the same rules.
+  const arm = await emulator.arm("GET", `${namespace}/topics/rules/subscriptions/audit/rules`);
+  assert.deepEqual(arm.value.map((r) => r.name).sort(), ["errors", "orders"]);
+  await assert.rejects(rules.createRule("bad", { sqlExpression: "level =" }));
+
+  const sender = client.createSender("rules");
+  await sender.sendMessages([
+    { body: "e", applicationProperties: { level: "error" } },
+    { body: "o", subject: "order", applicationProperties: { region: "eu" } },
+    { body: "x", applicationProperties: { level: "info" } },
+  ]);
+  const receiver = client.createReceiver("rules", "audit", { receiveMode: "receiveAndDelete" });
+  const got = await receiver.receiveMessages(5, { maxWaitTimeInMs: 2000 });
+  assert.deepEqual(got.map((m) => m.body).sort(), ["e", "o"]);
+  assert.equal(got.find((m) => m.body === "e").applicationProperties.seen, true);
+  await receiver.close();
+  await sender.close();
+});
+
+test("a queue can forward into a topic", async () => {
+  await emulator.arm("PUT", `${namespace}/topics/fanout`, {});
+  await emulator.arm("PUT", `${namespace}/topics/fanout/subscriptions/one`, {});
+  await emulator.arm("PUT", `${namespace}/topics/fanout/subscriptions/two`, {});
+  await queue("inbox", { forwardTo: "fanout" });
+  const sender = client.createSender("inbox");
+  await sender.sendMessages({ body: "hello" });
+  for (const name of ["one", "two"]) {
+    const receiver = client.createReceiver("fanout", name, { receiveMode: "receiveAndDelete" });
+    assert.deepEqual((await receiver.receiveMessages(1, { maxWaitTimeInMs: 2000 })).map((m) => m.body), ["hello"]);
+    await receiver.close();
+  }
+  await sender.close();
+});

@@ -25,6 +25,8 @@ pub struct Config {
     /// Port of the Service Bus AMQP listener (plain AMQP, as the SDKs'
     /// development emulator mode expects).
     pub amqp_port: u16,
+    /// Port of the Service Bus AMQP-over-TLS (`amqps`) listener.
+    pub amqps_port: u16,
     /// Suffix under which per-resource data-plane hostnames live.
     pub dns_suffix: String,
 }
@@ -38,6 +40,7 @@ impl Default for Config {
             host: "localhost".into(),
             port: 10443,
             amqp_port: 5672,
+            amqps_port: 5671,
             dns_suffix: "azure.localhost".into(),
         }
     }

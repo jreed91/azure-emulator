@@ -183,6 +183,7 @@ dependencies = [
  "http",
  "httpdate",
  "rcgen",
+ "rustls-pemfile",
  "serde_json",
  "service-entra",
  "service-keyvault",
@@ -191,6 +192,7 @@ dependencies = [
  "service-storage",
  "sha2",
  "tokio",
+ "tokio-rustls",
  "tower",
 ]
 
@@ -1409,6 +1411,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "aws-lc-rs",
+ "log",
  "once_cell",
  "rustls-pki-types",
  "rustls-webpki",
@@ -1603,6 +1606,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "tokio-rustls",
  "uuid",
 ]
 

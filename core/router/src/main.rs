@@ -22,12 +22,15 @@ OPTIONS:
         --host <NAME>      Hostname clients use for Resource Manager [default: localhost]
         --dns-suffix <S>   Suffix of data-plane hostnames [default: azure.localhost]
         --amqp-port <PORT> Port of the Service Bus AMQP listener [default: 5672]
+        --amqps-port <PORT>
+                           Port of the Service Bus AMQP-over-TLS listener [default: 5671]
         --http             Serve plain HTTP instead of HTTPS
         --config <FILE>    Provision resources from a JSON file at startup
                            (see the README)
 
 Every option can also be set in the environment: AZURE_EMULATOR_PORT,
-AZURE_EMULATOR_AMQP_PORT, AZURE_EMULATOR_BIND, AZURE_EMULATOR_HOST,
+AZURE_EMULATOR_AMQP_PORT, AZURE_EMULATOR_AMQPS_PORT,
+AZURE_EMULATOR_BIND, AZURE_EMULATOR_HOST,
 AZURE_EMULATOR_DNS_SUFFIX, AZURE_EMULATOR_HTTP=1, AZURE_EMULATOR_CONFIG.
     -h, --help             Print this help
 ";
@@ -126,6 +129,9 @@ async fn main() {
     if let Some(port) = env("AZURE_EMULATOR_AMQP_PORT") {
         config.amqp_port = port.parse().unwrap_or_else(|_| fail("AZURE_EMULATOR_AMQP_PORT is not a port"));
     }
+    if let Some(port) = env("AZURE_EMULATOR_AMQPS_PORT") {
+        config.amqps_port = port.parse().unwrap_or_else(|_| fail("AZURE_EMULATOR_AMQPS_PORT is not a port"));
+    }
     if let Some(value) = env("AZURE_EMULATOR_BIND") {
         bind = value;
     }
@@ -150,6 +156,9 @@ async fn main() {
             "--dns-suffix" => config.dns_suffix = value("--dns-suffix"),
             "--amqp-port" => {
                 config.amqp_port = value("--amqp-port").parse().unwrap_or_else(|_| fail("--amqp-port is not a port"))
+            }
+            "--amqps-port" => {
+                config.amqps_port = value("--amqps-port").parse().unwrap_or_else(|_| fail("--amqps-port is not a port"))
             }
             "--http" => config.scheme = "http".into(),
             "--config" => config_file = Some(value("--config")),
@@ -186,11 +195,21 @@ async fn main() {
         .await
         .unwrap_or_else(|e| fail(format!("cannot listen for AMQP on {amqp_address}: {e}")));
     println!("  Service Bus (AMQP):       {}", config.servicebus_amqp_endpoint("<namespace>"));
-    tokio::spawn(service_servicebus::broker::serve(emulator.engine(), amqp));
+    tokio::spawn(service_servicebus::broker::serve(emulator.engine(), amqp, None));
+
+    // The same listener over TLS, with the emulator's certificate: what
+    // clients that connect by namespace name (and an Entra ID credential) use.
+    let identity = tls::identity(&config, &bind).unwrap_or_else(|e| fail(format!("TLS setup failed: {e}")));
+    let amqps_address = format!("{bind}:{}", config.amqps_port);
+    let amqps = tokio::net::TcpListener::bind(&amqps_address)
+        .await
+        .unwrap_or_else(|e| fail(format!("cannot listen for AMQP over TLS on {amqps_address}: {e}")));
+    let amqps_tls = tls::acceptor(&identity).unwrap_or_else(|e| fail(format!("TLS setup failed: {e}")));
+    println!("  Service Bus (AMQP + TLS): amqps://<namespace>.servicebus.{}:{}/", config.dns_suffix, config.amqps_port);
+    tokio::spawn(service_servicebus::broker::serve(emulator.engine(), amqps, Some(amqps_tls)));
+    println!("  CA certificate to trust:  {}", identity.ca_path.display());
 
     let result = if config.scheme == "https" {
-        let identity = tls::identity(&config, &bind).unwrap_or_else(|e| fail(format!("TLS setup failed: {e}")));
-        println!("  CA certificate to trust:  {}", identity.ca_path.display());
         let rustls = axum_server::tls_rustls::RustlsConfig::from_pem(
             identity.certificate_chain_pem.into_bytes(),
             identity.private_key_pem.into_bytes(),

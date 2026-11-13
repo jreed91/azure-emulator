@@ -80,11 +80,8 @@ tried yet.
   refused. Every accepted version gets the same behaviour.
 - Operations the ARM layer cannot route yet (tenant-, location- and
   extension-scoped ones) are listed by `coverage` as `501`.
-- Service Bus messaging does not forward to topics, does not list sessions
-  (`get-message-sessions`), and answers `501` to the rule management
-  operations over AMQP (rules are managed through Resource Manager). Plain
-  AMQP only (no TLS, no WebSockets). Tier restrictions (such as topics on a
-  Basic namespace) are not enforced.
+- Service Bus messaging does not serve AMQP over WebSockets, and does not
+  enforce tier restrictions (such as topics on a Basic namespace).
 - Template deployments run to completion before the first response; there is
   no `Running` state and `cancel` always answers `409`. A `templateLink`,
   `parametersLink` or Key Vault reference in parameters answers `501`, as do
@@ -121,7 +118,7 @@ it refuses some, such as `10080`.)
 
 ```bash
 docker build -t azure-emulator .
-docker run -p 10443:10443 -p 5672:5672 azure-emulator
+docker run -p 10443:10443 -p 5672:5672 -p 5671:5671 azure-emulator
 ```
 
 Pushes to `main` publish `ghcr.io/<owner>/azure-emulator:edge` (and a
@@ -138,7 +135,7 @@ services:
       AZURE_EMULATOR_CONFIG: /config.json
     volumes:
       - ./azure-emulator.json:/config.json:ro
-    ports: ["10443:10443", "5672:5672"]
+    ports: ["10443:10443", "5672:5672", "5671:5671"]
 ```
 
 ### Provisioning at startup
@@ -245,6 +242,17 @@ The emulator also runs an AMQP 1.0 broker (plain AMQP, port `5672`; change it
 with `--amqp-port`). The connection strings `listKeys` returns point at it and
 carry `UseDevelopmentEmulator=true`, which tells the SDKs to use plain AMQP.
 
+The same broker listens over TLS on port `5671` (`--amqps-port`) with the
+emulator's certificate, which is what a client uses when it connects by
+namespace name, for example with an Entra ID credential from the emulator's
+token service, or with a connection string without `UseDevelopmentEmulator`.
+Trust the emulator's CA (`connection_verify` in Python) and resolve
+`*.servicebus.azure.localhost` to the emulator:
+
+```python
+client = ServiceBusClient("orders.servicebus.azure.localhost", credential, connection_verify=ca_path)
+```
+
 A connection string does not have to use the namespace's own hostname
 (`<namespace>.servicebus.azure.localhost`): any name that reaches the
 emulator works, such as `localhost` or a container's name. The namespace is
@@ -273,7 +281,8 @@ with ServiceBusClient.from_connection_string(keys.primary_connection_string) as 
 Queues, topics and subscriptions are the Resource Manager resources, read fresh
 for every message, so their settings apply: lock duration, max delivery count,
 time to live and dead-lettering on expiry, duplicate detection, status,
-maximum message size and `forwardTo`. Supported: single and batched sends,
+maximum message size and `forwardTo` (to a queue or a topic, up to four
+hops). Supported: single and batched sends,
 peek-lock (complete, abandon, defer, dead-letter, lock renewal) and
 receive-and-delete, the dead-letter subqueue, scheduled messages (and
 cancelling them), deferred messages by sequence number, and peeking.
@@ -286,6 +295,10 @@ the lock is released when the receiver closes.
 
 Topic fan-out works through `$Default`, SQL filters, correlation filters and rule actions
 (`SET`/`REMOVE`; a subscription gets a copy per matching rule with an action).
+Rules can also be managed over AMQP (`add-rule`, `remove-rule`,
+`enumerate-rules`, as the JavaScript SDK's rule manager does); they are the
+same rules Resource Manager lists. Sessions can be listed
+(`get-message-sessions`).
 The SQL dialect covers comparison, `AND`/`OR`/`NOT`, arithmetic, `IS [NOT]
 NULL`, `[NOT] IN`, `[NOT] LIKE` with `ESCAPE`, `EXISTS`, and `sys.`/`user.`
 properties; an invalid expression is refused when the rule is created.
