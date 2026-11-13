@@ -451,6 +451,23 @@ impl Sender {
             })
     }
 
+    /// Sends a message the caller has already encoded, with the delivery tag
+    /// it chose. (Patched in for the azure-emulator, which writes some
+    /// sections itself where the derived encoding drops default fields.)
+    pub async fn send_encoded(
+        &mut self,
+        payload: Payload,
+        settled: bool,
+        delivery_tag: impl Into<DeliveryTag>,
+    ) -> Result<DeliveryFut<Result<Outcome, SendError>>, SendError> {
+        self.inner
+            .send_payload_tagged::<SendError>(payload, 0, Some(settled), None, true, Some(delivery_tag.into()))
+            .await
+            .map(|settlement| {
+                DeliveryFut::new(settlement, self.inner.link.session_stop_reason.clone())
+            })
+    }
+
     /// Like [`send_batchable()`](#method.send_batchable) but this only takes a reference.
     ///
     /// This is useful when the message is large and you want to avoid cloning it because the
