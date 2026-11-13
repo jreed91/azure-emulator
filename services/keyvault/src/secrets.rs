@@ -28,6 +28,8 @@ pub(crate) struct Vault {
     deleted: BTreeMap<String, DeletedSecret>,
     /// Keyed by lowercased key name.
     pub(crate) keys: crate::keys::KeyStore,
+    /// Deleted keys and when they were deleted, by lowercased name.
+    pub(crate) deleted_keys: BTreeMap<String, (crate::keys::Key, i64)>,
 }
 
 #[derive(Clone)]
@@ -414,12 +416,18 @@ fn unauthorized(engine: &Engine, message: &str) -> Response {
 /// What a secrets operation needs: its data action under role-based access
 /// control, and its permission under an access policy.
 struct Needed {
+    /// `secrets` or `keys`: which permissions of an access policy apply.
+    kind: &'static str,
     action: &'static str,
     policy: &'static str,
 }
 
 fn permission_for(method: &Method, collection: &str, rest: &[&str]) -> Option<Needed> {
-    let needed = |action, policy| Some(Needed { action, policy });
+    if collection == "keys" || collection == "deletedkeys" {
+        let (action, policy) = crate::key_data::permission_for(method, collection, rest)?;
+        return Some(Needed { kind: "keys", action, policy });
+    }
+    let needed = |action, policy| Some(Needed { kind: "secrets", action, policy });
     const READ_METADATA: &str = "Microsoft.KeyVault/vaults/secrets/readMetadata/action";
     match (collection, rest, method.as_str()) {
         ("secrets", [], "GET") | ("secrets", [_, "versions"], "GET") => needed(READ_METADATA, "list"),
@@ -437,7 +445,7 @@ fn permission_for(method: &Method, collection: &str, rest: &[&str]) -> Option<Ne
 /// With role assignments enforced, checks the caller against the vault's
 /// permission model: role assignments for a vault with
 /// `enableRbacAuthorization`, its access policies otherwise.
-fn check_access(engine: &Engine, vault: &str, claims: &auth::Claims, needed: &Needed, secret: Option<&str>) -> Result<(), Response> {
+fn check_access(engine: &Engine, vault: &str, claims: &auth::Claims, needed: &Needed, item: Option<&str>) -> Result<(), Response> {
     use emulator_core::arm::{data_access, principal_ids, ArmState, Permission};
     if !engine.config().enforce_rbac {
         return Ok(());
@@ -459,8 +467,8 @@ fn check_access(engine: &Engine, vault: &str, claims: &auth::Claims, needed: &Ne
         )
     };
     if properties.get("enableRbacAuthorization").and_then(Value::as_bool) == Some(true) {
-        let scope = match secret {
-            Some(name) => format!("{vault_id}/secrets/{name}"),
+        let scope = match item {
+            Some(name) => format!("{vault_id}/{}/{name}", needed.kind),
             None => vault_id.clone(),
         };
         if data_access(engine, &claims.oid, &[Permission::Data(needed.action)], &scope) {
@@ -485,15 +493,16 @@ fn check_access(engine: &Engine, vault: &str, claims: &auth::Claims, needed: &Ne
         .flatten()
         .filter(|p| p.get("tenantId").and_then(Value::as_str).is_none_or(|t| t.eq_ignore_ascii_case(tenant)))
         .filter(|p| p.get("objectId").and_then(Value::as_str).is_some_and(|o| ids.iter().any(|id| id.eq_ignore_ascii_case(o))))
-        .flat_map(|p| p.pointer("/permissions/secrets").and_then(Value::as_array).cloned().unwrap_or_default())
+        .flat_map(|p| p.pointer(&format!("/permissions/{}", needed.kind)).and_then(Value::as_array).cloned().unwrap_or_default())
         .filter_map(|p| p.as_str().map(str::to_ascii_lowercase))
-        .any(|p| p == needed.policy || p == "all");
+        .any(|p| p == needed.policy.to_ascii_lowercase() || p == "all");
     if allowed {
         return Ok(());
     }
     Err(forbidden(
         format!(
-            "The user, group or application '{caller}' does not have secrets {} permission on key vault '{vault};location={}'. For help resolving this issue, please see https://go.microsoft.com/fwlink/?linkid=2125287",
+            "The user, group or application '{caller}' does not have {} {} permission on key vault '{vault};location={}'. For help resolving this issue, please see https://go.microsoft.com/fwlink/?linkid=2125287",
+            needed.kind,
             needed.policy,
             location,
         ),
@@ -570,7 +579,17 @@ async fn serve(
 
     let method = &parts.method;
     if let Some(needed) = permission_for(method, &collection, &rest) {
-        check_access(engine, vault, &claims, &needed, rest.first().copied())?;
+        // `keys/restore` names no key.
+        let item = rest.first().copied().filter(|_| !(collection == "keys" && rest == ["restore"]));
+        check_access(engine, vault, &claims, &needed, item)?;
+    }
+    if collection == "keys" || collection == "deletedkeys" {
+        let request = crate::key_data::KeyRequest { engine, vault, body: &body };
+        return match request.serve(method, &collection, &rest) {
+            Ok(crate::key_data::Answer::Json(body)) => Ok(json_response(StatusCode::OK, &body)),
+            Ok(crate::key_data::Answer::Empty(status)) => Ok(status.into_response()),
+            Err(error) => Err(fail(error)),
+        };
     }
     let request = SecretRequest {
         engine,
