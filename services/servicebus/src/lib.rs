@@ -17,6 +17,7 @@
 //! Not checked against Azure: the code and wording of validation refusals here, and
 //! the tier restrictions (topics on a Basic namespace are accepted).
 
+pub mod broker;
 mod entities;
 mod geo;
 mod migration;

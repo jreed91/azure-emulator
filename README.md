@@ -21,7 +21,7 @@ workloads or to test security.
 | Blob service | Containers: create, delete, properties, list. Block blobs: upload (single request), download with ranges, properties, metadata, delete, list with prefix, delimiter and paging. Authorization by Entra token, verified Shared Key, or shared access signature (account SAS and container or blob service SAS signed with an account key) |
 | `Microsoft.KeyVault` | Vaults: create, get, update, delete, list, `checkNameAvailability`; soft delete with list, get, recover and purge of deleted vaults; access-policy updates; secrets through Resource Manager (the same store as the data plane); managed HSMs with soft delete, regions and name availability (no HSM data plane); keys through Resource Manager in vaults and managed HSMs (metadata only; no keys data plane yet) |
 | `Microsoft.ManagedIdentity` | User-assigned identities and federated identity credentials; listing the resources that use an identity; reading any resource's system-assigned identity. Every resource's `identity` block is filled in: system-assigned identities get a principal id, and user-assigned identities are checked and given their principal and client ids |
-| `Microsoft.ServiceBus` | Namespaces, queues, topics, subscriptions, rules, authorization rules with `listKeys` and `regenerateKeys`, network rule sets, geo-disaster-recovery aliases with failover and break-pairing, legacy IP filter and virtual network rules, private link resources, Standard-to-Premium migration (start and revert; completion is not modeled), `checkNameAvailability` (control plane only: nothing serves messaging) |
+| `Microsoft.ServiceBus` | Namespaces, queues, topics, subscriptions, rules, authorization rules with `listKeys` and `regenerateKeys`, network rule sets, geo-disaster-recovery aliases with failover and break-pairing, legacy IP filter and virtual network rules, private link resources, Standard-to-Premium migration (start and revert; completion is not modeled), `checkNameAvailability`; messaging over AMQP 1.0 (see [Service Bus messaging](#service-bus-messaging)) |
 | Key Vault secrets | Set, get (latest or by version), update attributes, list, list versions, soft delete, get and list deleted, recover, purge |
 
 Beyond these, every resource type in the Storage, Key Vault, Managed Identity and
@@ -78,9 +78,13 @@ tried yet.
   refused. Every accepted version gets the same behaviour.
 - Operations the ARM layer cannot route yet (tenant-, location- and
   extension-scoped ones) are listed by `coverage` as `501`.
-- Service Bus has no data plane: the endpoint and connection strings a namespace
-  reports point at the emulator's domain, but nothing accepts AMQP there. Tier
-  restrictions (such as topics on a Basic namespace) are not enforced.
+- Service Bus messaging has no sessions (session-enabled entities refuse sends
+  and receives), evaluates only `1=1`/`1=0` SQL filters (correlation filters
+  are complete; other SQL expressions and rule actions refuse the send), does
+  not forward to topics, and answers `501` to the management operations it
+  lacks (rules, sessions). Plain AMQP only (no TLS, no WebSockets). A first
+  delivery reports `delivery_count` as unset rather than 0. Tier restrictions
+  (such as topics on a Basic namespace) are not enforced.
 - Storage queues, tables and file shares have no data plane. Version-level
   immutability (`migrate`), and the data-plane lease operations themselves, are
   not implemented; a lease taken through Resource Manager is honoured by both.
@@ -163,6 +167,39 @@ blobs = BlobServiceClient(
 
 Data-plane endpoints come back from the control plane (`primaryEndpoints.blob`,
 `vaultUri`), so code that reads them needs no emulator-specific addresses.
+
+### Service Bus messaging
+
+The emulator also runs an AMQP 1.0 broker (plain AMQP, port `5672`; change it
+with `--amqp-port`). The connection strings `listKeys` returns point at it and
+carry `UseDevelopmentEmulator=true`, which tells the SDKs to use plain AMQP:
+
+```python
+from azure.servicebus import ServiceBusClient, ServiceBusMessage
+
+keys = servicebus_mgmt.namespaces.list_keys("rg", "orders", "RootManageSharedAccessKey")
+with ServiceBusClient.from_connection_string(keys.primary_connection_string) as client:
+    with client.get_queue_sender("jobs") as sender:
+        sender.send_messages(ServiceBusMessage("hello"))
+    with client.get_queue_receiver("jobs") as receiver:
+        for message in receiver.receive_messages(max_wait_time=5):
+            receiver.complete_message(message)
+```
+
+Queues, topics and subscriptions are the Resource Manager resources, read fresh
+for every message, so their settings apply: lock duration, max delivery count,
+time to live and dead-lettering on expiry, duplicate detection, status,
+maximum message size and `forwardTo`. Supported: single and batched sends,
+peek-lock (complete, abandon, defer, dead-letter, lock renewal) and
+receive-and-delete, the dead-letter subqueue, scheduled messages (and
+cancelling them), deferred messages by sequence number, peeking, and topic
+fan-out through `$Default`, `1=1`/`1=0` SQL filters and correlation filters.
+Shared access signatures are verified against the namespace's or entity's
+authorization rule keys and their rights. Message counts show up on the queue and
+subscription resources.
+
+The broker is built on `fe2o3-amqp`, vendored with small patches listed in
+`vendor/fe2o3-amqp/PATCHED.md`.
 
 ### Embedded mode (Rust tests)
 

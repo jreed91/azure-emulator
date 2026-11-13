@@ -214,6 +214,7 @@ impl ResourceTypeHandler for Namespaces {
             .lock()
             .namespaces
             .remove(&resource.name.to_ascii_lowercase());
+        crate::entities::forget_messages(ctx, resource);
     }
 }
 
@@ -243,7 +244,7 @@ pub(crate) fn check_name_availability(ctx: &ArmContext<'_>, body: &Value) -> Res
 }
 
 /// A new 256-bit shared access key, base64 encoded.
-fn new_key() -> String {
+pub(crate) fn new_key() -> String {
     let mut bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bytes);
     base64::engine::general_purpose::STANDARD.encode(bytes)
@@ -274,18 +275,16 @@ pub(crate) struct AuthorizationRules(pub(crate) &'static str);
 impl AuthorizationRules {
     fn keys_json(&self, ctx: &ArmContext<'_>, resource: &Resource, keys: &[String; 2]) -> Value {
         let namespace = id_part(&resource.id, "namespaces").unwrap_or("").to_ascii_lowercase();
-        let endpoint = ctx
-            .engine
-            .config()
-            .servicebus_endpoint(&namespace)
-            .replacen("https://", "sb://", 1);
+        let endpoint = ctx.engine.config().servicebus_amqp_endpoint(&namespace);
         let entity = id_part(&resource.id, "queues")
             .or_else(|| id_part(&resource.id, "topics"))
             .map(|entity| format!(";EntityPath={entity}"))
             .unwrap_or_default();
+        // The SDKs reach the emulator's broker in their development-emulator
+        // mode: plain AMQP on the endpoint's port.
         let connection = |key: &str| {
             format!(
-                "Endpoint={endpoint};SharedAccessKeyName={};SharedAccessKey={key}{entity}",
+                "Endpoint={endpoint};SharedAccessKeyName={};SharedAccessKey={key}{entity};UseDevelopmentEmulator=true",
                 resource.name
             )
         };

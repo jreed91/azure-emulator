@@ -9,6 +9,16 @@ http = { workspace = true }
 base64 = { workspace = true }
 rand = { workspace = true }
 serde_json = { workspace = true }
+fe2o3-amqp = { workspace = true }
+fe2o3-amqp-types = { workspace = true }
+serde_amqp = { workspace = true }
+serde_bytes = "0.11"
+tokio = { workspace = true }
+uuid = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+percent-encoding = { workspace = true }
+chrono = { workspace = true }
 
 [lints]
 workspace = true

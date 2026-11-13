@@ -46,6 +46,11 @@ impl Emulator {
         }
     }
 
+    /// The shared engine, for serving data planes outside the HTTP router.
+    pub fn engine(&self) -> Arc<Engine> {
+        self.engine.clone()
+    }
+
     pub fn config(&self) -> &Config {
         self.engine.config()
     }

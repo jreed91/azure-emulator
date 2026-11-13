@@ -22,6 +22,9 @@ pub struct Config {
     /// Hostname of the management and login endpoint.
     pub host: String,
     pub port: u16,
+    /// Port of the Service Bus AMQP listener (plain AMQP, as the SDKs'
+    /// development emulator mode expects).
+    pub amqp_port: u16,
     /// Suffix under which per-resource data-plane hostnames live.
     pub dns_suffix: String,
 }
@@ -34,6 +37,7 @@ impl Default for Config {
             scheme: "https".into(),
             host: "localhost".into(),
             port: 10443,
+            amqp_port: 5672,
             dns_suffix: "azure.localhost".into(),
         }
     }
@@ -92,6 +96,12 @@ impl Config {
             self.dns_suffix,
             self.port_suffix()
         )
+    }
+
+    /// The `Endpoint` of a Service Bus connection string: the AMQP listener,
+    /// under the namespace's own hostname.
+    pub fn servicebus_amqp_endpoint(&self, namespace: &str) -> String {
+        format!("sb://{}.servicebus.{}:{}/", namespace, self.dns_suffix, self.amqp_port)
     }
 
     /// Address a Service Bus namespace reports. Nothing serves the messaging

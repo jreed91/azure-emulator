@@ -80,6 +80,35 @@ fn patch_as_put(
     )
 }
 
+/// The broker's key for an entity resource: `namespace/queue` or
+/// `namespace/topic[/subscriptions/subscription]`, lowercased.
+fn broker_key(resource: &Resource) -> Option<String> {
+    let lower = resource.id.to_ascii_lowercase();
+    let (_, rest) = lower.split_once("/providers/microsoft.servicebus/namespaces/")?;
+    let parts: Vec<&str> = rest.split('/').collect();
+    Some(match parts.as_slice() {
+        [ns, "queues", queue] | [ns, "topics", queue] => format!("{ns}/{queue}"),
+        [ns, "topics", topic, "subscriptions", sub] => format!("{ns}/{topic}/subscriptions/{sub}"),
+        [ns] => ns.to_string(),
+        _ => return None,
+    })
+}
+
+/// Shows the broker's message counts on a queue or subscription.
+fn show_counts(ctx: &ArmContext<'_>, resource: &mut Resource) {
+    let Some(key) = broker_key(resource) else { return };
+    let counts = crate::broker::store::counts(ctx.engine, &key);
+    resource.properties["messageCount"] = counts["messageCount"].clone();
+    resource.properties["countDetails"] = counts["countDetails"].clone();
+}
+
+/// Drops the messages of a deleted entity (and of everything under it).
+pub(crate) fn forget_messages(ctx: &ArmContext<'_>, resource: &Resource) {
+    if let Some(key) = broker_key(resource) {
+        crate::broker::store::forget(ctx.engine, &key);
+    }
+}
+
 pub(crate) struct Queues;
 
 impl ResourceTypeHandler for Queues {
@@ -133,6 +162,14 @@ impl ResourceTypeHandler for Queues {
 
     fn patch(&self, ctx: &ArmContext<'_>, existing: &Resource, body: &Value) -> Result<Value, ArmError> {
         patch_as_put(self, ctx, existing, body)
+    }
+
+    fn view(&self, ctx: &ArmContext<'_>, resource: &mut Resource) {
+        show_counts(ctx, resource);
+    }
+
+    fn deleted(&self, ctx: &ArmContext<'_>, resource: &Resource) {
+        forget_messages(ctx, resource);
     }
 }
 
@@ -188,6 +225,10 @@ impl ResourceTypeHandler for Topics {
         let count = state.lock().children(&format!("{}/subscriptions", resource.id)).count();
         resource.properties["subscriptionCount"] = json!(count);
     }
+
+    fn deleted(&self, ctx: &ArmContext<'_>, resource: &Resource) {
+        forget_messages(ctx, resource);
+    }
 }
 
 pub(crate) struct Subscriptions;
@@ -237,6 +278,14 @@ impl ResourceTypeHandler for Subscriptions {
 
     fn patch(&self, ctx: &ArmContext<'_>, existing: &Resource, body: &Value) -> Result<Value, ArmError> {
         patch_as_put(self, ctx, existing, body)
+    }
+
+    fn view(&self, ctx: &ArmContext<'_>, resource: &mut Resource) {
+        show_counts(ctx, resource);
+    }
+
+    fn deleted(&self, ctx: &ArmContext<'_>, resource: &Resource) {
+        forget_messages(ctx, resource);
     }
 
     fn created(&self, ctx: &ArmContext<'_>, resource: &Resource) {

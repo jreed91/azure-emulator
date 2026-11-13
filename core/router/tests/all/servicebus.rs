@@ -91,7 +91,7 @@ async fn authorization_rules_and_keys() {
     assert_eq!(primary.len(), 44);
     assert_eq!(
         keys["primaryConnectionString"],
-        format!("Endpoint=sb://orders-bus.servicebus.azure.localhost:10443/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey={primary}")
+        format!("Endpoint=sb://orders-bus.servicebus.azure.localhost:5672/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey={primary};UseDevelopmentEmulator=true")
     );
     // Keys are stable until regenerated, and only the named key changes.
     assert_eq!(client.arm(Method::POST, &keys_path, None).await.json()["primaryKey"], primary.as_str());
@@ -116,7 +116,7 @@ async fn authorization_rules_and_keys() {
         .arm(Method::POST, &path("orders-bus/queues/incoming/authorizationRules/reader/listKeys"), None)
         .await
         .json();
-    assert!(keys["primaryConnectionString"].as_str().unwrap().ends_with(";EntityPath=incoming"));
+    assert!(keys["primaryConnectionString"].as_str().unwrap().contains(";EntityPath=incoming"));
 }
 
 #[tokio::test]
