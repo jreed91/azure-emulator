@@ -25,7 +25,7 @@ service-managedidentity = { path = "services/managedidentity" }
 service-entra = { path = "services/entra" }
 service-storage = { path = "services/storage" }
 service-keyvault = { path = "services/keyvault" }
-axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }

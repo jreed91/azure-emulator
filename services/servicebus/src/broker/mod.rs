@@ -71,6 +71,15 @@ pub async fn serve(engine: Arc<Engine>, listener: TcpListener, tls: Option<tokio
     }
 }
 
+/// Serves one AMQP connection over `stream`: a byte stream from elsewhere,
+/// such as a WebSocket.
+pub async fn serve_stream<Io>(engine: Arc<Engine>, stream: Io)
+where
+    Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + std::fmt::Debug + Send + Unpin + 'static,
+{
+    let _ = connection(engine, stream).await;
+}
+
 /// What one connection shares across its sessions and links.
 struct Context {
     engine: Arc<Engine>,
