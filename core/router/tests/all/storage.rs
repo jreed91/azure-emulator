@@ -2,7 +2,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use hmac::{Hmac, Mac};
 use http::{Method, StatusCode};
-use serde_json::json;
+use serde_json::{json, Value};
 use sha2::Sha256;
 
 use crate::support::{Client, STORAGE_SCOPE, SUB};
@@ -496,4 +496,145 @@ async fn local_users() {
     let stored = client.arm(Method::GET, &user, None).await.json();
     assert_eq!(stored["properties"]["hasSshPassword"], true);
     assert_eq!(stored["properties"]["sid"], created["properties"]["sid"]);
+}
+
+#[tokio::test]
+async fn legal_holds_and_immutability_policies_are_enforced() {
+    let client = management_client().await;
+    let host = "mgmtacct.blob.core.azure.localhost:10443";
+    let bearer = format!("Bearer {}", client.token(STORAGE_SCOPE).await);
+    let auth = [("authorization", bearer.as_str())];
+    let put = [auth[0], ("x-ms-blob-type", "BlockBlob")];
+    let container = |rest: &str| child(&format!("blobServices/default/containers/records{rest}"));
+    client.arm(Method::PUT, &container(""), Some(json!({}))).await;
+    client.send(Method::PUT, host, "/records/a.txt", &put, "v1").await;
+
+    // A legal hold freezes existing blobs but allows new ones.
+    let reply = client.arm(Method::POST, &container("/setLegalHold"), Some(json!({"tags": ["Case123", "audit2026"]}))).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(reply.json(), json!({"hasLegalHold": true, "tags": ["case123", "audit2026"]}));
+    assert_eq!(client.arm(Method::POST, &container("/setLegalHold"), Some(json!({"tags": ["x"]}))).await.status, StatusCode::BAD_REQUEST);
+    let reply = client.send(Method::PUT, host, "/records/a.txt", &put, "v2").await;
+    assert_eq!(reply.header("x-ms-error-code"), "BlobImmutableDueToLegalHold");
+    let reply = client.send(Method::DELETE, host, "/records/a.txt", &auth, "").await;
+    assert_eq!(reply.status, StatusCode::CONFLICT);
+    assert_eq!(client.send(Method::PUT, host, "/records/b.txt", &put, "new").await.status, StatusCode::CREATED);
+    let reply = client.send(Method::DELETE, host, "/records?restype=container", &auth, "").await;
+    assert_eq!(reply.header("x-ms-error-code"), "ContainerProtectedFromDeletion");
+    assert_eq!(client.arm(Method::DELETE, &container(""), None).await.status, StatusCode::CONFLICT);
+    let reply = client.send(Method::GET, host, "/records?restype=container", &auth, "").await;
+    assert_eq!(reply.header("x-ms-has-legal-hold"), "true");
+    let shown = client.arm(Method::GET, &container(""), None).await.json();
+    assert_eq!(shown["properties"]["hasLegalHold"], true);
+    assert_eq!(shown["properties"]["legalHold"]["tags"][0]["tag"], "case123");
+
+    // Clearing only some tags keeps the hold.
+    let reply = client.arm(Method::POST, &container("/clearLegalHold"), Some(json!({"tags": ["case123"]}))).await;
+    assert_eq!(reply.json()["hasLegalHold"], true);
+    let reply = client.arm(Method::POST, &container("/clearLegalHold"), Some(json!({"tags": ["AUDIT2026"]}))).await;
+    assert_eq!(reply.json(), json!({"hasLegalHold": false, "tags": []}));
+    assert_eq!(client.send(Method::PUT, host, "/records/a.txt", &put, "v2").await.status, StatusCode::CREATED);
+
+    // A retention policy protects blobs younger than its period.
+    let policy = container("/immutabilityPolicies/default");
+    assert_eq!(client.arm(Method::GET, &policy, None).await.status, StatusCode::NOT_FOUND);
+    let reply = client.arm(Method::PUT, &policy, Some(json!({"properties": {"immutabilityPeriodSinceCreationInDays": 0}}))).await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+    let reply = client.arm(Method::PUT, &policy, Some(json!({"properties": {"immutabilityPeriodSinceCreationInDays": 3}}))).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    let created = reply.json();
+    assert_eq!(created["properties"]["state"], "Unlocked");
+    let etag = created["etag"].as_str().unwrap().to_string();
+    assert_eq!(reply.header("etag"), etag, "the entity tag is also the ETag header");
+    let reply = client.send(Method::DELETE, host, "/records/a.txt", &auth, "").await;
+    assert_eq!(reply.header("x-ms-error-code"), "BlobImmutableDueToPolicy");
+
+    // Locking needs the current entity tag, and a locked policy only grows.
+    let lock = container("/immutabilityPolicies/default/lock");
+    assert_eq!(client.arm(Method::POST, &lock, None).await.status, StatusCode::BAD_REQUEST);
+    let stale = [("if-match", "\"0x0\"")];
+    let token = format!("Bearer {}", client.token(crate::support::ARM_SCOPE).await);
+    let arm_with = |method: Method, path: String, headers: Vec<(&'static str, String)>, body: Value| {
+        let token = token.clone();
+        let client = &client;
+        async move {
+            let mut all = vec![("authorization", token.as_str()), ("content-type", "application/json")];
+            all.extend(headers.iter().map(|(k, v)| (*k, v.as_str())));
+            client.send(method, "localhost:10443", &path, &all, body.to_string()).await
+        }
+    };
+    let reply = arm_with(Method::POST, lock.clone(), vec![("if-match", stale[0].1.to_string())], Value::Null).await;
+    assert_eq!(reply.status, StatusCode::PRECONDITION_FAILED);
+    let reply = arm_with(Method::POST, lock.clone(), vec![("if-match", etag.clone())], Value::Null).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(reply.json()["properties"]["state"], "Locked");
+    let locked_etag = reply.json()["etag"].as_str().unwrap().to_string();
+    assert_ne!(locked_etag, etag);
+
+    let delete = arm_with(Method::DELETE, policy.clone(), vec![("if-match", locked_etag.clone())], Value::Null).await;
+    assert_eq!(delete.status, StatusCode::CONFLICT, "a locked policy cannot be deleted");
+    let update = client.arm(Method::PUT, &policy, Some(json!({"properties": {"immutabilityPeriodSinceCreationInDays": 1}}))).await;
+    assert_eq!(update.status, StatusCode::CONFLICT, "a locked policy can only be extended");
+    let extend = container("/immutabilityPolicies/default/extend");
+    let shorter = arm_with(Method::POST, extend.clone(), vec![("if-match", locked_etag.clone())], json!({"properties": {"immutabilityPeriodSinceCreationInDays": 2}})).await;
+    assert_eq!(shorter.status, StatusCode::BAD_REQUEST);
+    let longer = arm_with(Method::POST, extend, vec![("if-match", locked_etag)], json!({"properties": {"immutabilityPeriodSinceCreationInDays": 30}})).await;
+    assert_eq!(longer.status, StatusCode::OK, "{}", longer.text());
+    assert_eq!(longer.json()["properties"]["immutabilityPeriodSinceCreationInDays"], 30);
+
+    let shown = client.arm(Method::GET, &container(""), None).await.json();
+    assert_eq!(shown["properties"]["hasImmutabilityPolicy"], true);
+    let history: Vec<&str> = shown["properties"]["immutabilityPolicy"]["updateHistory"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["update"].as_str().unwrap())
+        .collect();
+    assert_eq!(history, ["put", "lock", "extend"]);
+    assert_eq!(client.arm(Method::DELETE, &container(""), None).await.status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn container_leases() {
+    let client = management_client().await;
+    let host = "mgmtacct.blob.core.azure.localhost:10443";
+    let bearer = format!("Bearer {}", client.token(STORAGE_SCOPE).await);
+    let container = |rest: &str| child(&format!("blobServices/default/containers/leased{rest}"));
+    client.arm(Method::PUT, &container(""), Some(json!({}))).await;
+    let lease = |body: Value| {
+        let client = &client;
+        let path = container("/lease");
+        async move { client.arm(Method::POST, &path, Some(body)).await }
+    };
+
+    assert_eq!(lease(json!({"action": "Acquire", "leaseDuration": 5})).await.status, StatusCode::BAD_REQUEST);
+    let reply = lease(json!({"action": "Acquire", "leaseDuration": -1})).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    let id = reply.json()["leaseId"].as_str().unwrap().to_string();
+    assert_eq!(lease(json!({"action": "Acquire"})).await.status, StatusCode::CONFLICT);
+    let shown = client.arm(Method::GET, &container(""), None).await.json();
+    assert_eq!(shown["properties"]["leaseState"], "Leased");
+    assert_eq!(shown["properties"]["leaseStatus"], "Locked");
+    assert_eq!(shown["properties"]["leaseDuration"], "Infinite");
+
+    // A leased container is deleted only with its lease id.
+    let reply = client.send(Method::DELETE, host, "/leased?restype=container", &[("authorization", &bearer)], "").await;
+    assert_eq!(reply.header("x-ms-error-code"), "LeaseIdMissing");
+    let wrong = [("authorization", bearer.as_str()), ("x-ms-lease-id", "00000000-0000-0000-0000-000000000000")];
+    let reply = client.send(Method::DELETE, host, "/leased?restype=container", &wrong, "").await;
+    assert_eq!(reply.header("x-ms-error-code"), "LeaseIdMismatchWithContainerOperation");
+    assert_eq!(client.arm(Method::DELETE, &container(""), None).await.status, StatusCode::PRECONDITION_FAILED);
+    let reply = client.send(Method::GET, host, "/leased?restype=container", &[("authorization", &bearer)], "").await;
+    assert_eq!(reply.header("x-ms-lease-state"), "leased");
+
+    let changed = "11111111-2222-3333-4444-555555555555";
+    let reply = lease(json!({"action": "Change", "leaseId": id, "proposedLeaseId": changed})).await;
+    assert_eq!(reply.json()["leaseId"], changed);
+    assert_eq!(lease(json!({"action": "Renew", "leaseId": id})).await.status, StatusCode::CONFLICT);
+    let reply = lease(json!({"action": "Break", "breakPeriod": 0})).await;
+    assert_eq!(reply.json()["leaseTimeSeconds"], "0");
+    assert_eq!(client.arm(Method::GET, &container(""), None).await.json()["properties"]["leaseState"], "Broken");
+
+    let ok = [("authorization", bearer.as_str())];
+    assert_eq!(client.send(Method::DELETE, host, "/leased?restype=container", &ok, "").await.status, StatusCode::ACCEPTED);
 }

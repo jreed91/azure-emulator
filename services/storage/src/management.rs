@@ -21,6 +21,7 @@ use http::StatusCode;
 use serde_json::{json, Map, Value};
 
 use crate::blob::is_valid_container_name;
+use crate::protection::{container_policy_json, legal_hold_json, protected};
 use crate::state::Container;
 use crate::StorageState;
 
@@ -479,7 +480,7 @@ fn account_id(ctx: &ArmContext<'_>, name: &str) -> String {
 }
 
 /// The account resource's canonical id, or the error for a missing account.
-fn require_account(ctx: &ArmContext<'_>, name: &str) -> Result<String, ArmError> {
+pub(crate) fn require_account(ctx: &ArmContext<'_>, name: &str) -> Result<String, ArmError> {
     let state = ctx.engine.state::<ArmState>();
     let state = state.lock();
     state.resource(&account_id(ctx, name)).map(|account| account.id.clone()).ok_or_else(|| {
@@ -527,18 +528,19 @@ fn private_link_resources(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) 
     Ok((StatusCode::OK, json!({"value": items})))
 }
 
-fn container_not_found() -> ArmError {
+pub(crate) fn container_not_found() -> ArmError {
     ArmError::not_found("ContainerNotFound", "The specified container does not exist.")
 }
 
 fn container_json(account_id: &str, name: &str, container: &Container) -> Value {
     let modified: chrono::DateTime<chrono::Utc> = container.last_modified.into();
+    let lease = container.lease_state(SystemTime::now());
     let metadata: Map<String, Value> = container
         .metadata
         .iter()
         .map(|(key, value)| (key.clone(), json!(value)))
         .collect();
-    json!({
+    let mut out = json!({
         "id": format!("{account_id}/blobServices/default/containers/{name}"),
         "name": name,
         "type": CONTAINER_TYPE,
@@ -548,16 +550,25 @@ fn container_json(account_id: &str, name: &str, container: &Container) -> Value 
             "metadata": metadata,
             // Seven fractional digits, as the service renders timestamps.
             "lastModifiedTime": format!("{}0Z", modified.format("%Y-%m-%dT%H:%M:%S%.6f")),
-            "leaseStatus": "Unlocked",
-            "leaseState": "Available",
-            "hasImmutabilityPolicy": false,
-            "hasLegalHold": false,
+            "leaseStatus": if lease.blocks() { "Locked" } else { "Unlocked" },
+            "leaseState": lease.as_str(),
+            "hasImmutabilityPolicy": container.immutability.is_some(),
+            "hasLegalHold": !container.legal_hold.is_empty(),
+            "legalHold": legal_hold_json(container),
             "deleted": false,
             "remainingRetentionDays": 0,
             "defaultEncryptionScope": container.default_encryption_scope,
             "denyEncryptionScopeOverride": container.deny_encryption_scope_override,
         },
-    })
+    });
+    if lease.blocks() {
+        let infinite = container.lease.as_ref().is_some_and(|l| l.duration.is_none());
+        out["properties"]["leaseDuration"] = json!(if infinite { "Infinite" } else { "Fixed" });
+    }
+    if let Some(policy) = &container.immutability {
+        out["properties"]["immutabilityPolicy"] = container_policy_json(policy);
+    }
+    out
 }
 
 /// Applies the settable members of a request to a container.
@@ -665,10 +676,23 @@ fn delete_container(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Rep
     require_account(ctx, account)?;
     let state = ctx.engine.state::<StorageState>();
     let mut state = state.lock();
-    let removed = state
-        .accounts
-        .get_mut(account)
-        .and_then(|a| a.containers.remove(request.param("containerName")));
+    let containers = &mut state.accounts.get_mut(account).ok_or_else(container_not_found)?.containers;
+    let name = request.param("containerName");
+    if let Some(container) = containers.get(name) {
+        let now = SystemTime::now();
+        if let Some(protection) = container.deletion_blocker(now) {
+            let (code, message) = protected(protection);
+            return Err(ArmError::conflict(code, message));
+        }
+        if container.lease_state(now).blocks() {
+            return Err(ArmError::new(
+                StatusCode::PRECONDITION_FAILED,
+                "LeaseIdMissing",
+                "There is currently a lease on the container and no lease ID was specified in the request.",
+            ));
+        }
+    }
+    let removed = containers.remove(name);
     // Deleting a container that is not there is not an error on this plane.
     let status = if removed.is_some() { StatusCode::OK } else { StatusCode::NO_CONTENT };
     Ok((status, Value::Null))

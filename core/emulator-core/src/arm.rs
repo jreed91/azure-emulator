@@ -217,9 +217,15 @@ pub struct OperationRequest<'a> {
     /// Path parameters by the name the specification gives them, e.g. `vaultName`.
     pub params: &'a HashMap<String, String>,
     pub body: &'a Value,
+    pub headers: &'a http::HeaderMap,
 }
 
 impl OperationRequest<'_> {
+    /// A request header, if present and text.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers.get(name).and_then(|v| v.to_str().ok())
+    }
+
     /// A path parameter; empty if the operation's path has no such parameter.
     pub fn param(&self, name: &str) -> &str {
         self.params.get(name).map(String::as_str).unwrap_or("")
@@ -662,6 +668,7 @@ async fn serve(
         engine,
         registry,
         method: &parts.method,
+        headers: &parts.headers,
         api_version,
         body: &body,
     };
@@ -674,6 +681,7 @@ struct ArmRequest<'a> {
     engine: &'a Engine,
     registry: &'a ArmRegistry,
     method: &'a Method,
+    headers: &'a http::HeaderMap,
     api_version: &'a str,
     body: &'a Value,
 }
@@ -744,12 +752,18 @@ impl ArmRequest<'_> {
         let request = OperationRequest {
             params,
             body: self.body,
+            headers: self.headers,
         };
         let (status, body) = handler(&self.context(&group), &request)?;
+        // An entity tag in the body is also the response's ETag header.
+        let etag = body.get("etag").and_then(Value::as_str).map(str::to_string);
         let mut response = match body {
             Value::Null => status.into_response(),
             body => json_response(status, &body),
         };
+        if let Some(value) = etag.and_then(|etag| HeaderValue::from_str(&etag).ok()) {
+            response.headers_mut().insert(header::ETAG, value);
+        }
         // A long-running operation answers 202 with a status URL. Work in the
         // emulator is done before the first response, so that URL reports success.
         if status == StatusCode::ACCEPTED {

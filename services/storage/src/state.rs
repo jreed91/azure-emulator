@@ -40,7 +40,70 @@ pub(crate) struct Container {
     /// Settings only Resource Manager can set, fixed when the container is created.
     pub default_encryption_scope: String,
     pub deny_encryption_scope_override: bool,
+    /// Tags of the legal hold, if any; while there is one, no blob can be
+    /// overwritten or deleted.
+    pub legal_hold: Vec<LegalHoldTag>,
+    /// The time-based retention policy, if any.
+    pub immutability: Option<ImmutabilityPolicy>,
+    pub lease: Option<Lease>,
     pub blobs: BTreeMap<String, Blob>,
+}
+
+pub(crate) struct LegalHoldTag {
+    pub tag: String,
+    pub timestamp: String,
+}
+
+pub(crate) struct ImmutabilityPolicy {
+    pub days: i64,
+    pub locked: bool,
+    pub allow_protected_append_writes: Option<bool>,
+    pub allow_protected_append_writes_all: Option<bool>,
+    pub etag: String,
+    /// `(update, days, timestamp)`: how the policy got where it is.
+    pub history: Vec<(&'static str, i64, String)>,
+}
+
+pub(crate) struct Lease {
+    pub id: String,
+    /// Seconds, or `None` for an infinite lease.
+    pub duration: Option<u64>,
+    pub acquired: SystemTime,
+    /// When a broken lease stops blocking, once a break has been asked for.
+    pub broken_at: Option<SystemTime>,
+}
+
+/// A container lease's state at one moment.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum LeaseState {
+    Available,
+    Leased,
+    Expired,
+    Breaking,
+    Broken,
+}
+
+impl LeaseState {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Available => "Available",
+            Self::Leased => "Leased",
+            Self::Expired => "Expired",
+            Self::Breaking => "Breaking",
+            Self::Broken => "Broken",
+        }
+    }
+
+    /// Whether the lease currently blocks writes and deletion.
+    pub(crate) fn blocks(self) -> bool {
+        matches!(self, Self::Leased | Self::Breaking)
+    }
+}
+
+/// Why a blob cannot be overwritten or deleted.
+pub(crate) enum Protection {
+    LegalHold,
+    Retention,
 }
 
 impl Container {
@@ -53,8 +116,43 @@ impl Container {
             public_access: "None".into(),
             default_encryption_scope: "$account-encryption-key".into(),
             deny_encryption_scope_override: false,
+            legal_hold: Vec::new(),
+            immutability: None,
+            lease: None,
             blobs: BTreeMap::new(),
         }
+    }
+
+    pub(crate) fn lease_state(&self, now: SystemTime) -> LeaseState {
+        let Some(lease) = &self.lease else {
+            return LeaseState::Available;
+        };
+        if let Some(broken_at) = lease.broken_at {
+            return if now >= broken_at { LeaseState::Broken } else { LeaseState::Breaking };
+        }
+        match lease.duration {
+            Some(seconds) if now >= lease.acquired + std::time::Duration::from_secs(seconds) => LeaseState::Expired,
+            _ => LeaseState::Leased,
+        }
+    }
+
+    /// Whether `blob` is protected from being overwritten or deleted now.
+    pub(crate) fn protection(&self, blob: &Blob, now: SystemTime) -> Option<Protection> {
+        if !self.legal_hold.is_empty() {
+            return Some(Protection::LegalHold);
+        }
+        let policy = self.immutability.as_ref()?;
+        let retained_until = blob.created + std::time::Duration::from_secs(policy.days.max(0) as u64 * 86_400);
+        (now < retained_until).then_some(Protection::Retention)
+    }
+
+    /// Why the container itself cannot be deleted, if it cannot: a legal hold,
+    /// or a blob still under retention.
+    pub(crate) fn deletion_blocker(&self, now: SystemTime) -> Option<Protection> {
+        if !self.legal_hold.is_empty() {
+            return Some(Protection::LegalHold);
+        }
+        self.blobs.values().find_map(|blob| self.protection(blob, now))
     }
 }
 
