@@ -22,6 +22,12 @@
 //!       }]
 //!     }]
 //!   }],
+//!   "cosmos": [{
+//!     "resourceGroup": "local",
+//!     "account": "local-cosmos",
+//!     "key": "<base64 key>",
+//!     "databases": [{ "id": "app", "containers": [{ "id": "orders", "partitionKey": "/tenant" }] }]
+//!   }],
 //!   "resources": [
 //!     { "id": "/subscriptions/.../resourceGroups/local/providers/Microsoft.Storage/storageAccounts/files",
 //!       "apiVersion": "2023-05-01", "body": { "location": "eastus", "kind": "StorageV2", "sku": { "name": "Standard_LRS" } } }
@@ -40,6 +46,7 @@ use tower::ServiceExt;
 use crate::Emulator;
 
 const SERVICE_BUS_API: &str = "2022-10-01-preview";
+const COSMOS_API: &str = "2024-11-15";
 const RESOURCES_API: &str = "2021-04-01";
 
 /// One Resource Manager request the file asks for.
@@ -131,6 +138,54 @@ fn steps(file: &Value, default_subscription: &str) -> Result<Vec<Step>, String> 
                     path: format!("{rule_path}/regenerateKeys?api-version={SERVICE_BUS_API}"),
                     body: json!({ "keyType": kind, "key": key }),
                 });
+            }
+        }
+    }
+    for cosmos in list(file, "cosmos") {
+        let group = text(cosmos, "resourceGroup", "cosmos entry")?;
+        let name = text(cosmos, "account", "cosmos entry")?;
+        let location = cosmos.get("location").and_then(Value::as_str).unwrap_or("eastus");
+        let group_path = format!("/subscriptions/{subscription}/resourceGroups/{group}");
+        if !groups.contains(&group_path) {
+            groups.push(group_path.clone());
+            steps.push(put(group_path.clone(), RESOURCES_API, json!({ "location": location })));
+        }
+        let account = format!("{group_path}/providers/Microsoft.DocumentDB/databaseAccounts/{name}");
+        steps.push(put(
+            account.clone(),
+            COSMOS_API,
+            json!({ "location": location, "properties": { "databaseAccountOfferType": "Standard", "locations": [{ "locationName": location }] } }),
+        ));
+        for (field, kind) in [("key", "primary"), ("secondaryKey", "secondary"), ("readonlyKey", "primaryReadonly")] {
+            if let Some(key) = cosmos.get(field).and_then(Value::as_str) {
+                steps.push(Step {
+                    method: Method::POST,
+                    path: format!("{account}/regenerateKey?api-version={COSMOS_API}"),
+                    body: json!({ "keyKind": kind, "key": key }),
+                });
+            }
+        }
+        for database in list(cosmos, "databases") {
+            let id = text(database, "id", "cosmos database")?;
+            let database_path = format!("{account}/sqlDatabases/{id}");
+            let mut body = json!({ "properties": { "resource": { "id": id }, "options": {} } });
+            if let Some(throughput) = database.get("throughput") {
+                body["properties"]["options"]["throughput"] = throughput.clone();
+            }
+            steps.push(put(database_path.clone(), COSMOS_API, body));
+            for container in list(database, "containers") {
+                let container_id = text(container, "id", "cosmos container")?;
+                let mut resource = container.as_object().cloned().unwrap_or_default();
+                resource.remove("throughput");
+                // "partitionKey": "/tenant" is short for {"paths": ["/tenant"]}.
+                if let Some(Value::String(path)) = resource.get("partitionKey").cloned() {
+                    resource.insert("partitionKey".into(), json!({ "paths": [path], "kind": "Hash" }));
+                }
+                let mut body = json!({ "properties": { "resource": resource, "options": {} } });
+                if let Some(throughput) = container.get("throughput") {
+                    body["properties"]["options"]["throughput"] = throughput.clone();
+                }
+                steps.push(put(format!("{database_path}/containers/{container_id}"), COSMOS_API, body));
             }
         }
     }

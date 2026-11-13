@@ -78,6 +78,7 @@ pub fn identity(config: &Config, bind_address: &str) -> Result<TlsIdentity, Erro
         format!("*{}", config.blob_host_suffix()),
         format!("*{}", config.vault_host_suffix()),
         format!("*.servicebus.{}", config.dns_suffix),
+        format!("*.documents.{}", config.dns_suffix),
     ];
     if bind_address.parse::<std::net::IpAddr>().is_ok_and(|ip| !ip.is_unspecified()) {
         names.push(bind_address.to_string());

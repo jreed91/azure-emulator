@@ -7,6 +7,7 @@ edition.workspace = true
 tokio-rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 emulator-core = { workspace = true }
+service-cosmosdb = { workspace = true }
 service-servicebus = { workspace = true }
 service-managedidentity = { workspace = true }
 service-entra = { workspace = true }

@@ -1,0 +1,4302 @@
+[
+  {
+    "body": {
+      "location": "West US",
+      "properties": {
+        "authenticationMethod": "Cassandra",
+        "cassandraVersion": "3.11",
+        "clientCertificates": [
+          {
+            "pem": "-----BEGIN CERTIFICATE-----\n...Base64 encoded certificate...\n-----END CERTIFICATE-----"
+          }
+        ],
+        "clusterNameOverride": "ClusterNameIllegalForAzureResource",
+        "delegatedManagementSubnetId": "/subscriptions/536e130b-d7d6-4ac7-98a5-de20d69588d2/resourceGroups/customer-vnet-rg/providers/Microsoft.Network/virtualNetworks/customer-vnet/subnets/management",
+        "externalGossipCertificates": [
+          {
+            "pem": "-----BEGIN CERTIFICATE-----\n...Base64 encoded certificate...\n-----END CERTIFICATE-----"
+          }
+        ],
+        "externalSeedNodes": [
+          {
+            "ipAddress": "10.52.221.2"
+          },
+          {
+            "ipAddress": "10.52.221.3"
+          },
+          {
+            "ipAddress": "10.52.221.4"
+          }
+        ],
+        "hoursBetweenBackups": 24,
+        "initialCassandraAdminPassword": "mypassword"
+      },
+      "tags": {}
+    },
+    "operationId": "CassandraClusters_CreateUpdate",
+    "parameters": {
+      "api-version": "2026-07-15",
+      "clusterName": "cassandra-prod",
+      "resourceGroupName": "cassandra-prod-rg",
+      "subscriptionId": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/cassandraClusters/{clusterName}",
+    "response": {
+      "id": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/cassandra-prod-rg/providers/Microsoft.DocumentDB/cassandraClusters/cassandra-prod",
+      "location": "West US",
+      "name": "cassandra-prod",
+      "properties": {
+        "authenticationMethod": "Cassandra",
+        "cassandraVersion": "3.11",
+        "clientCertificates": [
+          {
+            "pem": "-----BEGIN CERTIFICATE-----\n...Base64 encoded certificate...\n-----END CERTIFICATE-----"
+          }
+        ],
+        "clusterNameOverride": "ClusterNameIllegalForAzureResource",
+        "delegatedManagementSubnetId": "/subscriptions/536e130b-d7d6-4ac7-98a5-de20d69588d2/resourceGroups/customer-vnet-rg/providers/Microsoft.Network/virtualNetworks/customer-vnet/subnets/management",
+        "externalGossipCertificates": [
+          {
+            "pem": "-----BEGIN CERTIFICATE-----\n...Base64 encoded certificate...\n-----END CERTIFICATE-----"
+          }
+        ],
+        "externalSeedNodes": [
+          {
+            "ipAddress": "10.52.221.2"
+          },
+          {
+            "ipAddress": "10.52.221.3"
+          },
+          {
+            "ipAddress": "10.52.221.4"
+          }
+        ],
+        "gossipCertificates": [
+          {
+            "pem": "-----BEGIN CERTIFICATE-----\n...Base64 encoded certificate...\n-----END CERTIFICATE-----"
+          }
+        ],
+        "hoursBetweenBackups": 24,
+        "provisioningState": "Succeeded",
+        "seedNodes": [
+          {
+            "ipAddress": "10.52.221.2"
+          },
+          {
+            "ipAddress": "10.52.221.3"
+          },
+          {
+            "ipAddress": "10.52.221.4"
+          },
+          {
+            "ipAddress": "192.168.12.2"
+          },
+          {
+            "ipAddress": "192.168.12.3"
+          },
+          {
+            "ipAddress": "192.168.12.4"
+          }
+        ]
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/cassandraClusters"
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "CosmosDBManagedCassandraClusterCreate",
+    "type": "Microsoft.DocumentDB/cassandraClusters"
+  },
+  {
+    "body": {
+      "properties": {
+        "base64EncodedCassandraYamlFragment": "Y29tcGFjdGlvbl90aHJvdWdocHV0X21iX3Blcl9zZWM6IDMyCmNvbXBhY3Rpb25fbGFyZ2VfcGFydGl0aW9uX3dhcm5pbmdfdGhyZXNob2xkX21iOiAxMDA=",
+        "dataCenterLocation": "West US 2",
+        "delegatedSubnetId": "/subscriptions/536e130b-d7d6-4ac7-98a5-de20d69588d2/resourceGroups/customer-vnet-rg/providers/Microsoft.Network/virtualNetworks/customer-vnet/subnets/dc1-subnet",
+        "nodeCount": 9
+      }
+    },
+    "operationId": "CassandraDataCenters_CreateUpdate",
+    "parameters": {
+      "api-version": "2026-07-15",
+      "clusterName": "cassandra-prod",
+      "dataCenterName": "dc1",
+      "resourceGroupName": "cassandra-prod-rg",
+      "subscriptionId": "00000000-0000-0000-0000-000000000000"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/cassandraClusters/{clusterName}/dataCenters/{dataCenterName}",
+    "response": {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/cassandra-prod-rg/providers/Microsoft.DocumentDB/cassandraClusters/cassandra-prod/dataCenters/dc1",
+      "name": "dc1",
+      "properties": {
+        "dataCenterLocation": "West US 2",
+        "delegatedSubnetId": "/subscriptions/536e130b-d7d6-4ac7-98a5-de20d69588d2/resourceGroups/customer-vnet-rg/providers/Microsoft.Network/virtualNetworks/customer-vnet/subnets/dc1",
+        "nodeCount": 9,
+        "provisioningState": "Succeeded",
+        "seedNodes": [
+          {
+            "ipAddress": "192.168.12.2"
+          },
+          {
+            "ipAddress": "192.168.12.3"
+          },
+          {
+            "ipAddress": "192.168.12.4"
+          }
+        ]
+      },
+      "type": "Microsoft.DocumentDB/cassandraClusters/dataCenters"
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "CosmosDBManagedCassandraDataCenterCreate",
+    "type": "Microsoft.DocumentDB/cassandraClusters/dataCenters"
+  },
+  {
+    "body": {
+      "identity": {
+        "type": "SystemAssigned,UserAssigned",
+        "userAssignedIdentities": {
+          "/subscriptions/fa5fc227-a624-475e-b696-cdd604c735bc/resourceGroups/eu2cgroup/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id1": {}
+        }
+      },
+      "kind": "MongoDB",
+      "location": "westus",
+      "properties": {
+        "analyticalStorageConfiguration": {
+          "schemaType": "WellDefined"
+        },
+        "apiProperties": {
+          "serverVersion": "3.2"
+        },
+        "backupPolicy": {
+          "backupRetentionLockExpirationTimestamp": "2030-01-01T00:00:00Z",
+          "periodicModeProperties": {
+            "backupIntervalInMinutes": 240,
+            "backupRetentionIntervalInHours": 8,
+            "backupStorageRedundancy": "Geo"
+          },
+          "type": "Periodic"
+        },
+        "capacity": {
+          "totalThroughputLimit": 2000
+        },
+        "consistencyPolicy": {
+          "defaultConsistencyLevel": "BoundedStaleness",
+          "maxIntervalInSeconds": 10,
+          "maxStalenessPrefix": 200
+        },
+        "cors": [
+          {
+            "allowedOrigins": "https://test"
+          }
+        ],
+        "createMode": "Default",
+        "databaseAccountOfferType": "Standard",
+        "defaultIdentity": "FirstPartyIdentity",
+        "defaultPriorityLevel": "Low",
+        "enableAnalyticalStorage": true,
+        "enableBurstCapacity": true,
+        "enableFreeTier": false,
+        "enablePerRegionPerPartitionAutoscale": true,
+        "enablePriorityBasedExecution": true,
+        "enforceHierarchicalPartitionKeyIdLastLevel": false,
+        "ipRules": [
+          {
+            "ipAddressOrRange": "23.43.230.120"
+          },
+          {
+            "ipAddressOrRange": "110.12.240.0/12"
+          }
+        ],
+        "isVirtualNetworkFilterEnabled": true,
+        "keyVaultKeyUri": "https://myKeyVault.vault.azure.net",
+        "locations": [
+          {
+            "failoverPriority": 0,
+            "isZoneRedundant": false,
+            "locationName": "southcentralus"
+          },
+          {
+            "failoverPriority": 1,
+            "isZoneRedundant": false,
+            "locationName": "eastus"
+          }
+        ],
+        "minimalTlsVersion": "Tls12",
+        "networkAclBypass": "AzureServices",
+        "networkAclBypassResourceIds": [
+          "/subscriptions/subId/resourcegroups/rgName/providers/Microsoft.Synapse/workspaces/workspaceName"
+        ],
+        "perPartitionAutomaticFailoverEnabled": true,
+        "publicNetworkAccess": "Enabled",
+        "virtualNetworkRules": [
+          {
+            "id": "/subscriptions/subId/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/vnet1/subnets/subnet1",
+            "ignoreMissingVNetServiceEndpoint": false
+          }
+        ]
+      },
+      "tags": {}
+    },
+    "operationId": "DatabaseAccounts_CreateOrUpdate",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1",
+      "identity": {
+        "principalId": "52f4fef3-3c3f-4ff3-b52e-b5c9eeb68656",
+        "tenantId": "33e01921-4d64-4f8c-a055-5bdaffd5e33d",
+        "type": "SystemAssigned,UserAssigned",
+        "userAssignedIdentities": {
+          "/subscriptions/fa5fc227-a624-475e-b696-cdd604c735bc/resourceGroups/eu2cgroup/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id1": {
+            "clientId": "fbe75b66-01c5-4f87-a220-233af3270436",
+            "principalId": "33e01921-4d64-4f8c-a055-5bdaffd5e33d"
+          }
+        }
+      },
+      "kind": "MongoDB",
+      "location": "West US",
+      "name": "ddb1",
+      "properties": {
+        "analyticalStorageConfiguration": {
+          "schemaType": "WellDefined"
+        },
+        "apiProperties": {
+          "serverVersion": "3.2"
+        },
+        "backupPolicy": {
+          "backupRetentionLockExpirationTimestamp": "2030-01-01T00:00:00Z",
+          "periodicModeProperties": {
+            "backupIntervalInMinutes": 240,
+            "backupRetentionIntervalInHours": 8,
+            "backupStorageRedundancy": "Geo"
+          },
+          "type": "Periodic"
+        },
+        "capacity": {
+          "totalThroughputLimit": 2000
+        },
+        "consistencyPolicy": {
+          "defaultConsistencyLevel": "BoundedStaleness",
+          "maxIntervalInSeconds": 10,
+          "maxStalenessPrefix": 200
+        },
+        "cors": [
+          {
+            "allowedOrigins": "https://test"
+          }
+        ],
+        "createMode": "Default",
+        "databaseAccountOfferType": "Standard",
+        "defaultIdentity": "FirstPartyIdentity",
+        "defaultPriorityLevel": "Low",
+        "disableKeyBasedMetadataWriteAccess": false,
+        "enableAnalyticalStorage": true,
+        "enableBurstCapacity": true,
+        "enableFreeTier": false,
+        "enablePriorityBasedExecution": true,
+        "enforceHierarchicalPartitionKeyIdLastLevel": false,
+        "failoverPolicies": [
+          {
+            "failoverPriority": 0,
+            "id": "ddb1-southcentralus",
+            "locationName": "South Central US"
+          },
+          {
+            "failoverPriority": 1,
+            "id": "ddb1-eastus",
+            "locationName": "East US"
+          }
+        ],
+        "instanceId": "d9b26648-2f53-4541-b3d8-3044f4f9810d",
+        "ipRules": [
+          {
+            "ipAddressOrRange": "23.43.230.120"
+          },
+          {
+            "ipAddressOrRange": "110.12.240.0/12"
+          }
+        ],
+        "isVirtualNetworkFilterEnabled": true,
+        "keyVaultKeyUri": "https://myKeyVault.vault.azure.net",
+        "keyVaultKeyUriVersion": "009d400efbef459bac31fb86fcce8884",
+        "keysMetadata": {
+          "primaryMasterKey": {
+            "generationTime": "2021-03-12T22:05:09Z"
+          },
+          "primaryReadonlyMasterKey": {
+            "generationTime": "2021-03-12T22:05:09Z"
+          },
+          "secondaryMasterKey": {
+            "generationTime": "2021-03-12T22:05:09Z"
+          },
+          "secondaryReadonlyMasterKey": {
+            "generationTime": "2021-03-12T22:05:09Z"
+          }
+        },
+        "locations": [
+          {
+            "failoverPriority": 0,
+            "id": "ddb1-southcentralus",
+            "isZoneRedundant": false,
+            "locationName": "South Central US",
+            "provisioningState": "Initializing"
+          },
+          {
+            "failoverPriority": 1,
+            "id": "ddb1-eastus",
+            "isZoneRedundant": false,
+            "locationName": "East US",
+            "provisioningState": "Initializing"
+          }
+        ],
+        "minimalTlsVersion": "Tls12",
+        "networkAclBypass": "AzureServices",
+        "networkAclBypassResourceIds": [
+          "/subscriptions/subId/resourcegroups/rgName/providers/Microsoft.Synapse/workspaces/workspaceName"
+        ],
+        "perPartitionAutomaticFailoverEnabled": true,
+        "provisioningState": "Initializing",
+        "publicNetworkAccess": "Enabled",
+        "readLocations": [
+          {
+            "failoverPriority": 0,
+            "id": "ddb1-southcentralus",
+            "isZoneRedundant": false,
+            "locationName": "South Central US",
+            "provisioningState": "Initializing"
+          },
+          {
+            "failoverPriority": 1,
+            "id": "ddb1-eastus",
+            "isZoneRedundant": false,
+            "locationName": "East US",
+            "provisioningState": "Initializing"
+          }
+        ],
+        "virtualNetworkRules": [
+          {
+            "id": "/subscriptions/subId/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/vnet1/subnets/subnet1"
+          }
+        ],
+        "writeLocations": [
+          {
+            "failoverPriority": 0,
+            "id": "ddb1-southcentralus",
+            "isZoneRedundant": false,
+            "locationName": "South Central US",
+            "provisioningState": "Initializing"
+          }
+        ]
+      },
+      "systemData": {
+        "createdAt": "2021-03-12T22:05:09Z"
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/databaseAccounts"
+    },
+    "statuses": [
+      200
+    ],
+    "title": "CosmosDBDatabaseAccountCreateMax",
+    "type": "Microsoft.DocumentDB/databaseAccounts"
+  },
+  {
+    "body": {
+      "location": "westus",
+      "properties": {
+        "createMode": "Default",
+        "databaseAccountOfferType": "Standard",
+        "locations": [
+          {
+            "failoverPriority": 0,
+            "isZoneRedundant": false,
+            "locationName": "southcentralus"
+          }
+        ]
+      }
+    },
+    "operationId": "DatabaseAccounts_CreateOrUpdate",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1",
+      "kind": "GlobalDocumentDB",
+      "location": "West US",
+      "name": "ddb1",
+      "properties": {
+        "apiProperties": {},
+        "backupPolicy": {
+          "periodicModeProperties": {
+            "backupIntervalInMinutes": 240,
+            "backupRetentionIntervalInHours": 720,
+            "backupStorageRedundancy": "Geo"
+          },
+          "type": "Periodic"
+        },
+        "consistencyPolicy": {
+          "defaultConsistencyLevel": "Session",
+          "maxIntervalInSeconds": 5,
+          "maxStalenessPrefix": 100
+        },
+        "cors": [],
+        "createMode": "Default",
+        "databaseAccountOfferType": "Standard",
+        "disableKeyBasedMetadataWriteAccess": false,
+        "enableAnalyticalStorage": false,
+        "enableFreeTier": false,
+        "failoverPolicies": [
+          {
+            "failoverPriority": 0,
+            "id": "ddb1-southcentralus",
+            "locationName": "South Central US"
+          }
+        ],
+        "instanceId": "d9b26648-2f53-4541-b3d8-3044f4f9810d",
+        "ipRules": [],
+        "keysMetadata": {
+          "primaryMasterKey": {
+            "generationTime": "2021-03-12T22:05:09Z"
+          },
+          "primaryReadonlyMasterKey": {
+            "generationTime": "2021-03-12T22:05:09Z"
+          },
+          "secondaryMasterKey": {
+            "generationTime": "2021-03-12T22:05:09Z"
+          },
+          "secondaryReadonlyMasterKey": {
+            "generationTime": "2021-03-12T22:05:09Z"
+          }
+        },
+        "locations": [
+          {
+            "failoverPriority": 0,
+            "id": "ddb1-southcentralus",
+            "isZoneRedundant": false,
+            "locationName": "South Central US",
+            "provisioningState": "Initializing"
+          }
+        ],
+        "minimalTlsVersion": "Tls",
+        "networkAclBypass": "None",
+        "networkAclBypassResourceIds": [],
+        "provisioningState": "Initializing",
+        "readLocations": [
+          {
+            "failoverPriority": 0,
+            "id": "ddb1-southcentralus",
+            "isZoneRedundant": false,
+            "locationName": "South Central US",
+            "provisioningState": "Initializing"
+          }
+        ],
+        "writeLocations": [
+          {
+            "failoverPriority": 0,
+            "id": "ddb1-southcentralus",
+            "isZoneRedundant": false,
+            "locationName": "South Central US",
+            "provisioningState": "Initializing"
+          }
+        ]
+      },
+      "systemData": {
+        "createdAt": "2021-03-12T22:05:09Z"
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/databaseAccounts"
+    },
+    "statuses": [
+      200
+    ],
+    "title": "CosmosDBDatabaseAccountCreateMin",
+    "type": "Microsoft.DocumentDB/databaseAccounts"
+  },
+  {
+    "body": {
+      "kind": "GlobalDocumentDB",
+      "location": "westus",
+      "properties": {
+        "apiProperties": {
+          "serverVersion": "3.2"
+        },
+        "backupPolicy": {
+          "continuousModeProperties": {
+            "tier": "Continuous30Days"
+          },
+          "type": "Continuous"
+        },
+        "consistencyPolicy": {
+          "defaultConsistencyLevel": "BoundedStaleness",
+          "maxIntervalInSeconds": 10,
+          "maxStalenessPrefix": 200
+        },
+        "createMode": "Restore",
+        "databaseAccountOfferType": "Standard",
+        "enableAnalyticalStorage": true,
+        "enableFreeTier": false,
+        "enforceHierarchicalPartitionKeyIdLastLevel": false,
+        "keyVaultKeyUri": "https://myKeyVault.vault.azure.net",
+        "locations": [
+          {
+            "failoverPriority": 0,
+            "isZoneRedundant": false,
+            "locationName": "southcentralus"
+          }
+        ],
+        "minimalTlsVersion": "Tls",
+        "restoreParameters": {
+          "databasesToRestore": [
+            {
+              "collectionNames": [
+                "collection1",
+                "collection2"
+              ],
+              "databaseName": "db1"
+            },
+            {
+              "collectionNames": [
+                "collection3",
+                "collection4"
+              ],
+              "databaseName": "db2"
+            }
+          ],
+          "restoreMode": "PointInTime",
+          "restoreSource": "/subscriptions/subid/providers/Microsoft.DocumentDB/locations/westus/restorableDatabaseAccounts/1a97b4bb-f6a0-430e-ade1-638d781830cc",
+          "restoreTimestampInUtc": "2021-03-11T22:05:09Z",
+          "restoreWithTtlDisabled": false,
+          "sourceBackupLocation": "westus"
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "DatabaseAccounts_CreateOrUpdate",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1",
+      "kind": "GlobalDocumentDB",
+      "location": "West US",
+      "name": "ddb1",
+      "properties": {
+        "apiProperties": {},
+        "backupPolicy": {
+          "continuousModeProperties": {
+            "tier": "Continuous30Days"
+          },
+          "type": "Continuous"
+        },
+        "consistencyPolicy": {
+          "defaultConsistencyLevel": "Session",
+          "maxIntervalInSeconds": 5,
+          "maxStalenessPrefix": 100
+        },
+        "createMode": "Restore",
+        "databaseAccountOfferType": "Standard",
+        "disableKeyBasedMetadataWriteAccess": false,
+        "enableAnalyticalStorage": false,
+        "enableFreeTier": false,
+        "enforceHierarchicalPartitionKeyIdLastLevel": false,
+        "failoverPolicies": [
+          {
+            "failoverPriority": 0,
+            "id": "ddb1-southcentralus",
+            "locationName": "South Central US"
+          }
+        ],
+        "instanceId": "d9b26648-2f53-4541-b3d8-3044f4f9810d",
+        "ipRules": [],
+        "keysMetadata": {
+          "primaryMasterKey": {
+            "generationTime": "2022-02-25T20:30:11Z"
+          },
+          "primaryReadonlyMasterKey": {
+            "generationTime": "2022-02-25T20:30:11Z"
+          },
+          "secondaryMasterKey": {
+            "generationTime": "2022-02-25T20:30:11Z"
+          },
+          "secondaryReadonlyMasterKey": {
+            "generationTime": "2022-02-25T20:30:11Z"
+          }
+        },
+        "locations": [
+          {
+            "failoverPriority": 0,
+            "id": "ddb1-southcentralus",
+            "isZoneRedundant": false,
+            "locationName": "South Central US",
+            "provisioningState": "Initializing"
+          }
+        ],
+        "minimalTlsVersion": "Tls",
+        "provisioningState": "Initializing",
+        "readLocations": [
+          {
+            "failoverPriority": 0,
+            "id": "ddb1-southcentralus",
+            "isZoneRedundant": false,
+            "locationName": "South Central US",
+            "provisioningState": "Initializing"
+          }
+        ],
+        "writeLocations": [
+          {
+            "failoverPriority": 0,
+            "id": "ddb1-southcentralus",
+            "isZoneRedundant": false,
+            "locationName": "South Central US",
+            "provisioningState": "Initializing"
+          }
+        ]
+      },
+      "systemData": {
+        "createdAt": "2021-03-12T22:05:09Z"
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/databaseAccounts"
+    },
+    "statuses": [
+      200
+    ],
+    "title": "CosmosDBRestoreDatabaseAccountCreateUpdate.json",
+    "type": "Microsoft.DocumentDB/databaseAccounts"
+  },
+  {
+    "body": {
+      "properties": {
+        "options": {},
+        "resource": {
+          "id": "databaseName"
+        }
+      }
+    },
+    "operationId": "DatabaseAccounts_CreateUpdateGremlinDatabase",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2016-03-31",
+      "databaseName": "databaseName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "subid"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/apis/gremlin/databases/{databaseName}",
+    "response": {
+      "id": "databaseName",
+      "name": "databaseName",
+      "properties": {
+        "_etag": "\"00000a00-0000-0000-0000-56672f920000\"",
+        "_rid": "CqNBAA==",
+        "_ts": 1449602962,
+        "id": "databaseName"
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/apis/databases"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBGremlinDatabaseCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/apis/databases"
+  },
+  {
+    "body": {
+      "properties": {
+        "options": {},
+        "resource": {
+          "id": "testcoll",
+          "indexes": [
+            {
+              "key": {
+                "keys": [
+                  "testKey"
+                ]
+              },
+              "options": {
+                "expireAfterSeconds": 100,
+                "unique": true
+              }
+            }
+          ],
+          "shardKey": {
+            "testKey": "Hash"
+          }
+        }
+      }
+    },
+    "operationId": "DatabaseAccounts_CreateUpdateMongoDBCollection",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2016-03-31",
+      "collectionName": "collectionName",
+      "databaseName": "databaseName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "subid"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/apis/mongodb/databases/{databaseName}/collections/{collectionName}",
+    "response": {
+      "id": "collectionName",
+      "name": "collectionName",
+      "properties": {
+        "id": "testcoll",
+        "indexes": [
+          {
+            "key": {
+              "keys": [
+                "testKey"
+              ]
+            },
+            "options": {
+              "expireAfterSeconds": 100,
+              "unique": true
+            }
+          }
+        ],
+        "shardKey": {
+          "testKey": "Hash"
+        }
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/apis/collection"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBMongoDBCollectionCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/apis/databases/collections"
+  },
+  {
+    "body": {
+      "properties": {
+        "resource": {
+          "throughput": 400
+        }
+      }
+    },
+    "operationId": "DatabaseAccounts_UpdateMongoDBCollectionThroughput",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2016-03-31",
+      "collectionName": "collectionName",
+      "databaseName": "databaseName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "subid"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/apis/mongodb/databases/{databaseName}/collections/{collectionName}/settings/throughput",
+    "response": {
+      "properties": {
+        "throughput": 400
+      }
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBMongoDBCollectionThroughputUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/apis/databases/collections/settings"
+  },
+  {
+    "body": {
+      "properties": {
+        "options": {},
+        "resource": {
+          "conflictResolutionPolicy": {
+            "conflictResolutionPath": "/path",
+            "mode": "LastWriterWins"
+          },
+          "defaultTtl": 100,
+          "id": "containerName",
+          "indexingPolicy": {
+            "automatic": true,
+            "excludedPaths": [],
+            "includedPaths": [
+              {
+                "indexes": [
+                  {
+                    "dataType": "String",
+                    "kind": "Range",
+                    "precision": -1
+                  },
+                  {
+                    "dataType": "Number",
+                    "kind": "Range",
+                    "precision": -1
+                  }
+                ],
+                "path": "/*"
+              }
+            ],
+            "indexingMode": "Consistent"
+          },
+          "partitionKey": {
+            "kind": "Hash",
+            "paths": [
+              "/AccountNumber"
+            ]
+          },
+          "uniqueKeyPolicy": {
+            "uniqueKeys": [
+              {
+                "paths": [
+                  "/testPath"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    "operationId": "DatabaseAccounts_CreateUpdateSqlContainer",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2016-03-31",
+      "containerName": "containerName",
+      "databaseName": "databaseName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "subid"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/apis/sql/databases/{databaseName}/containers/{containerName}",
+    "response": {
+      "id": "containerName",
+      "name": "containerName",
+      "properties": {
+        "_etag": "\"00005900-0000-0000-0000-56f9a2630000\"",
+        "_rid": "PD5DALigDgw=",
+        "_ts": 1459200611,
+        "conflictResolutionPolicy": {
+          "conflictResolutionPath": "/path",
+          "mode": "LastWriterWins"
+        },
+        "defaultTtl": 100,
+        "id": "containerName",
+        "indexingPolicy": {
+          "automatic": true,
+          "excludedPaths": [],
+          "includedPaths": [
+            {
+              "indexes": [
+                {
+                  "dataType": "String",
+                  "kind": "Range",
+                  "precision": -1
+                },
+                {
+                  "dataType": "Number",
+                  "kind": "Range",
+                  "precision": -1
+                }
+              ],
+              "path": "/*"
+            }
+          ],
+          "indexingMode": "Consistent"
+        },
+        "partitionKey": {
+          "kind": "Hash",
+          "paths": [
+            "/AccountNumber"
+          ]
+        },
+        "uniqueKeyPolicy": {
+          "uniqueKeys": [
+            {
+              "paths": [
+                "/testPath"
+              ]
+            }
+          ]
+        }
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/apis/databases/containers"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBSqlContainerCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/apis/databases/containers"
+  },
+  {
+    "body": {
+      "properties": {
+        "resource": {
+          "throughput": 400
+        }
+      }
+    },
+    "operationId": "DatabaseAccounts_UpdateSqlContainerThroughput",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2016-03-31",
+      "containerName": "containerName",
+      "databaseName": "databaseName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "subid"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/apis/sql/databases/{databaseName}/containers/{containerName}/settings/throughput",
+    "response": {
+      "properties": {
+        "throughput": 400
+      }
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBSqlContainerThroughputUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/apis/databases/containers/settings"
+  },
+  {
+    "body": {
+      "properties": {
+        "options": {},
+        "resource": {
+          "conflictResolutionPolicy": {
+            "conflictResolutionPath": "/path",
+            "mode": "LastWriterWins"
+          },
+          "defaultTtl": 100,
+          "id": "graphName",
+          "indexingPolicy": {
+            "automatic": true,
+            "excludedPaths": [],
+            "includedPaths": [
+              {
+                "indexes": [
+                  {
+                    "dataType": "String",
+                    "kind": "Range",
+                    "precision": -1
+                  },
+                  {
+                    "dataType": "Number",
+                    "kind": "Range",
+                    "precision": -1
+                  }
+                ],
+                "path": "/*"
+              }
+            ],
+            "indexingMode": "Consistent"
+          },
+          "partitionKey": {
+            "kind": "Hash",
+            "paths": [
+              "/AccountNumber"
+            ]
+          },
+          "uniqueKeyPolicy": {
+            "uniqueKeys": [
+              {
+                "paths": [
+                  "/testPath"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    "operationId": "DatabaseAccounts_CreateUpdateGremlinGraph",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2016-03-31",
+      "databaseName": "databaseName",
+      "graphName": "graphName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "subid"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/apis/gremlin/databases/{databaseName}/graphs/{graphName}",
+    "response": {
+      "id": "graphName",
+      "name": "graphName",
+      "properties": {
+        "_etag": "\"00005900-0000-0000-0000-56f9a2630000\"",
+        "_rid": "PD5DALigDgw=",
+        "_ts": 1459200611,
+        "conflictResolutionPolicy": {
+          "conflictResolutionPath": "/path",
+          "mode": "LastWriterWins"
+        },
+        "defaultTtl": 100,
+        "id": "graphName",
+        "indexingPolicy": {
+          "automatic": true,
+          "excludedPaths": [],
+          "includedPaths": [
+            {
+              "indexes": [
+                {
+                  "dataType": "String",
+                  "kind": "Range",
+                  "precision": -1
+                },
+                {
+                  "dataType": "Number",
+                  "kind": "Range",
+                  "precision": -1
+                }
+              ],
+              "path": "/*"
+            }
+          ],
+          "indexingMode": "Consistent"
+        },
+        "partitionKey": {
+          "kind": "Hash",
+          "paths": [
+            "/AccountNumber"
+          ]
+        },
+        "uniqueKeyPolicy": {
+          "uniqueKeys": [
+            {
+              "paths": [
+                "/testPath"
+              ]
+            }
+          ]
+        }
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/apis/databases/graphs"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBGremlinGraphCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/apis/databases/graphs"
+  },
+  {
+    "body": {
+      "properties": {
+        "resource": {
+          "throughput": 400
+        }
+      }
+    },
+    "operationId": "DatabaseAccounts_UpdateGremlinGraphThroughput",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2016-03-31",
+      "databaseName": "databaseName",
+      "graphName": "graphName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "subid"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/apis/gremlin/databases/{databaseName}/graphs/{graphName}/settings/throughput",
+    "response": {
+      "properties": {
+        "throughput": 400
+      }
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBGremlinGraphThroughputUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/apis/databases/graphs/settings"
+  },
+  {
+    "body": {
+      "properties": {
+        "resource": {
+          "throughput": 400
+        }
+      }
+    },
+    "operationId": "DatabaseAccounts_UpdateGremlinDatabaseThroughput",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2016-03-31",
+      "databaseName": "databaseName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "subid"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/apis/gremlin/databases/{databaseName}/settings/throughput",
+    "response": {
+      "properties": {
+        "throughput": 400
+      }
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBGremlinDatabaseThroughputUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/apis/databases/settings"
+  },
+  {
+    "body": {
+      "properties": {
+        "options": {},
+        "resource": {
+          "id": "keyspaceName"
+        }
+      }
+    },
+    "operationId": "DatabaseAccounts_CreateUpdateCassandraKeyspace",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2016-03-31",
+      "keyspaceName": "keyspaceName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "subid"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/apis/cassandra/keyspaces/{keyspaceName}",
+    "response": {
+      "id": "keyspaceName",
+      "name": "keyspaceName",
+      "properties": {
+        "id": "keyspaceName"
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/apis/keyspaces"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBCassandraKeyspaceCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/apis/keyspaces"
+  },
+  {
+    "body": {
+      "properties": {
+        "resource": {
+          "throughput": 400
+        }
+      }
+    },
+    "operationId": "DatabaseAccounts_UpdateCassandraKeyspaceThroughput",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2016-03-31",
+      "keyspaceName": "keyspaceName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "subid"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/apis/cassandra/keyspaces/{keyspaceName}/settings/throughput",
+    "response": {
+      "properties": {
+        "throughput": 400
+      }
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBCassandraKeyspaceThroughputUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/apis/keyspaces/settings"
+  },
+  {
+    "body": {
+      "properties": {
+        "options": {},
+        "resource": {
+          "defaultTtl": 100,
+          "id": "tableName",
+          "schema": {
+            "clusterKeys": [
+              {
+                "name": "columnA",
+                "orderBy": "Asc"
+              }
+            ],
+            "columns": [
+              {
+                "name": "columnA",
+                "type": "Ascii"
+              }
+            ],
+            "partitionKeys": [
+              {
+                "name": "columnA"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "operationId": "DatabaseAccounts_CreateUpdateCassandraTable",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2016-03-31",
+      "keyspaceName": "tableName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "subid",
+      "tableName": "tableName"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/apis/cassandra/keyspaces/{keyspaceName}/tables/{tableName}",
+    "response": {
+      "id": "tableName",
+      "name": "tableName",
+      "properties": {
+        "defaultTtl": 100,
+        "id": "tableName",
+        "schema": {
+          "clusterKeys": [
+            {
+              "name": "columnA",
+              "orderBy": "Asc"
+            }
+          ],
+          "columns": [
+            {
+              "name": "columnA",
+              "type": "Ascii"
+            }
+          ],
+          "partitionKeys": [
+            {
+              "name": "columnA"
+            }
+          ]
+        }
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/apis/keyspaces/tables"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBCassandraTableCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/apis/keyspaces/tables"
+  },
+  {
+    "body": {
+      "properties": {
+        "resource": {
+          "throughput": 400
+        }
+      }
+    },
+    "operationId": "DatabaseAccounts_UpdateCassandraTableThroughput",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2016-03-31",
+      "keyspaceName": "keyspaceName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "subid",
+      "tableName": "tableName"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/apis/cassandra/keyspaces/{keyspaceName}/tables/{tableName}/settings/throughput",
+    "response": {
+      "properties": {
+        "throughput": 400
+      }
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBCassandraTableThroughputUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/apis/keyspaces/tables/settings"
+  },
+  {
+    "body": {
+      "properties": {
+        "options": {},
+        "resource": {
+          "id": "tableName"
+        }
+      }
+    },
+    "operationId": "DatabaseAccounts_CreateUpdateTable",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2016-03-31",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "subid",
+      "tableName": "tableName"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/apis/table/tables/{tableName}",
+    "response": {
+      "id": "tableName",
+      "name": "tableName",
+      "properties": {
+        "id": "tableName"
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/apis/tables"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBTableReplace",
+    "type": "Microsoft.DocumentDB/databaseAccounts/apis/tables"
+  },
+  {
+    "body": {
+      "properties": {
+        "resource": {
+          "throughput": 400
+        }
+      }
+    },
+    "operationId": "DatabaseAccounts_UpdateTableThroughput",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2016-03-31",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "subid",
+      "tableName": "tableName"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/apis/table/tables/{tableName}/settings/throughput",
+    "response": {
+      "properties": {
+        "throughput": 400
+      }
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBTableThroughputUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/apis/tables/settings"
+  },
+  {
+    "body": {
+      "location": "West US",
+      "properties": {
+        "options": {},
+        "resource": {
+          "id": "keyspaceName"
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "CassandraResources_CreateUpdateCassandraKeyspace",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "keyspaceName": "keyspaceName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/cassandraKeyspaces/{keyspaceName}",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/cassandraKeyspaces/keyspaceName",
+      "location": "West US",
+      "name": "keyspaceName",
+      "properties": {
+        "resource": {
+          "id": "keyspaceName"
+        }
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBCassandraKeyspaceCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces"
+  },
+  {
+    "body": {
+      "location": "West US",
+      "properties": {
+        "options": {},
+        "resource": {
+          "defaultTtl": 100,
+          "id": "tableName",
+          "schema": {
+            "clusterKeys": [
+              {
+                "name": "columnA",
+                "orderBy": "Asc"
+              }
+            ],
+            "columns": [
+              {
+                "name": "columnA",
+                "type": "Ascii"
+              }
+            ],
+            "partitionKeys": [
+              {
+                "name": "columnA"
+              }
+            ]
+          }
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "CassandraResources_CreateUpdateCassandraTable",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "keyspaceName": "keyspaceName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444",
+      "tableName": "tableName"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/cassandraKeyspaces/{keyspaceName}/tables/{tableName}",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/cassandraKeyspaces/keyspaceName/cassandraTables/tableName",
+      "location": "West US",
+      "name": "tableName",
+      "properties": {
+        "resource": {
+          "defaultTtl": 100,
+          "id": "tableName",
+          "schema": {
+            "clusterKeys": [
+              {
+                "name": "columnA",
+                "orderBy": "Asc"
+              }
+            ],
+            "columns": [
+              {
+                "name": "columnA",
+                "type": "Ascii"
+              }
+            ],
+            "partitionKeys": [
+              {
+                "name": "columnA"
+              }
+            ]
+          }
+        }
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces/cassandraTables"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBCassandraTableCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces/tables"
+  },
+  {
+    "body": {
+      "location": "West US",
+      "properties": {
+        "resource": {
+          "throughput": 400
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "CassandraResources_UpdateCassandraTableThroughput",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "keyspaceName": "keyspaceName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444",
+      "tableName": "tableName"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/cassandraKeyspaces/{keyspaceName}/tables/{tableName}/throughputSettings/default",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/cassandraKeyspaces/keyspaceName/cassandraTables/tableName/throughputSettings/default",
+      "name": "default",
+      "properties": {
+        "resource": {
+          "_etag": "\"00005900-0000-0000-0000-56f9a2630000\"",
+          "_rid": "PD5DALigDgw=",
+          "_ts": 1459200611,
+          "minimumThroughput": "400",
+          "offerReplacePending": "true",
+          "throughput": 400
+        }
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces/cassandraTables/throughputSettings"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBCassandraTableThroughputUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces/tables/throughputSettings"
+  },
+  {
+    "body": {
+      "location": "West US",
+      "properties": {
+        "resource": {
+          "throughput": 400
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "CassandraResources_UpdateCassandraKeyspaceThroughput",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "keyspaceName": "keyspaceName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/cassandraKeyspaces/{keyspaceName}/throughputSettings/default",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/cassandraKeyspaces/keyspaceName/throughputSettings/default",
+      "location": "West US",
+      "name": "default",
+      "properties": {
+        "resource": {
+          "_etag": "\"00005900-0000-0000-0000-56f9a2630000\"",
+          "_rid": "PD5DALigDgw=",
+          "_ts": 1459200611,
+          "minimumThroughput": "400",
+          "offerReplacePending": "true",
+          "throughput": 400
+        }
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces/throughputSettings"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBCassandraKeyspaceThroughputUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces/throughputSettings"
+  },
+  {
+    "body": {
+      "properties": {
+        "options": {},
+        "resource": {
+          "id": "viewname",
+          "viewDefinition": "SELECT columna, columnb, columnc FROM keyspacename.srctablename WHERE columna IS NOT NULL AND columnc IS NOT NULL PRIMARY (columnc, columna)"
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "CassandraResources_CreateUpdateCassandraView",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-04-01-preview",
+      "keyspaceName": "keyspacename",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444",
+      "viewName": "viewname"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/cassandraKeyspaces/{keyspaceName}/views/{viewName}",
+    "response": {
+      "id": "/subscriptions/00000000-1111-2222-3333-444444444444/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/cassandraKeyspaces/keyspacename/views/viewname",
+      "name": "viewname",
+      "properties": {
+        "resource": {
+          "id": "viewname",
+          "viewDefinition": "SELECT columna, columnb, columnc FROM keyspacename.srctablename WHERE columna IS NOT NULL AND columnc IS NOT NULL PRIMARY KEY (columnc, columna)"
+        }
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces/views"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBCassandraViewCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces/views"
+  },
+  {
+    "body": {
+      "properties": {
+        "resource": {
+          "throughput": 400
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "CassandraResources_UpdateCassandraViewThroughput",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-04-01-preview",
+      "keyspaceName": "keyspacename",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444",
+      "viewName": "viewname"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/cassandraKeyspaces/{keyspaceName}/views/{viewName}/throughputSettings/default",
+    "response": {
+      "id": "/subscriptions/00000000-1111-2222-3333-444444444444/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/cassandraKeyspaces/keyspaceName/views/viewName/throughputSettings/default",
+      "name": "default",
+      "properties": {
+        "resource": {
+          "minimumThroughput": "400",
+          "offerReplacePending": "true",
+          "throughput": 400
+        }
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces/views/throughputSettings"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBCassandraViewThroughputUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/cassandraKeyspaces/views/throughputSettings"
+  },
+  {
+    "body": {
+      "properties": {
+        "principalId": "myPrincipalId",
+        "roleDefinitionId": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/cassandraRoleDefinitions/myRoleDefinitionId",
+        "scope": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/purchases/colls/redmond-purchases"
+      }
+    },
+    "operationId": "CassandraResources_CreateUpdateCassandraRoleAssignment",
+    "parameters": {
+      "accountName": "myAccountName",
+      "api-version": "2026-07-15",
+      "resourceGroupName": "myResourceGroupName",
+      "roleAssignmentId": "myRoleAssignmentId",
+      "subscriptionId": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/cassandraRoleAssignments/{roleAssignmentId}",
+    "response": {
+      "id": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/cassandraRoleAssignments/myRoleAssignmentId",
+      "name": "myRoleAssignmentId",
+      "properties": {
+        "principalId": "myPrincipalId",
+        "roleDefinitionId": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/cassandraRoleDefinitions/myRoleDefinitionId",
+        "scope": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/purchases/colls/redmond-purchases"
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/cassandraRoleAssignments"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBCassandraRoleAssignmentCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/cassandraRoleAssignments"
+  },
+  {
+    "body": {
+      "properties": {
+        "assignableScopes": [
+          "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/sales",
+          "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/purchases"
+        ],
+        "permissions": [
+          {
+            "dataActions": [
+              "Microsoft.DocumentDB/databaseAccounts/cassandraDatabases/containers/entities/create",
+              "Microsoft.DocumentDB/databaseAccounts/cassandraDatabases/containers/entities/read"
+            ],
+            "notDataActions": []
+          }
+        ],
+        "roleName": "myRoleName",
+        "type": "CustomRole"
+      }
+    },
+    "operationId": "CassandraResources_CreateUpdateCassandraRoleDefinition",
+    "parameters": {
+      "accountName": "myAccountName",
+      "api-version": "2026-07-15",
+      "resourceGroupName": "myResourceGroupName",
+      "roleDefinitionId": "myRoleDefinitionId",
+      "subscriptionId": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/cassandraRoleDefinitions/{roleDefinitionId}",
+    "response": {
+      "id": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/cassandraRoleDefinitions/myRoleDefinitionId",
+      "name": "myRoleDefinitionId",
+      "properties": {
+        "assignableScopes": [
+          "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/sales",
+          "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/purchases"
+        ],
+        "permissions": [
+          {
+            "dataActions": [
+              "Microsoft.DocumentDB/databaseAccounts/cassandraDatabases/containers/entities/create",
+              "Microsoft.DocumentDB/databaseAccounts/cassandraDatabases/containers/entities/read"
+            ]
+          }
+        ],
+        "roleName": "myRoleName",
+        "type": "CustomRole"
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/cassandraRoleDefinitions"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBCassandraRoleDefinitionCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/cassandraRoleDefinitions"
+  },
+  {
+    "body": {
+      "properties": {
+        "action": "Enable",
+        "containerName": "testCollection",
+        "databaseName": "testDatabase",
+        "region": "EastUS"
+      }
+    },
+    "operationId": "ChaosFault_EnableDisable",
+    "parameters": {
+      "accountName": "myAccountName",
+      "api-version": "2026-04-01-preview",
+      "chaosFault": "ServiceUnavailability",
+      "resourceGroupName": "myResourceGroupName",
+      "subscriptionId": "00000000-0000-0000-0000-000000000000"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/chaosFaults/{chaosFault}",
+    "response": {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/chaosFaults/ServiceUnavailability",
+      "properties": {
+        "action": "Enable",
+        "containerName": "testCollection",
+        "databaseName": "testDatabase",
+        "provisioningState": "Completed",
+        "region": "EastUS"
+      }
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "ChaosFaultEnableDisable",
+    "type": "Microsoft.DocumentDB/databaseAccounts/chaosFaults"
+  },
+  {
+    "body": {
+      "properties": {
+        "jobProperties": {
+          "jobType": "NoSqlRUToNoSqlRU",
+          "tasks": [
+            {
+              "destination": {
+                "containerName": "destTable1",
+                "databaseName": "destDB1"
+              },
+              "source": {
+                "containerName": "sourceTable1",
+                "databaseName": "sourceDb1"
+              }
+            },
+            {
+              "destination": {
+                "containerName": "destTable2",
+                "databaseName": "destDB2"
+              },
+              "source": {
+                "containerName": "sourceTable2",
+                "databaseName": "sourceDb2"
+              }
+            }
+          ]
+        },
+        "mode": "Offline"
+      }
+    },
+    "operationId": "CopyJobs_Create",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-04-01-preview",
+      "jobName": "j1",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/copyJobs/{jobName}",
+    "response": {
+      "id": "/subscriptions/00000000-1111-2222-3333-444444444444/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/copyJobs/j1",
+      "properties": {
+        "duration": "00:00:00",
+        "jobProperties": {
+          "jobType": "NoSqlRUToNoSqlRU",
+          "tasks": [
+            {
+              "destination": {
+                "containerName": "destTable1",
+                "databaseName": "destDB1"
+              },
+              "source": {
+                "containerName": "sourceTable1",
+                "databaseName": "sourceDb1"
+              }
+            },
+            {
+              "destination": {
+                "containerName": "destTable2",
+                "databaseName": "destDB2"
+              },
+              "source": {
+                "containerName": "sourceTable2",
+                "databaseName": "sourceDb2"
+              }
+            }
+          ]
+        },
+        "lastUpdatedUtcTime": "2021-06-12T11:10:55.2780000Z",
+        "mode": "Offline",
+        "processedCount": 0,
+        "status": "Running",
+        "totalCount": 0
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/copyJobs"
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "CosmosDBCopyJobCreate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/copyJobs"
+  },
+  {
+    "body": {
+      "properties": {
+        "destination": {
+          "component": "AzureBlobStorage",
+          "containerName": "blob_container",
+          "endpointUrl": "https://blob.windows.net"
+        },
+        "source": {
+          "component": "CosmosDBCassandra",
+          "keyspaceName": "keyspace",
+          "tableName": "table"
+        }
+      }
+    },
+    "operationId": "DataTransferJobs_Create",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-04-01-preview",
+      "jobName": "j1",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/dataTransferJobs/{jobName}",
+    "response": {
+      "id": "/subscriptions/00000000-1111-2222-3333-444444444444/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/dataTransferJobs/j1",
+      "properties": {
+        "destination": {
+          "component": "AzureBlobStorage",
+          "containerName": "blob_container",
+          "endpointUrl": "https://blob.windows.net"
+        },
+        "duration": "00:00:00",
+        "jobName": "j1",
+        "lastUpdatedUtcTime": "2021-06-12T11:10:55.2780000Z",
+        "processedCount": 0,
+        "source": {
+          "component": "CosmosDBCassandra",
+          "keyspaceName": "keyspace",
+          "tableName": "table"
+        },
+        "status": "Running",
+        "totalCount": 0
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/dataTransferJobs"
+    },
+    "statuses": [
+      200
+    ],
+    "title": "CosmosDBDataTransferJobCreate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/dataTransferJobs"
+  },
+  {
+    "body": {
+      "location": "West US",
+      "properties": {
+        "options": {},
+        "resource": {
+          "id": "graphName"
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "GraphResources_CreateUpdateGraph",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-04-01-preview",
+      "graphName": "graphName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/graphs/{graphName}",
+    "response": {
+      "id": "/subscriptions/00000000-1111-2222-3333-444444444444/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/graphs/graphName",
+      "location": "West US",
+      "name": "graphName",
+      "properties": {
+        "resource": {
+          "id": "graphName"
+        }
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/databaseAccounts/graphs"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBGraphCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/graphs"
+  },
+  {
+    "body": {
+      "location": "West US",
+      "properties": {
+        "options": {},
+        "resource": {
+          "id": "databaseName"
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "GremlinResources_CreateUpdateGremlinDatabase",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "databaseName": "databaseName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/gremlinDatabases/{databaseName}",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/gremlinDatabases/databaseName",
+      "location": "West US",
+      "name": "databaseName",
+      "properties": {
+        "resource": {
+          "_etag": "\"00000a00-0000-0000-0000-56672f920000\"",
+          "_rid": "CqNBAA==",
+          "_ts": 1449602962,
+          "id": "databaseName"
+        }
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBGremlinDatabaseCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases"
+  },
+  {
+    "body": {
+      "location": "West US",
+      "properties": {
+        "options": {},
+        "resource": {
+          "conflictResolutionPolicy": {
+            "conflictResolutionPath": "/path",
+            "mode": "LastWriterWins"
+          },
+          "defaultTtl": 100,
+          "id": "graphName",
+          "indexingPolicy": {
+            "automatic": true,
+            "excludedPaths": [],
+            "includedPaths": [
+              {
+                "indexes": [
+                  {
+                    "dataType": "String",
+                    "kind": "Range",
+                    "precision": -1
+                  },
+                  {
+                    "dataType": "Number",
+                    "kind": "Range",
+                    "precision": -1
+                  }
+                ],
+                "path": "/*"
+              }
+            ],
+            "indexingMode": "consistent"
+          },
+          "partitionKey": {
+            "kind": "Hash",
+            "paths": [
+              "/AccountNumber"
+            ]
+          },
+          "uniqueKeyPolicy": {
+            "uniqueKeys": [
+              {
+                "paths": [
+                  "/testPath"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "GremlinResources_CreateUpdateGremlinGraph",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "databaseName": "databaseName",
+      "graphName": "graphName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/gremlinDatabases/{databaseName}/graphs/{graphName}",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/gremlinDatabases/databaseName/gremlinGraphs/graphName",
+      "location": "West US",
+      "name": "graphName",
+      "properties": {
+        "resource": {
+          "_etag": "\"00005900-0000-0000-0000-56f9a2630000\"",
+          "_rid": "PD5DALigDgw=",
+          "_ts": 1459200611,
+          "conflictResolutionPolicy": {
+            "conflictResolutionPath": "/path",
+            "mode": "LastWriterWins"
+          },
+          "defaultTtl": 100,
+          "id": "graphName",
+          "indexingPolicy": {
+            "automatic": true,
+            "excludedPaths": [],
+            "includedPaths": [
+              {
+                "indexes": [
+                  {
+                    "dataType": "String",
+                    "kind": "Range",
+                    "precision": -1
+                  },
+                  {
+                    "dataType": "Number",
+                    "kind": "Range",
+                    "precision": -1
+                  }
+                ],
+                "path": "/*"
+              }
+            ],
+            "indexingMode": "consistent"
+          },
+          "partitionKey": {
+            "kind": "Hash",
+            "paths": [
+              "/AccountNumber"
+            ]
+          },
+          "uniqueKeyPolicy": {
+            "uniqueKeys": [
+              {
+                "paths": [
+                  "/testPath"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/gremlinGraphs"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBGremlinGraphCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/graphs"
+  },
+  {
+    "body": {
+      "location": "West US",
+      "properties": {
+        "resource": {
+          "throughput": 400
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "GremlinResources_UpdateGremlinGraphThroughput",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "databaseName": "databaseName",
+      "graphName": "graphName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/gremlinDatabases/{databaseName}/graphs/{graphName}/throughputSettings/default",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/gremlinDatabases/databaseName/gremlinGraphs/graphName/throughputSettings/default",
+      "location": "West US",
+      "name": "default",
+      "properties": {
+        "resource": {
+          "_etag": "\"00005900-0000-0000-0000-56f9a2630000\"",
+          "_rid": "PD5DALigDgw=",
+          "_ts": 1459200611,
+          "minimumThroughput": "400",
+          "offerReplacePending": "true",
+          "throughput": 400
+        }
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/throughputSettings"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBGremlinGraphThroughputUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/graphs/throughputSettings"
+  },
+  {
+    "body": {
+      "location": "West US",
+      "properties": {
+        "resource": {
+          "throughput": 400
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "GremlinResources_UpdateGremlinDatabaseThroughput",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "databaseName": "databaseName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/gremlinDatabases/{databaseName}/throughputSettings/default",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/gremlinDatabases/databaseName/throughputSettings/default",
+      "location": "West US",
+      "name": "default",
+      "properties": {
+        "resource": {
+          "_etag": "\"00005900-0000-0000-0000-56f9a2630000\"",
+          "_rid": "PD5DALigDgw=",
+          "_ts": 1459200611,
+          "minimumThroughput": "400",
+          "offerReplacePending": "true",
+          "throughput": 400
+        }
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/throughputSettings"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBGremlinDatabaseThroughputUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/throughputSettings"
+  },
+  {
+    "body": {
+      "properties": {
+        "principalId": "myPrincipalId",
+        "roleDefinitionId": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/gremlinRoleDefinitions/myRoleDefinitionId",
+        "scope": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/purchases/colls/redmond-purchases"
+      }
+    },
+    "operationId": "GremlinResources_CreateUpdateGremlinRoleAssignment",
+    "parameters": {
+      "accountName": "myAccountName",
+      "api-version": "2026-07-15",
+      "resourceGroupName": "myResourceGroupName",
+      "roleAssignmentId": "myRoleAssignmentId",
+      "subscriptionId": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/gremlinRoleAssignments/{roleAssignmentId}",
+    "response": {
+      "id": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/gremlinRoleAssignments/myRoleAssignmentId",
+      "name": "myRoleAssignmentId",
+      "properties": {
+        "principalId": "myPrincipalId",
+        "roleDefinitionId": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/gremlinRoleDefinitions/myRoleDefinitionId",
+        "scope": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/purchases/colls/redmond-purchases"
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/gremlinRoleAssignments"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBGremlinRoleAssignmentCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/gremlinRoleAssignments"
+  },
+  {
+    "body": {
+      "properties": {
+        "assignableScopes": [
+          "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/sales",
+          "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/purchases"
+        ],
+        "permissions": [
+          {
+            "dataActions": [
+              "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/containers/entities/create",
+              "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/containers/entities/read"
+            ],
+            "notDataActions": []
+          }
+        ],
+        "roleName": "myRoleName",
+        "type": "CustomRole"
+      }
+    },
+    "operationId": "GremlinResources_CreateUpdateGremlinRoleDefinition",
+    "parameters": {
+      "accountName": "myAccountName",
+      "api-version": "2026-07-15",
+      "resourceGroupName": "myResourceGroupName",
+      "roleDefinitionId": "myRoleDefinitionId",
+      "subscriptionId": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/gremlinRoleDefinitions/{roleDefinitionId}",
+    "response": {
+      "id": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/gremlinRoleDefinitions/myRoleDefinitionId",
+      "name": "myRoleDefinitionId",
+      "properties": {
+        "assignableScopes": [
+          "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/sales",
+          "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/purchases"
+        ],
+        "permissions": [
+          {
+            "dataActions": [
+              "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/containers/entities/create",
+              "Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/containers/entities/read"
+            ]
+          }
+        ],
+        "roleName": "myRoleName",
+        "type": "CustomRole"
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/gremlinRoleDefinitions"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBGremlinRoleDefinitionCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/gremlinRoleDefinitions"
+  },
+  {
+    "body": {
+      "location": "West US",
+      "properties": {
+        "options": {},
+        "resource": {
+          "id": "databaseName"
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "MongoDBResources_CreateUpdateMongoDBDatabase",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "databaseName": "databaseName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/mongodbDatabases/{databaseName}",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/mongodbDatabases/databaseName",
+      "location": "West US",
+      "name": "databaseName",
+      "properties": {
+        "resource": {
+          "id": "databaseName"
+        }
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/databaseAccounts/mongodbDatabases"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBMongoDBDatabaseCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/mongodbDatabases"
+  },
+  {
+    "body": {
+      "location": "West US",
+      "properties": {
+        "options": {},
+        "resource": {
+          "id": "collectionName",
+          "indexes": [
+            {
+              "key": {
+                "keys": [
+                  "_ts"
+                ]
+              },
+              "options": {
+                "expireAfterSeconds": 100,
+                "unique": true
+              }
+            },
+            {
+              "key": {
+                "keys": [
+                  "_id"
+                ]
+              }
+            }
+          ],
+          "shardKey": {
+            "testKey": "Hash"
+          }
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "MongoDBResources_CreateUpdateMongoDBCollection",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "collectionName": "collectionName",
+      "databaseName": "databaseName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/mongodbDatabases/{databaseName}/collections/{collectionName}",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/mongodbDatabases/databaseName/mongodbCollections/collectionName",
+      "location": "West US",
+      "name": "collectionName",
+      "properties": {
+        "resource": {
+          "id": "collectionName",
+          "indexes": [
+            {
+              "key": {
+                "keys": [
+                  "_ts"
+                ]
+              },
+              "options": {
+                "expireAfterSeconds": 100,
+                "unique": true
+              }
+            },
+            {
+              "key": {
+                "keys": [
+                  "_id"
+                ]
+              }
+            }
+          ],
+          "shardKey": {
+            "testKey": "Hash"
+          }
+        }
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/databaseAccounts/mongodbDatabases/mongodbCollections"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBMongoDBCollectionCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/mongodbDatabases/collections"
+  },
+  {
+    "body": {
+      "location": "West US",
+      "properties": {
+        "resource": {
+          "throughput": 400
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "MongoDBResources_UpdateMongoDBCollectionThroughput",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "collectionName": "collectionName",
+      "databaseName": "databaseName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/mongodbDatabases/{databaseName}/collections/{collectionName}/throughputSettings/default",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/mongodbDatabases/databaseName/mongodbCollections/collectionName/throughputSettings/default",
+      "location": "West US",
+      "name": "default",
+      "properties": {
+        "resource": {
+          "_etag": "\"00005900-0000-0000-0000-56f9a2630000\"",
+          "_rid": "PD5DALigDgw=",
+          "_ts": 1459200611,
+          "minimumThroughput": "400",
+          "offerReplacePending": "true",
+          "throughput": 400
+        }
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/databaseAccounts/mongodbDatabases/mongodbCollections/throughputSettings"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBMongoDBCollectionThroughputUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/mongodbDatabases/collections/throughputSettings"
+  },
+  {
+    "body": {
+      "location": "West US",
+      "properties": {
+        "resource": {
+          "throughput": 400
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "MongoDBResources_UpdateMongoDBDatabaseThroughput",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "databaseName": "databaseName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/mongodbDatabases/{databaseName}/throughputSettings/default",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/mongodbDatabases/databaseName/throughputSettings/default",
+      "location": "West US",
+      "name": "default",
+      "properties": {
+        "resource": {
+          "_etag": "\"00005900-0000-0000-0000-56f9a2630000\"",
+          "_rid": "PD5DALigDgw=",
+          "_ts": 1459200611,
+          "minimumThroughput": "400",
+          "offerReplacePending": "true",
+          "throughput": 400
+        }
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/databaseAccounts/mongodbDatabases/throughputSettings"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBMongoDBDatabaseThroughputUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/mongodbDatabases/throughputSettings"
+  },
+  {
+    "body": {
+      "properties": {
+        "databaseName": "sales",
+        "privileges": [
+          {
+            "actions": [
+              "insert",
+              "find"
+            ],
+            "resource": {
+              "collection": "sales",
+              "db": "sales"
+            }
+          }
+        ],
+        "roleName": "myRoleName",
+        "roles": [
+          {
+            "db": "sales",
+            "role": "myInheritedRole"
+          }
+        ]
+      }
+    },
+    "operationId": "MongoDBResources_CreateUpdateMongoRoleDefinition",
+    "parameters": {
+      "accountName": "myAccountName",
+      "api-version": "2026-07-15",
+      "mongoRoleDefinitionId": "myMongoRoleDefinitionId",
+      "resourceGroupName": "myResourceGroupName",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/mongodbRoleDefinitions/{mongoRoleDefinitionId}",
+    "response": {
+      "id": "/subscriptions/mySubscriptionId/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/mongodbRoleDefinitions/myMongoDbRoleDefinitionId",
+      "name": "myMongoDbRoleDefinitionId",
+      "properties": {
+        "databaseName": "sales",
+        "privileges": [
+          {
+            "actions": [
+              "find",
+              "insert"
+            ],
+            "resource": {
+              "collection": "coll",
+              "db": "sales"
+            }
+          }
+        ],
+        "roleName": "myRoleName",
+        "roles": [
+          {
+            "db": "sales",
+            "role": "myReadRole"
+          }
+        ],
+        "type": "CustomRole"
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/mongoDbRoleDefinitionId"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBMongoDBRoleDefinitionCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/mongodbRoleDefinitions"
+  },
+  {
+    "body": {
+      "properties": {
+        "customData": "My custom data",
+        "databaseName": "sales",
+        "mechanisms": "SCRAM-SHA-256",
+        "password": "myPassword",
+        "roles": [
+          {
+            "db": "sales",
+            "role": "myReadRole"
+          }
+        ],
+        "userName": "myUserName"
+      }
+    },
+    "operationId": "MongoDBResources_CreateUpdateMongoUserDefinition",
+    "parameters": {
+      "accountName": "myAccountName",
+      "api-version": "2026-07-15",
+      "databaseName": "sales",
+      "mongoUserDefinitionId": "myMongoUserDefinitionId",
+      "resourceGroupName": "myResourceGroupName",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/mongodbUserDefinitions/{mongoUserDefinitionId}",
+    "response": {
+      "id": "/subscriptions/mySubscriptionId/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/mongodbUserDefinitions/myUserId",
+      "name": "myUserName",
+      "properties": {
+        "customData": "My custom data",
+        "databaseName": "sales",
+        "mechanisms": "SCRAM-SHA-256",
+        "roles": [
+          {
+            "db": "sales",
+            "role": "myReadRole"
+          }
+        ],
+        "userName": "myUserName"
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/mongodbUserDefinitions"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBMongoDBUserDefinitionCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/mongodbUserDefinitions"
+  },
+  {
+    "body": {
+      "properties": {
+        "principalId": "myPrincipalId",
+        "roleDefinitionId": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/mongoMIRoleDefinitions/myRoleDefinitionId",
+        "scope": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/purchases/colls/redmond-purchases"
+      }
+    },
+    "operationId": "MongoMIResources_CreateUpdateMongoMIRoleAssignment",
+    "parameters": {
+      "accountName": "myAccountName",
+      "api-version": "2026-07-15",
+      "resourceGroupName": "myResourceGroupName",
+      "roleAssignmentId": "myRoleAssignmentId",
+      "subscriptionId": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/mongoMIRoleAssignments/{roleAssignmentId}",
+    "response": {
+      "id": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/mongoMIRoleAssignments/myRoleAssignmentId",
+      "name": "myRoleAssignmentId",
+      "properties": {
+        "principalId": "myPrincipalId",
+        "roleDefinitionId": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/mongoMIRoleDefinitions/myRoleDefinitionId",
+        "scope": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/purchases/colls/redmond-purchases"
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/mongoMIRoleAssignments"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBMongoMIRoleAssignmentCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/mongoMIRoleAssignments"
+  },
+  {
+    "body": {
+      "properties": {
+        "assignableScopes": [
+          "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/sales",
+          "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/purchases"
+        ],
+        "permissions": [
+          {
+            "dataActions": [
+              "Microsoft.DocumentDB/databaseAccounts/mongoMIDatabases/containers/entities/create",
+              "Microsoft.DocumentDB/databaseAccounts/mongoMIDatabases/containers/entities/read"
+            ],
+            "notDataActions": []
+          }
+        ],
+        "roleName": "myRoleName",
+        "type": "CustomRole"
+      }
+    },
+    "operationId": "MongoMIResources_CreateUpdateMongoMIRoleDefinition",
+    "parameters": {
+      "accountName": "myAccountName",
+      "api-version": "2026-07-15",
+      "resourceGroupName": "myResourceGroupName",
+      "roleDefinitionId": "myRoleDefinitionId",
+      "subscriptionId": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/mongoMIRoleDefinitions/{roleDefinitionId}",
+    "response": {
+      "id": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/mongoMIRoleDefinitions/myRoleDefinitionId",
+      "name": "myRoleDefinitionId",
+      "properties": {
+        "assignableScopes": [
+          "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/sales",
+          "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/purchases"
+        ],
+        "permissions": [
+          {
+            "dataActions": [
+              "Microsoft.DocumentDB/databaseAccounts/mongoMIDatabases/containers/entities/create",
+              "Microsoft.DocumentDB/databaseAccounts/mongoMIDatabases/containers/entities/read"
+            ]
+          }
+        ],
+        "roleName": "myRoleName",
+        "type": "CustomRole"
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/mongoMIRoleDefinitions"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBMongoMIRoleDefinitionCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/mongoMIRoleDefinitions"
+  },
+  {
+    "body": {},
+    "operationId": "NotebookWorkspaces_CreateOrUpdate",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "notebookWorkspaceName": "default",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/notebookWorkspaces/{notebookWorkspaceName}",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/notebookWorkspaces/default",
+      "name": "default",
+      "properties": {
+        "notebookServerEndpoint": "endpoint",
+        "status": "Online"
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/notebookWorkspaces"
+    },
+    "statuses": [
+      200
+    ],
+    "title": "CosmosDBNotebookWorkspaceCreate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/notebookWorkspaces"
+  },
+  {
+    "body": {
+      "properties": {
+        "privateLinkServiceConnectionState": {
+          "description": "Approved by johndoe@contoso.com",
+          "status": "Approved"
+        }
+      }
+    },
+    "operationId": "PrivateEndpointConnections_CreateOrUpdate",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "privateEndpointConnectionName": "privateEndpointConnectionName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/privateEndpointConnections/{privateEndpointConnectionName}",
+    "response": {
+      "id": "/subscriptions/00000000-1111-2222-3333-444444444444/resourceGroups/rg1/providers/Microsoft.DocumentDb/databaseAccounts/ddb1/privateEndpointConnections/privateEndpointConnectionName",
+      "name": "privateEndpointConnectionName",
+      "properties": {
+        "groupId": "Sql",
+        "privateEndpoint": {
+          "id": "/subscriptions/00000000-1111-2222-3333-444444444444/resourceGroups/rg1Network/providers/Microsoft.Network/privateEndpoints/privateEndpointName"
+        },
+        "privateLinkServiceConnectionState": {
+          "actionsRequired": "None",
+          "description": "Auto-approved",
+          "status": "Approved"
+        },
+        "provisioningState": "Succeeded"
+      },
+      "type": "Microsoft.DocumentDb/databaseAccounts/privateEndpointConnections"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "Approve or reject a private endpoint connection with a given name.",
+    "type": "Microsoft.DocumentDB/databaseAccounts/privateEndpointConnections"
+  },
+  {
+    "body": {
+      "properties": {
+        "instanceCount": 1,
+        "instanceSize": "Cosmos.D4s",
+        "serviceType": "DataTransfer"
+      }
+    },
+    "operationId": "Service_Create",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "resourceGroupName": "rg1",
+      "serviceName": "DataTransfer",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/services/{serviceName}",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/services/DataTransfer",
+      "name": "DataTransfer",
+      "properties": {
+        "creationTime": "2021-01-25T12:56:05.4622517Z",
+        "instanceCount": 1,
+        "instanceSize": "Cosmos.D4s",
+        "locations": [
+          {
+            "location": "West US 2",
+            "name": "DataTransfer-westus2",
+            "status": "Running"
+          }
+        ],
+        "serviceType": "DataTransfer",
+        "status": "Running"
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/services"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "DataTransferServiceCreate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/services"
+  },
+  {
+    "body": {
+      "properties": {
+        "instanceCount": 1,
+        "instanceSize": "Cosmos.D4s",
+        "serviceType": "GraphAPICompute"
+      }
+    },
+    "operationId": "Service_Create",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "resourceGroupName": "rg1",
+      "serviceName": "GraphAPICompute",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/services/{serviceName}",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/services/GraphAPICompute",
+      "name": "GraphAPICompute",
+      "properties": {
+        "creationTime": "2021-01-25T12:56:05.4622517Z",
+        "graphApiComputeEndpoint": "https://graphAPICompute.gremlin.cosmos.windows-int.net/",
+        "instanceCount": 1,
+        "instanceSize": "Cosmos.D4s",
+        "locations": [
+          {
+            "graphApiComputeEndpoint": "https://graphAPICompute-westus.gremlin.cosmos.windows-int.net/",
+            "location": "West US 2",
+            "name": "GraphAPICompute-westus2",
+            "status": "Running"
+          }
+        ],
+        "serviceType": "GraphAPICompute",
+        "status": "Running"
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/services"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "GraphAPIComputeServiceCreate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/services"
+  },
+  {
+    "body": {
+      "properties": {
+        "instanceCount": 1,
+        "instanceSize": "Cosmos.D4s",
+        "serviceType": "MaterializedViewsBuilder"
+      }
+    },
+    "operationId": "Service_Create",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "resourceGroupName": "rg1",
+      "serviceName": "MaterializedViewsBuilder",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/services/{serviceName}",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/services/MaterializedViewsBuilder",
+      "name": "MaterializedViewsBuilder",
+      "properties": {
+        "creationTime": "2021-01-25T12:56:05.4622517Z",
+        "instanceCount": 1,
+        "instanceSize": "Cosmos.D4s",
+        "locations": [
+          {
+            "location": "West US 2",
+            "name": "MaterializedViewsBuilder-westus2",
+            "status": "Running"
+          }
+        ],
+        "serviceType": "MaterializedViewsBuilder",
+        "status": "Running"
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/services"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "MaterializedViewsBuilderServiceCreate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/services"
+  },
+  {
+    "body": {
+      "properties": {
+        "dedicatedGatewayType": "IntegratedCache",
+        "instanceCount": 1,
+        "instanceSize": "Cosmos.D4s",
+        "serviceType": "SqlDedicatedGateway"
+      }
+    },
+    "operationId": "Service_Create",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "resourceGroupName": "rg1",
+      "serviceName": "SqlDedicatedGateway",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/services/{serviceName}",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/services/SqlDedicatedGateway",
+      "name": "SqlDedicatedGateway",
+      "properties": {
+        "creationTime": "2021-01-25T12:56:05.4622517Z",
+        "dedicatedGatewayType": "IntegratedCache",
+        "instanceCount": 1,
+        "instanceSize": "Cosmos.D4s",
+        "locations": [
+          {
+            "location": "West US 2",
+            "name": "SqlDedicatedGateway-westus2",
+            "sqlDedicatedGatewayEndpoint": "https://sqlDedicatedGateway-westus.sqlx.cosmos.windows-int.net/",
+            "status": "Running"
+          }
+        ],
+        "serviceType": "SqlDedicatedGateway",
+        "sqlDedicatedGatewayEndpoint": "https://sqlDedicatedGateway.sqlx.cosmos.windows-int.net/",
+        "status": "Running"
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/services"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "SqlDedicatedGatewayServiceCreate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/services"
+  },
+  {
+    "body": {
+      "location": "West US",
+      "properties": {
+        "options": {},
+        "resource": {
+          "id": "databaseName"
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "SqlResources_CreateUpdateSqlDatabase",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "databaseName": "databaseName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/sqlDatabases/{databaseName}",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/sqlDatabases/databaseName",
+      "location": "West US",
+      "name": "databaseName",
+      "properties": {
+        "resource": {
+          "_etag": "\"00000a00-0000-0000-0000-56672f920000\"",
+          "_rid": "CqNBAA==",
+          "_ts": 1449602962,
+          "id": "databaseName"
+        }
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBSqlDatabaseCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases"
+  },
+  {
+    "body": {
+      "properties": {
+        "resource": {
+          "encryptionAlgorithm": "AEAD_AES_256_CBC_HMAC_SHA256",
+          "id": "cekName",
+          "keyWrapMetadata": {
+            "algorithm": "RSA-OAEP",
+            "name": "customerManagedKey",
+            "type": "AzureKeyVault",
+            "value": "AzureKeyVault Key URL"
+          },
+          "wrappedDataEncryptionKey": "U3dhZ2dlciByb2Nrcw=="
+        }
+      }
+    },
+    "operationId": "SqlResources_CreateUpdateClientEncryptionKey",
+    "parameters": {
+      "accountName": "accountName",
+      "api-version": "2026-07-15",
+      "clientEncryptionKeyName": "cekName",
+      "databaseName": "databaseName",
+      "resourceGroupName": "rgName",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/sqlDatabases/{databaseName}/clientEncryptionKeys/{clientEncryptionKeyName}",
+    "response": {
+      "id": "/subscriptions/subId/resourceGroups/rgName/providers/Microsoft.DocumentDB/databaseAccounts/accountName/sqlDatabases/databaseName/clientEncryptionKeys/cekName",
+      "name": "cekName",
+      "properties": {
+        "resource": {
+          "_etag": "00000000-0000-0000-7a1f-bc0828e801d7",
+          "_rid": "tNc4AAAAAAAQkjzWAgAAAA==",
+          "_ts": 1626425552,
+          "encryptionAlgorithm": "AEAD_AES_256_CBC_HMAC_SHA256",
+          "id": "cekName",
+          "keyWrapMetadata": {
+            "algorithm": "RSA-OAEP",
+            "name": "customerManagedKey",
+            "type": "AzureKeyVault",
+            "value": "AzureKeyVault Key URL"
+          },
+          "wrappedDataEncryptionKey": "U3dhZ2dlciByb2Nrcw=="
+        }
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/clientEncryptionKey"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBClientEncryptionKeyCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/clientEncryptionKeys"
+  },
+  {
+    "body": {
+      "location": "West US",
+      "properties": {
+        "options": {},
+        "resource": {
+          "clientEncryptionPolicy": {
+            "includedPaths": [
+              {
+                "clientEncryptionKeyId": "keyId",
+                "encryptionAlgorithm": "AEAD_AES_256_CBC_HMAC_SHA256",
+                "encryptionType": "Deterministic",
+                "path": "/path"
+              }
+            ],
+            "policyFormatVersion": 2
+          },
+          "computedProperties": [
+            {
+              "name": "cp_lowerName",
+              "query": "SELECT VALUE LOWER(c.name) FROM c"
+            }
+          ],
+          "conflictResolutionPolicy": {
+            "conflictResolutionPath": "/path",
+            "mode": "LastWriterWins"
+          },
+          "defaultTtl": 100,
+          "fullTextPolicy": {
+            "defaultLanguage": "1033",
+            "fullTextPaths": [
+              {
+                "language": "en-US",
+                "path": "/ftPath1"
+              },
+              {
+                "language": "fr-FR",
+                "path": "/ftPath2"
+              },
+              {
+                "language": "de-DE",
+                "path": "/ftPath3"
+              }
+            ]
+          },
+          "id": "containerName",
+          "indexingPolicy": {
+            "automatic": true,
+            "excludedPaths": [],
+            "fullTextIndexes": [
+              {
+                "path": "/ftPath1"
+              },
+              {
+                "path": "/ftPath2"
+              },
+              {
+                "path": "/ftPath3"
+              }
+            ],
+            "includedPaths": [
+              {
+                "indexes": [
+                  {
+                    "dataType": "String",
+                    "kind": "Range",
+                    "precision": -1
+                  },
+                  {
+                    "dataType": "Number",
+                    "kind": "Range",
+                    "precision": -1
+                  }
+                ],
+                "path": "/*"
+              }
+            ],
+            "indexingMode": "consistent",
+            "vectorIndexes": [
+              {
+                "path": "/vectorPath1",
+                "type": "flat"
+              },
+              {
+                "path": "/vectorPath2",
+                "type": "quantizedFlat"
+              },
+              {
+                "path": "/vectorPath3",
+                "type": "diskANN"
+              }
+            ]
+          },
+          "partitionKey": {
+            "kind": "Hash",
+            "paths": [
+              "/AccountNumber"
+            ]
+          },
+          "uniqueKeyPolicy": {
+            "uniqueKeys": [
+              {
+                "paths": [
+                  "/testPath"
+                ]
+              }
+            ]
+          },
+          "vectorEmbeddingPolicy": {
+            "vectorEmbeddings": [
+              {
+                "dataType": "float32",
+                "dimensions": 400,
+                "distanceFunction": "euclidean",
+                "path": "/vectorPath1"
+              },
+              {
+                "dataType": "uint8",
+                "dimensions": 512,
+                "distanceFunction": "cosine",
+                "path": "/vectorPath2"
+              },
+              {
+                "dataType": "int8",
+                "dimensions": 512,
+                "distanceFunction": "dotproduct",
+                "path": "/vectorPath3"
+              }
+            ]
+          }
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "SqlResources_CreateUpdateSqlContainer",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "containerName": "containerName",
+      "databaseName": "databaseName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/sqlDatabases/{databaseName}/containers/{containerName}",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/sqlDatabases/databaseName/containers/containerName",
+      "location": "West US",
+      "name": "containerName",
+      "properties": {
+        "resource": {
+          "_etag": "\"00005900-0000-0000-0000-56f9a2630000\"",
+          "_rid": "PD5DALigDgw=",
+          "_ts": 1459200611,
+          "clientEncryptionPolicy": {
+            "includedPaths": [
+              {
+                "clientEncryptionKeyId": "keyId",
+                "encryptionAlgorithm": "AEAD_AES_256_CBC_HMAC_SHA256",
+                "encryptionType": "Deterministic",
+                "path": "/path"
+              }
+            ],
+            "policyFormatVersion": 1
+          },
+          "computedProperties": [
+            {
+              "name": "cp_lowerName",
+              "query": "SELECT VALUE LOWER(c.name) FROM c"
+            }
+          ],
+          "conflictResolutionPolicy": {
+            "conflictResolutionPath": "/path",
+            "mode": "LastWriterWins"
+          },
+          "defaultTtl": 100,
+          "fullTextPolicy": {
+            "defaultLanguage": "1033",
+            "fullTextPaths": [
+              {
+                "language": "en-US",
+                "path": "/ftPath1"
+              },
+              {
+                "language": "fr-FR",
+                "path": "/ftPath2"
+              },
+              {
+                "language": "de-DE",
+                "path": "/ftPath3"
+              }
+            ]
+          },
+          "id": "containerName",
+          "indexingPolicy": {
+            "automatic": true,
+            "excludedPaths": [],
+            "fullTextIndexes": [
+              {
+                "path": "/ftPath1"
+              },
+              {
+                "path": "/ftPath2"
+              },
+              {
+                "path": "/ftPath3"
+              }
+            ],
+            "includedPaths": [
+              {
+                "indexes": [
+                  {
+                    "dataType": "String",
+                    "kind": "Range",
+                    "precision": -1
+                  },
+                  {
+                    "dataType": "Number",
+                    "kind": "Range",
+                    "precision": -1
+                  }
+                ],
+                "path": "/*"
+              }
+            ],
+            "indexingMode": "consistent",
+            "vectorIndexes": [
+              {
+                "path": "/vectorPath1",
+                "type": "flat"
+              },
+              {
+                "path": "/vectorPath2",
+                "quantizationByteSize": 100,
+                "type": "quantizedFlat",
+                "vectorIndexShardKey": [
+                  "/vectorShardKey1"
+                ]
+              },
+              {
+                "indexingSearchListSize": 25,
+                "path": "/vectorPath3",
+                "quantizationByteSize": 100,
+                "type": "diskANN",
+                "vectorIndexShardKey": [
+                  "/vectorShardKey1",
+                  "/vectorShardKey2"
+                ]
+              }
+            ]
+          },
+          "partitionKey": {
+            "kind": "Hash",
+            "paths": [
+              "/AccountNumber"
+            ]
+          },
+          "uniqueKeyPolicy": {
+            "uniqueKeys": [
+              {
+                "paths": [
+                  "/testPath"
+                ]
+              }
+            ]
+          },
+          "vectorEmbeddingPolicy": {
+            "vectorEmbeddings": [
+              {
+                "dataType": "float32",
+                "dimensions": 400,
+                "distanceFunction": "euclidean",
+                "path": "/vectorPath1"
+              },
+              {
+                "dataType": "uint8",
+                "dimensions": 512,
+                "distanceFunction": "cosine",
+                "path": "/vectorPath2"
+              },
+              {
+                "dataType": "int8",
+                "dimensions": 512,
+                "distanceFunction": "dotproduct",
+                "path": "/vectorPath3"
+              }
+            ]
+          }
+        }
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/sqlContainers"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBSqlContainerCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers"
+  },
+  {
+    "body": {
+      "properties": {
+        "options": {},
+        "resource": {
+          "body": "body",
+          "id": "storedProcedureName"
+        }
+      }
+    },
+    "operationId": "SqlResources_CreateUpdateSqlStoredProcedure",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "containerName": "containerName",
+      "databaseName": "databaseName",
+      "resourceGroupName": "rg1",
+      "storedProcedureName": "storedProcedureName",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/sqlDatabases/{databaseName}/containers/{containerName}/storedProcedures/{storedProcedureName}",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/sqlDatabases/databaseName/sqlContainers/containerName/sqlStoredProcedures/storedProcedureName",
+      "name": "storedProcedureName",
+      "properties": {
+        "resource": {
+          "_etag": "\"00005900-0000-0000-0000-56f9a2630000\"",
+          "_rid": "PD5DALigDgw=",
+          "_ts": 1459200611,
+          "body": "body",
+          "id": "storedProcedureName"
+        }
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/sqlContainers/sqlStoredProcedures"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBSqlStoredProcedureCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/storedProcedures"
+  },
+  {
+    "body": {
+      "location": "West US",
+      "properties": {
+        "resource": {
+          "throughput": 400,
+          "throughputBuckets": [
+            {
+              "id": 1,
+              "isDefaultBucket": true,
+              "maxThroughputPercentage": 10
+            },
+            {
+              "id": 2,
+              "isDefaultBucket": false,
+              "maxThroughputPercentage": 20
+            },
+            {
+              "id": 3,
+              "maxThroughputPercentage": 15
+            }
+          ]
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "SqlResources_UpdateSqlContainerThroughput",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "containerName": "containerName",
+      "databaseName": "databaseName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/sqlDatabases/{databaseName}/containers/{containerName}/throughputSettings/default",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/sqlDatabases/databaseName/sqlContainers/containerName/throughputSettings/default",
+      "location": "West US",
+      "name": "default",
+      "properties": {
+        "resource": {
+          "_etag": "\"00005900-0000-0000-0000-56f9a2630000\"",
+          "_rid": "PD5DALigDgw=",
+          "_ts": 1459200611,
+          "minimumThroughput": "400",
+          "offerReplacePending": "true",
+          "throughput": 400,
+          "throughputBuckets": [
+            {
+              "id": 1,
+              "isDefaultBucket": true,
+              "maxThroughputPercentage": 10
+            },
+            {
+              "id": 2,
+              "isDefaultBucket": false,
+              "maxThroughputPercentage": 20
+            },
+            {
+              "id": 3,
+              "maxThroughputPercentage": 15
+            }
+          ]
+        }
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/sqlContainers/throughputSettings"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBSqlContainerThroughputUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/throughputSettings"
+  },
+  {
+    "body": {
+      "properties": {
+        "options": {},
+        "resource": {
+          "body": "body",
+          "id": "triggerName",
+          "triggerOperation": "triggerOperation",
+          "triggerType": "triggerType"
+        }
+      }
+    },
+    "operationId": "SqlResources_CreateUpdateSqlTrigger",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "containerName": "containerName",
+      "databaseName": "databaseName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444",
+      "triggerName": "triggerName"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/sqlDatabases/{databaseName}/containers/{containerName}/triggers/{triggerName}",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/sqlDatabases/databaseName/sqlContainers/containerName/sqlTriggers/triggerName",
+      "name": "triggerName",
+      "properties": {
+        "resource": {
+          "_etag": "\"00005900-0000-0000-0000-56f9a2630000\"",
+          "_rid": "PD5DALigDgw=",
+          "_ts": 1459200611,
+          "body": "body",
+          "id": "triggerName",
+          "triggerOperation": "triggerOperation",
+          "triggerType": "triggerType"
+        }
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/sqlContainers/sqlTriggers"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBSqlTriggerCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/triggers"
+  },
+  {
+    "body": {
+      "properties": {
+        "options": {},
+        "resource": {
+          "body": "body",
+          "id": "userDefinedFunctionName"
+        }
+      }
+    },
+    "operationId": "SqlResources_CreateUpdateSqlUserDefinedFunction",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "containerName": "containerName",
+      "databaseName": "databaseName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444",
+      "userDefinedFunctionName": "userDefinedFunctionName"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/sqlDatabases/{databaseName}/containers/{containerName}/userDefinedFunctions/{userDefinedFunctionName}",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/sqlDatabases/databaseName/sqlContainers/containerName/sqlUserDefinedFunctions/userDefinedFunctionName",
+      "name": "userDefinedFunctionName",
+      "properties": {
+        "resource": {
+          "_etag": "\"00005900-0000-0000-0000-56f9a2630000\"",
+          "_rid": "PD5DALigDgw=",
+          "_ts": 1459200611,
+          "body": "body",
+          "id": "userDefinedFunctionName"
+        }
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/sqlContainers/sqlUserDefinedFunctions"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBSqlUserDefinedFunctionCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/userDefinedFunctions"
+  },
+  {
+    "body": {
+      "location": "West US",
+      "properties": {
+        "resource": {
+          "throughput": 400
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "SqlResources_UpdateSqlDatabaseThroughput",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "databaseName": "databaseName",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/sqlDatabases/{databaseName}/throughputSettings/default",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/sqlDatabases/databaseName/throughputSettings/default",
+      "location": "West US",
+      "name": "default",
+      "properties": {
+        "resource": {
+          "_etag": "\"00005900-0000-0000-0000-56f9a2630000\"",
+          "_rid": "PD5DALigDgw=",
+          "_ts": 1459200611,
+          "minimumThroughput": "400",
+          "offerReplacePending": "true",
+          "throughput": 400
+        }
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/throughputSettings"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBSqlDatabaseThroughputUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/throughputSettings"
+  },
+  {
+    "body": {
+      "properties": {
+        "principalId": "myPrincipalId",
+        "roleDefinitionId": "/subscriptions/mySubscriptionId/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/sqlRoleDefinitions/myRoleDefinitionId",
+        "scope": "/subscriptions/mySubscriptionId/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/purchases/colls/redmond-purchases"
+      }
+    },
+    "operationId": "SqlResources_CreateUpdateSqlRoleAssignment",
+    "parameters": {
+      "accountName": "myAccountName",
+      "api-version": "2026-07-15",
+      "resourceGroupName": "myResourceGroupName",
+      "roleAssignmentId": "myRoleAssignmentId",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/sqlRoleAssignments/{roleAssignmentId}",
+    "response": {
+      "id": "/subscriptions/mySubscriptionId/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/sqlRoleAssignments/myRoleAssignmentId",
+      "name": "myRoleAssignmentId",
+      "properties": {
+        "principalId": "myPrincipalId",
+        "roleDefinitionId": "/subscriptions/mySubscriptionId/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/sqlRoleDefinitions/myRoleDefinitionId",
+        "scope": "/subscriptions/mySubscriptionId/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/purchases/colls/redmond-purchases"
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBSqlRoleAssignmentCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments"
+  },
+  {
+    "body": {
+      "properties": {
+        "assignableScopes": [
+          "/subscriptions/mySubscriptionId/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/sales",
+          "/subscriptions/mySubscriptionId/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/purchases"
+        ],
+        "permissions": [
+          {
+            "dataActions": [
+              "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/items/create",
+              "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/items/read"
+            ],
+            "notDataActions": []
+          }
+        ],
+        "roleName": "myRoleName",
+        "type": "CustomRole"
+      }
+    },
+    "operationId": "SqlResources_CreateUpdateSqlRoleDefinition",
+    "parameters": {
+      "accountName": "myAccountName",
+      "api-version": "2026-07-15",
+      "resourceGroupName": "myResourceGroupName",
+      "roleDefinitionId": "myRoleDefinitionId",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/sqlRoleDefinitions/{roleDefinitionId}",
+    "response": {
+      "id": "/subscriptions/mySubscriptionId/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/sqlRoleDefinitions/myRoleDefinitionId",
+      "name": "myRoleDefinitionId",
+      "properties": {
+        "assignableScopes": [
+          "/subscriptions/mySubscriptionId/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/sales",
+          "/subscriptions/mySubscriptionId/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/purchases"
+        ],
+        "permissions": [
+          {
+            "dataActions": [
+              "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/items/create",
+              "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/items/read"
+            ]
+          }
+        ],
+        "roleName": "myRoleName",
+        "type": "CustomRole"
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBSqlRoleDefinitionCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions"
+  },
+  {
+    "body": {
+      "properties": {
+        "principalId": "myPrincipalId",
+        "roleDefinitionId": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/tableRoleDefinitions/myRoleDefinitionId",
+        "scope": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/purchases/colls/redmond-purchases"
+      }
+    },
+    "operationId": "TableResources_CreateUpdateTableRoleAssignment",
+    "parameters": {
+      "accountName": "myAccountName",
+      "api-version": "2026-07-15",
+      "resourceGroupName": "myResourceGroupName",
+      "roleAssignmentId": "myRoleAssignmentId",
+      "subscriptionId": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/tableRoleAssignments/{roleAssignmentId}",
+    "response": {
+      "id": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/tableRoleAssignments/myRoleAssignmentId",
+      "name": "myRoleAssignmentId",
+      "properties": {
+        "principalId": "myPrincipalId",
+        "roleDefinitionId": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/tableRoleDefinitions/myRoleDefinitionId",
+        "scope": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/purchases/colls/redmond-purchases"
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/tableRoleAssignments"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBTableRoleAssignmentCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/tableRoleAssignments"
+  },
+  {
+    "body": {
+      "properties": {
+        "assignableScopes": [
+          "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/sales",
+          "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/purchases"
+        ],
+        "permissions": [
+          {
+            "dataActions": [
+              "Microsoft.DocumentDB/databaseAccounts/tableDatabases/containers/entities/create",
+              "Microsoft.DocumentDB/databaseAccounts/tableDatabases/containers/entities/read"
+            ],
+            "notDataActions": []
+          }
+        ],
+        "roleName": "myRoleName",
+        "type": "CustomRole"
+      }
+    },
+    "operationId": "TableResources_CreateUpdateTableRoleDefinition",
+    "parameters": {
+      "accountName": "myAccountName",
+      "api-version": "2026-07-15",
+      "resourceGroupName": "myResourceGroupName",
+      "roleDefinitionId": "myRoleDefinitionId",
+      "subscriptionId": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/tableRoleDefinitions/{roleDefinitionId}",
+    "response": {
+      "id": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/tableRoleDefinitions/myRoleDefinitionId",
+      "name": "myRoleDefinitionId",
+      "properties": {
+        "assignableScopes": [
+          "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/sales",
+          "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/myResourceGroupName/providers/Microsoft.DocumentDB/databaseAccounts/myAccountName/dbs/purchases"
+        ],
+        "permissions": [
+          {
+            "dataActions": [
+              "Microsoft.DocumentDB/databaseAccounts/tableDatabases/containers/entities/create",
+              "Microsoft.DocumentDB/databaseAccounts/tableDatabases/containers/entities/read"
+            ]
+          }
+        ],
+        "roleName": "myRoleName",
+        "type": "CustomRole"
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/tableRoleDefinitions"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBTableRoleDefinitionCreateUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/tableRoleDefinitions"
+  },
+  {
+    "body": {
+      "location": "West US",
+      "properties": {
+        "options": {},
+        "resource": {
+          "id": "tableName"
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "TableResources_CreateUpdateTable",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444",
+      "tableName": "tableName"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/tables/{tableName}",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/tables/tableName",
+      "location": "West US",
+      "name": "tableName",
+      "properties": {
+        "resource": {
+          "id": "tableName"
+        }
+      },
+      "type": "Microsoft.DocumentDB/databaseAccounts/tables"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBTableReplace",
+    "type": "Microsoft.DocumentDB/databaseAccounts/tables"
+  },
+  {
+    "body": {
+      "location": "West US",
+      "properties": {
+        "resource": {
+          "throughput": 400
+        }
+      },
+      "tags": {}
+    },
+    "operationId": "TableResources_UpdateTableThroughput",
+    "parameters": {
+      "accountName": "ddb1",
+      "api-version": "2026-07-15",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "00000000-1111-2222-3333-444444444444",
+      "tableName": "tableName"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/databaseAccounts/{accountName}/tables/{tableName}/throughputSettings/default",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/ddb1/tables/tableName/throughputSettings/default",
+      "location": "West US",
+      "name": "default",
+      "properties": {
+        "resource": {
+          "_etag": "\"00005900-0000-0000-0000-56f9a2630000\"",
+          "_rid": "PD5DALigDgw=",
+          "_ts": 1459200611,
+          "minimumThroughput": "400",
+          "offerReplacePending": "true",
+          "throughput": 400
+        }
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/databaseAccounts/tables/throughputSettings"
+    },
+    "statuses": [
+      200,
+      202
+    ],
+    "title": "CosmosDBTableThroughputUpdate",
+    "type": "Microsoft.DocumentDB/databaseAccounts/tables/throughputSettings"
+  },
+  {
+    "body": {
+      "location": "West US",
+      "tags": {
+        "Dept": "Finance",
+        "Environment": "Production"
+      }
+    },
+    "operationId": "Fleet_Create",
+    "parameters": {
+      "api-version": "2026-07-15",
+      "fleetName": "fleet1",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/fleets/{fleetName}",
+    "response": {
+      "id": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/rg1/providers/Microsoft.DocumentDB/fleets/fleet1",
+      "location": "West US",
+      "name": "fleet1",
+      "properties": {
+        "provisioningState": "Succeeded"
+      },
+      "tags": {
+        "Dept": "Finance",
+        "Environment": "Production"
+      },
+      "type": "Microsoft.DocumentDB/fleets"
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "CosmosDB Fleet Create",
+    "type": "Microsoft.DocumentDB/fleets"
+  },
+  {
+    "body": {
+      "properties": {
+        "storageLocationType": "StorageAccount",
+        "storageLocationUri": "/subscriptions/d1eb41bc-1b7f-4404-bd2a-868c222852d/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/testStorageAccount1"
+      }
+    },
+    "operationId": "FleetAnalytics_Create",
+    "parameters": {
+      "api-version": "2026-04-01-preview",
+      "fleetAnalyticsName": "storageAccount",
+      "fleetName": "fleet1",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/fleets/{fleetName}/fleetAnalytics/{fleetAnalyticsName}",
+    "response": {
+      "id": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/rg1/providers/Microsoft.DocumentDB/fleets/fleet1/fleetAnalytics/storageAccount",
+      "name": "storageAccount",
+      "properties": {
+        "provisioningState": "Succeeded",
+        "storageLocationType": "StorageAccount",
+        "storageLocationUri": "/subscriptions/d1eb41bc-1b7f-4404-bd2a-868c222852d/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/testStorageAccount1"
+      },
+      "type": "Microsoft.DocumentDB/fleets/fleetAnalytics"
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "CosmosDB FleetAnalytics Create",
+    "type": "Microsoft.DocumentDB/fleets/fleetAnalytics"
+  },
+  {
+    "body": {
+      "properties": {
+        "dataRegions": [
+          "westus2"
+        ],
+        "fleetspaceApiKind": "NoSQL",
+        "serviceTier": "GeneralPurpose",
+        "throughputPoolConfiguration": {
+          "maxThroughput": 500000,
+          "minThroughput": 100000
+        }
+      }
+    },
+    "operationId": "Fleetspace_Create",
+    "parameters": {
+      "api-version": "2026-07-15",
+      "fleetName": "fleet1",
+      "fleetspaceName": "fleetspace1",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/fleets/{fleetName}/fleetspaces/{fleetspaceName}",
+    "response": {
+      "id": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/rg1/providers/Microsoft.DocumentDB/fleets/fleet1/fleetspaces/fleetspace1",
+      "name": "fleetspace1",
+      "properties": {
+        "dataRegions": [
+          "westus2"
+        ],
+        "fleetspaceApiKind": "NoSQL",
+        "provisioningState": "Succeeded",
+        "serviceTier": "GeneralPurpose",
+        "throughputPoolConfiguration": {
+          "maxThroughput": 500000,
+          "minThroughput": 100000
+        }
+      },
+      "type": "Microsoft.DocumentDB/fleets/fleetspaces"
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "CosmosDB Fleetspace Create",
+    "type": "Microsoft.DocumentDB/fleets/fleetspaces"
+  },
+  {
+    "body": {
+      "properties": {
+        "globalDatabaseAccountProperties": {
+          "armLocation": "West US",
+          "resourceId": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/providers/Microsoft.DocumentDB/resourceGroup/rg1/databaseAccounts/db1"
+        }
+      }
+    },
+    "operationId": "FleetspaceAccount_Create",
+    "parameters": {
+      "api-version": "2026-07-15",
+      "fleetName": "fleet1",
+      "fleetspaceAccountName": "db1",
+      "fleetspaceName": "fleetspace1",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/fleets/{fleetName}/fleetspaces/{fleetspaceName}/fleetspaceAccounts/{fleetspaceAccountName}",
+    "response": {
+      "id": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/rg1/providers/Microsoft.DocumentDB/fleets/fleet1/fleetspaces/fleetspace1/fleetspaceAccounts/db1",
+      "name": "db1",
+      "properties": {
+        "globalDatabaseAccountProperties": {
+          "armLocation": "West US",
+          "resourceId": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/providers/Microsoft.DocumentDB/resourceGroup/rg1/databaseAccounts/db1"
+        },
+        "provisioningState": "Succeeded"
+      },
+      "type": "Microsoft.DocumentDB/fleets/fleetspaces/fleetspaceAccounts"
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "CosmosDB FleetspaceAccount Create",
+    "type": "Microsoft.DocumentDB/fleets/fleetspaces/fleetspaceAccounts"
+  },
+  {
+    "body": {
+      "location": "West US",
+      "properties": {
+        "authenticationMethod": "Entra",
+        "nodeSku": "Standard_DS13_v2",
+        "persistence": true,
+        "replicationFactor": 2,
+        "shardCount": 4,
+        "subnetId": "/subscriptions/536e130b-d7d6-4ac7-98a5-de20d69588d2/resourceGroups/customer-vnet-rg/providers/Microsoft.Network/virtualNetworks/customer-vnet/subnets/management"
+      },
+      "tags": {}
+    },
+    "operationId": "GarnetClusters_CreateUpdate",
+    "parameters": {
+      "api-version": "2026-04-01-preview",
+      "clusterName": "garnet-prod",
+      "resourceGroupName": "garnet-prod-rg",
+      "subscriptionId": "00000000-0000-0000-0000-000000000000"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/garnetClusters/{clusterName}",
+    "response": {
+      "id": "/subscriptions/subid/resourceGroups/garnet-prod-rg/providers/Microsoft.DocumentDB/garnetClusters/garnet-prod",
+      "location": "West US",
+      "name": "garnet-prod",
+      "properties": {
+        "authenticationMethod": "Entra",
+        "nodeSku": "Standard_DS13_v2",
+        "persistence": true,
+        "provisioningState": "Succeeded",
+        "replicationFactor": 2,
+        "shardCount": 4,
+        "subnetId": "/subscriptions/536e130b-d7d6-4ac7-98a5-de20d69588d2/resourceGroups/customer-vnet-rg/providers/Microsoft.Network/virtualNetworks/customer-vnet/subnets/management"
+      },
+      "tags": {},
+      "type": "Microsoft.DocumentDB/garnetClusters"
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "CosmosDBGarnetClusterCreate",
+    "type": "Microsoft.DocumentDB/garnetClusters"
+  },
+  {
+    "body": {
+      "location": "westus2",
+      "properties": {
+        "administratorLogin": "mongoAdmin",
+        "administratorLoginPassword": "password",
+        "nodeGroupSpecs": [
+          {
+            "diskSizeGB": 128,
+            "enableHa": true,
+            "kind": "Shard",
+            "nodeCount": 3,
+            "sku": "M30"
+          }
+        ],
+        "serverVersion": "5.0"
+      }
+    },
+    "operationId": "MongoClusters_CreateOrUpdate",
+    "parameters": {
+      "api-version": "2024-02-15-preview",
+      "mongoClusterName": "myMongoCluster",
+      "resourceGroupName": "TestResourceGroup",
+      "subscriptionId": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/mongoClusters/{mongoClusterName}",
+    "response": {
+      "id": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/TestResourceGroup/providers/Microsoft.DocumentDB/mongoClusters/myMongoCluster",
+      "location": "westus2",
+      "name": "myMongoCluster",
+      "properties": {
+        "administratorLogin": "mongoAdmin",
+        "connectionString": "mongodb+srv://<user>:<password>@myMongoCluster.mongocluster.cosmos.azure.com",
+        "earliestRestoreTime": "2023-01-13T20:07:35Z",
+        "nodeGroupSpecs": [
+          {
+            "diskSizeGB": 128,
+            "enableHa": true,
+            "kind": "Shard",
+            "nodeCount": 3,
+            "sku": "M30"
+          }
+        ],
+        "provisioningState": "Succeeded",
+        "serverVersion": "5.0"
+      },
+      "systemData": {
+        "createdAt": "2020-01-01T17:18:19.1234567Z",
+        "createdBy": "user1",
+        "createdByType": "User",
+        "lastModifiedAt": "2020-01-02T17:18:19.1234567Z",
+        "lastModifiedBy": "user2",
+        "lastModifiedByType": "User"
+      },
+      "type": "/Microsoft.DocumentDB/mongoClusters"
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "Create a new mongo cluster",
+    "type": "Microsoft.DocumentDB/mongoClusters"
+  },
+  {
+    "body": {
+      "location": "westus2",
+      "properties": {
+        "createMode": "PointInTimeRestore",
+        "restoreParameters": {
+          "pointInTimeUTC": "2023-01-13T20:07:35Z",
+          "sourceResourceId": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/TestResourceGroup/providers/Microsoft.DocumentDB/mongoClusters/myOtherMongoCluster"
+        }
+      }
+    },
+    "operationId": "MongoClusters_CreateOrUpdate",
+    "parameters": {
+      "api-version": "2024-02-15-preview",
+      "mongoClusterName": "myMongoCluster",
+      "resourceGroupName": "TestResourceGroup",
+      "subscriptionId": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/mongoClusters/{mongoClusterName}",
+    "response": {
+      "id": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/TestResourceGroup/providers/Microsoft.DocumentDB/mongoClusters/myMongoCluster",
+      "location": "westus2",
+      "name": "myMongoCluster",
+      "properties": {
+        "administratorLogin": "mongoAdmin",
+        "connectionString": "mongodb+srv://<user>:<password>@myMongoCluster.mongocluster.cosmos.azure.com",
+        "earliestRestoreTime": "2023-01-13T20:07:35Z",
+        "nodeGroupSpecs": [
+          {
+            "diskSizeGB": 128,
+            "enableHa": true,
+            "kind": "Shard",
+            "nodeCount": 3,
+            "sku": "M30"
+          }
+        ],
+        "provisioningState": "Succeeded",
+        "serverVersion": "5.0"
+      },
+      "type": "/Microsoft.DocumentDB/mongoClusters"
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "Create a new mongo cluster with point in time restore",
+    "type": "Microsoft.DocumentDB/mongoClusters"
+  },
+  {
+    "body": {
+      "properties": {
+        "endIpAddress": "255.255.255.255",
+        "startIpAddress": "0.0.0.0"
+      }
+    },
+    "operationId": "MongoClusters_CreateOrUpdateFirewallRule",
+    "parameters": {
+      "api-version": "2024-02-15-preview",
+      "firewallRuleName": "rule1",
+      "mongoClusterName": "myMongoCluster",
+      "resourceGroupName": "TestGroup",
+      "subscriptionId": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/mongoClusters/{mongoClusterName}/firewallRules/{firewallRuleName}",
+    "response": {
+      "id": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/TestResourceGroup/providers/Microsoft.DocumentDB/mongoClusters/myMongoCluster/firewallRules/rule1",
+      "name": "rule1",
+      "properties": {
+        "endIpAddress": "255.255.255.255",
+        "provisioningState": "Succeeded",
+        "startIpAddress": "0.0.0.0"
+      },
+      "systemData": {
+        "createdAt": "2020-01-01T17:18:19.1234567Z",
+        "createdBy": "user1",
+        "createdByType": "User",
+        "lastModifiedAt": "2020-01-02T17:18:19.1234567Z",
+        "lastModifiedBy": "user2",
+        "lastModifiedByType": "User"
+      },
+      "type": "/Microsoft.DocumentDB/mongoClusters/firewallRules"
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "Create a firewall rule of the mongo cluster",
+    "type": "Microsoft.DocumentDB/mongoClusters/firewallRules"
+  },
+  {
+    "body": {
+      "location": "westus2",
+      "properties": {
+        "maxThroughput": 10000
+      },
+      "tags": {}
+    },
+    "operationId": "ThroughputPool_CreateOrUpdate",
+    "parameters": {
+      "api-version": "2026-04-01-preview",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+      "throughputPoolName": "tp1"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/throughputPools/{throughputPoolName}",
+    "response": {
+      "id": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/rg1/providers/Microsoft.DocumentDB/throughputPools/tp1",
+      "location": "westus2",
+      "name": "tp1",
+      "properties": {
+        "maxThroughput": 10000,
+        "provisioningState": "Succeeded"
+      },
+      "tags": {
+        "additionalProp1": "string",
+        "additionalProp2": "string",
+        "additionalProp3": "string"
+      },
+      "type": "/Microsoft.DocumentDB/throughputPools"
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "CosmosDB ThroughputPool Create",
+    "type": "Microsoft.DocumentDB/throughputPools"
+  },
+  {
+    "body": {
+      "properties": {
+        "accountLocation": "West US",
+        "accountResourceIdentifier": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/providers/Microsoft.DocumentDB/resourceGroup/rg1/databaseAccounts/db1/"
+      }
+    },
+    "operationId": "ThroughputPoolAccount_Create",
+    "parameters": {
+      "api-version": "2026-04-01-preview",
+      "resourceGroupName": "rg1",
+      "subscriptionId": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+      "throughputPoolAccountName": "db1",
+      "throughputPoolName": "tp1"
+    },
+    "path": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DocumentDB/throughputPools/{throughputPoolName}/throughputPoolAccounts/{throughputPoolAccountName}",
+    "response": {
+      "id": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/rg1/providers/Microsoft.DocumentDB/throughputPools/tp1/throughputPoolAccounts/db1",
+      "properties": {
+        "accountInstanceId": "{instance-id1}",
+        "accountLocation": "west us",
+        "accountResourceIdentifier": "/subscriptions/ffffffff-ffff-ffff-ffff-ffffffffffff/resourceGroups/rg1/providers/Microsoft.DocumentDB/databaseAccounts/db1",
+        "provisioningState": "Succeeded"
+      }
+    },
+    "statuses": [
+      200,
+      201
+    ],
+    "title": "CosmosDB ThroughputPool Account Create",
+    "type": "Microsoft.DocumentDB/throughputPools/throughputPoolAccounts"
+  }
+]

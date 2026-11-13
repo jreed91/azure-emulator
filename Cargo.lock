@@ -188,6 +188,7 @@ dependencies = [
  "rcgen",
  "rustls-pemfile",
  "serde_json",
+ "service-cosmosdb",
  "service-entra",
  "service-keyvault",
  "service-managedidentity",
@@ -1601,6 +1602,23 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.10",
+]
+
+[[package]]
+name = "service-cosmosdb"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64",
+ "chrono",
+ "emulator-core",
+ "hmac",
+ "http",
+ "percent-encoding",
+ "rand 0.8.8",
+ "serde_json",
+ "sha2",
+ "uuid",
 ]
 
 [[package]]

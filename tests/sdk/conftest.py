@@ -171,6 +171,13 @@ def keyvault(emulator, credential):
 
 
 @pytest.fixture(scope="session")
+def cosmos(emulator, credential):
+    from azure.mgmt.cosmosdb import CosmosDBManagementClient
+
+    return CosmosDBManagementClient(credential, SUBSCRIPTION, **emulator.arm)
+
+
+@pytest.fixture(scope="session")
 def servicebus(emulator, credential):
     from azure.mgmt.servicebus import ServiceBusManagementClient
 

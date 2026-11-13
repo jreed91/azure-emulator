@@ -25,6 +25,7 @@ rely on it as a security boundary.
 | `Microsoft.KeyVault` | Vaults: create, get, update, delete, list, `checkNameAvailability`; soft delete with list, get, recover and purge of deleted vaults; access-policy updates; secrets through Resource Manager (the same store as the data plane); managed HSMs with soft delete, regions and name availability (no HSM data plane); keys through Resource Manager in vaults and managed HSMs (metadata only; no keys data plane yet) |
 | `Microsoft.ManagedIdentity` | User-assigned identities and federated identity credentials; listing the resources that use an identity; reading any resource's system-assigned identity. Every resource's `identity` block is filled in: system-assigned identities get a principal id, and user-assigned identities are checked and given their principal and client ids |
 | `Microsoft.ServiceBus` | Namespaces, queues, topics, subscriptions, rules, authorization rules with `listKeys` and `regenerateKeys`, network rule sets, geo-disaster-recovery aliases with failover and break-pairing, legacy IP filter and virtual network rules, private link resources, Standard-to-Premium migration (start and revert; completion is not modeled), `checkNameAvailability`; messaging over AMQP 1.0 (see [Service Bus messaging](#service-bus-messaging)) |
+| `Microsoft.DocumentDB` | Database accounts with `listKeys`, `readonlykeys`, `listConnectionStrings` and `regenerateKey`; SQL databases and containers (the same store as the data plane); the Cosmos DB for NoSQL data plane (see [Cosmos DB](#cosmos-db)) |
 | Key Vault secrets | Set, get (latest or by version), update attributes, list, list versions, soft delete, get and list deleted, recover, purge |
 
 Beyond these, every resource type in the Storage, Key Vault, Managed Identity and
@@ -85,6 +86,14 @@ tried yet.
 - Operations the ARM layer cannot route yet (tenant-, location- and
   extension-scoped ones) are listed by `coverage` as `501`.
 - Service Bus throughput limits, quotas and partitioning are not modelled.
+- Cosmos DB serves the NoSQL API only (no MongoDB, Cassandra, Gremlin or Table
+  data planes), with one region and one partition key range per container.
+  Request charges are a flat 1 RU, consistency levels are accepted but every
+  read sees the latest write, and indexing policies are stored but queries
+  scan. Stored procedures, triggers, user-defined functions, users,
+  permissions and resource tokens, spatial functions and the all-versions
+  change feed answer `501`. Entra ID tokens are accepted without checking
+  data-plane role assignments.
 - Template deployments run to completion before the first response; there is
   no `Running` state and `cancel` always answers `409`. A `templateLink`,
   `parametersLink` or Key Vault reference in parameters answers `501`, as do
@@ -240,6 +249,55 @@ blobs = BlobServiceClient(
 Data-plane endpoints come back from the control plane (`primaryEndpoints.blob`,
 `vaultUri`), so code that reads them needs no emulator-specific addresses.
 
+### Cosmos DB
+
+Each Cosmos DB account serves the NoSQL API on the emulator's HTTPS port, at
+`https://<account>.documents.azure.localhost:10443/`. `listConnectionStrings`
+returns connection strings for it, which the SDKs take as they are:
+
+```python
+from azure.cosmos import CosmosClient, PartitionKey
+
+strings = cosmos_mgmt.database_accounts.list_connection_strings("rg", "orders-db").connection_strings
+client = CosmosClient.from_connection_string(strings[0].connection_string, connection_verify=ca_path)
+container = client.create_database_if_not_exists("app").create_container_if_not_exists(
+    "orders", partition_key=PartitionKey(path="/tenant"))
+container.upsert_item({"id": "1", "tenant": "a", "total": 10})
+list(container.query_items("SELECT * FROM c WHERE c.total > 5", enable_cross_partition_query=True))
+```
+
+Supported: databases and containers (with partition keys, hierarchical keys,
+unique keys and time to live); items with create, read, replace, upsert,
+delete and patch (`add`, `set`, `replace`, `remove`, `incr`, `move`, with a
+condition); `If-Match` and `If-None-Match`; read feeds and the incremental
+change feed; transactional batches; throughput offers; and queries.
+The query language covers `SELECT` with `VALUE`, `DISTINCT` and `TOP`; `JOIN … IN`;
+`WHERE` with comparison, `AND`/`OR`/`NOT`, `IN`, `BETWEEN`, `LIKE`, `??`
+and `?:`; `ORDER BY`, `OFFSET … LIMIT` and `GROUP BY`; the aggregates; `EXISTS`
+and scalar subqueries; parameters; and the common string, array, type-checking
+and math functions. Missing properties are *undefined*, as on Cosmos DB.
+Requests are signed with the account's keys (the read-only keys can only
+read), or carry an Entra ID token from the emulator's token service.
+Databases and containers created through the data plane show up on
+Resource Manager, and the other way round.
+
+A connection string may also point at any name that reaches the emulator
+(`AccountEndpoint=https://localhost:10443/`): the account is the host's first
+label when an account has that name, and otherwise the only account. With a
+fixed key from a provisioning file, no setup call is needed, and the key the
+Cosmos DB emulator documents works:
+
+```json
+{
+  "cosmos": [{
+    "resourceGroup": "local",
+    "account": "local-cosmos",
+    "key": "C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==",
+    "databases": [{ "id": "app", "containers": [{ "id": "orders", "partitionKey": "/tenant" }] }]
+  }]
+}
+```
+
 ### Service Bus messaging
 
 The emulator also runs an AMQP 1.0 broker (plain AMQP, port `5672`; change it
@@ -394,9 +452,14 @@ Each `Emulator` is fully isolated. `core/router/tests/` shows how to drive it.
 ├── services/
 │   ├── entra/           # token service
 │   ├── storage/         # Microsoft.Storage + Blob data plane
-│   └── keyvault/        # Microsoft.KeyVault + secrets data plane
+│   ├── keyvault/        # Microsoft.KeyVault + secrets data plane
+│   ├── managedidentity/ # Microsoft.ManagedIdentity
+│   ├── servicebus/      # Microsoft.ServiceBus + AMQP broker
+│   └── cosmosdb/        # Microsoft.DocumentDB + NoSQL data plane
 ├── tools/scaffold/      # emulator-scaffold: OpenAPI specification → service scaffold
-└── tests/sdk/           # checks that run real Azure SDKs against the emulator
+├── vendor/fe2o3-amqp/   # the AMQP library, patched (see PATCHED.md)
+├── tests/sdk/           # checks that run the Azure SDKs for Python against the emulator
+└── tests/sdk-js/        # and the Azure SDKs for JavaScript
 ```
 
 Each service crate also holds two generated files: `src/scaffold.rs`, the table of
@@ -494,7 +557,8 @@ No hosts-file entries or certificate setup are needed: the suite resolves
 `*.localhost` itself and trusts the emulator's CA. Set `AZURE_EMULATOR_BIN` to
 test a binary other than `target/debug/azure-emulator`.
 
-A smaller suite drives Service Bus with the Azure SDK for JavaScript:
+A smaller suite drives Service Bus and Cosmos DB with the Azure SDK for
+JavaScript:
 
 ```bash
 cargo build -p azure-emulator
