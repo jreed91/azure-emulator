@@ -356,3 +356,84 @@ async fn managed_hsm_lifecycle() {
     assert_eq!(client.arm(Method::GET, &status_url, None).await.status, StatusCode::OK);
     assert_eq!(client.arm(Method::POST, &check, Some(json!({"name": "payments-hsm"}))).await.json()["nameAvailable"], true);
 }
+
+#[tokio::test]
+async fn keys_through_resource_manager() {
+    let (client, _) = vault_client().await;
+    let key = |rest: &str| vault_path(&format!("demo-vault/keys{rest}"));
+
+    let reply = client.arm(Method::PUT, &key("/signing"), Some(json!({"properties": {"kty": "EC"}}))).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    let created = reply.json();
+    assert_eq!(created["type"], "Microsoft.KeyVault/vaults/keys");
+    assert_eq!(created["location"], "eastus");
+    assert_eq!(created["properties"]["curveName"], "P-256");
+    assert_eq!(created["properties"]["keyOps"], json!(["sign", "verify"]));
+    assert_eq!(created["properties"]["keyUri"], "https://demo-vault.vault.azure.localhost:10443/keys/signing");
+    assert_eq!(created["properties"]["attributes"]["enabled"], true);
+
+    // Creating it again returns the same key: no new version, settings ignored.
+    let again = client.arm(Method::PUT, &key("/signing"), Some(json!({"properties": {"kty": "RSA"}}))).await.json();
+    assert_eq!(again["properties"]["keyUriWithVersion"], created["properties"]["keyUriWithVersion"]);
+    let versions = client.arm(Method::GET, &key("/signing/versions"), None).await.json();
+    assert_eq!(versions["value"].as_array().unwrap().len(), 1);
+    let version = created["properties"]["keyUriWithVersion"].as_str().unwrap().rsplit('/').next().unwrap().to_string();
+    let one = client.arm(Method::GET, &key(&format!("/signing/versions/{version}")), None).await.json();
+    assert_eq!(one["type"], "Microsoft.KeyVault/vaults/keys/versions");
+    assert_eq!(one["name"], version.as_str());
+
+    let rsa = client
+        .arm(Method::PUT, &key("/wrapping"), Some(json!({"tags": {"use": "wrap"}, "properties": {"kty": "RSA", "keySize": 4096, "keyOps": ["wrapKey", "unwrapKey"]}})))
+        .await
+        .json();
+    assert_eq!(rsa["properties"]["keySize"], 4096);
+    assert_eq!(rsa["tags"]["use"], "wrap");
+    let listed = client.arm(Method::GET, &key(""), None).await.json();
+    let names: Vec<&str> = listed["value"].as_array().unwrap().iter().map(|k| k["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["signing", "wrapping"]);
+
+    for (body, why) in [
+        (json!({"properties": {}}), "kty is required"),
+        (json!({"properties": {"kty": "RSA", "keySize": 1024}}), "RSA sizes"),
+        (json!({"properties": {"kty": "EC", "curveName": "P-999"}}), "curves"),
+        (json!({"properties": {"kty": "EC", "keyOps": ["encrypt"]}}), "EC keys cannot encrypt"),
+        (json!({"properties": {"kty": "RSA-HSM"}}), "a standard vault holds no HSM keys"),
+        (json!({"properties": {"kty": "oct-HSM"}}), "vaults hold no symmetric keys"),
+    ] {
+        let reply = client.arm(Method::PUT, &key("/rejected"), Some(body)).await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{why}: {}", reply.text());
+    }
+    assert_eq!(client.arm(Method::GET, &key("/missing"), None).await.error_code(), "KeyNotFound");
+
+    // Keys survive a vault's soft delete and recovery.
+    client.arm(Method::DELETE, &vault_path("demo-vault"), None).await;
+    let mut recover = vault_body(&client, json!({"createMode": "recover"}));
+    recover["properties"]["enableRbacAuthorization"] = json!(true);
+    assert_eq!(client.arm(Method::PUT, &vault_path("demo-vault"), Some(recover)).await.status, StatusCode::OK);
+    assert_eq!(client.arm(Method::GET, &key("/signing"), None).await.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn managed_hsm_keys() {
+    let (client, _) = vault_client().await;
+    let body = json!({"location": "eastus", "properties": {"tenantId": client.config().tenant_id, "initialAdminObjectIds": ["a"]}});
+    client.arm(Method::PUT, &hsm_path("keys-hsm"), Some(body)).await;
+    let key = |rest: &str| hsm_path(&format!("keys-hsm/keys{rest}"));
+
+    let reply = client.arm(Method::PUT, &key("/master"), Some(json!({"properties": {"kty": "oct-HSM"}}))).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    let created = reply.json();
+    assert_eq!(created["type"], "Microsoft.KeyVault/managedHSMs/keys");
+    assert_eq!(created["properties"]["keySize"], 256);
+    assert!(created.get("location").is_none());
+    assert_eq!(created["properties"]["keyUri"], "https://keys-hsm.managedhsm.azure.localhost:10443/keys/master");
+    assert_eq!(client.arm(Method::GET, &key(""), None).await.json()["value"].as_array().unwrap().len(), 1);
+
+    // Purging the HSM destroys its keys.
+    client.arm(Method::DELETE, &hsm_path("keys-hsm"), None).await;
+    let purge = format!("{SUB}/providers/Microsoft.KeyVault/locations/eastus/deletedManagedHSMs/keys-hsm/purge?api-version=2023-07-01");
+    assert_eq!(client.arm(Method::POST, &purge, None).await.status, StatusCode::ACCEPTED);
+    let body = json!({"location": "eastus", "properties": {"tenantId": client.config().tenant_id, "initialAdminObjectIds": ["a"]}});
+    client.arm(Method::PUT, &hsm_path("keys-hsm"), Some(body)).await;
+    assert_eq!(client.arm(Method::GET, &key(""), None).await.json(), json!({"value": []}));
+}

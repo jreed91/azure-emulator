@@ -95,14 +95,14 @@ fn purge_deleted(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Reply 
 
 // ---- access policies ----------------------------------------------------------
 
-fn vault_id(ctx: &ArmContext<'_>, name: &str) -> String {
+pub(crate) fn vault_id(ctx: &ArmContext<'_>, name: &str) -> String {
     format!(
         "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.KeyVault/vaults/{name}",
         ctx.subscription_id, ctx.resource_group
     )
 }
 
-fn vault_not_found(ctx: &ArmContext<'_>, name: &str) -> ArmError {
+pub(crate) fn vault_not_found(ctx: &ArmContext<'_>, name: &str) -> ArmError {
     ArmError::not_found(
         "ResourceNotFound",
         format!(
@@ -112,7 +112,7 @@ fn vault_not_found(ctx: &ArmContext<'_>, name: &str) -> ArmError {
     )
 }
 
-fn find_vault(ctx: &ArmContext<'_>, name: &str) -> Result<Resource, ArmError> {
+pub(crate) fn find_vault(ctx: &ArmContext<'_>, name: &str) -> Result<Resource, ArmError> {
     let state = ctx.engine.state::<ArmState>();
     let state = state.lock();
     state.resource(&vault_id(ctx, name)).cloned().ok_or_else(|| vault_not_found(ctx, name))

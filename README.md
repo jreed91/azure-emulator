@@ -19,7 +19,7 @@ workloads or to test security.
 | Resource Manager | Bearer-token verification, `api-version` checks, subscriptions, tenants, resource groups (create, get, exists, tag, list, delete with cascade), providers, generic resource listing, cloud metadata document |
 | `Microsoft.Storage` | Storage accounts with `listKeys`, `regenerateKey` and `checkNameAvailability`; blob, file, queue and table service properties; blob containers (the same store as the data plane); queues, tables and file shares (Resource Manager only); encryption scopes; lifecycle-management and inventory policies; local users; `listAccountSas` and `listServiceSas`; container legal holds, immutability policies (lock, extend, `If-Match`) and leases, enforced on the Blob data plane; file share leases |
 | Blob service | Containers: create, delete, properties, list. Block blobs: upload (single request), download with ranges, properties, metadata, delete, list with prefix, delimiter and paging. Authorization by Entra token, verified Shared Key, or shared access signature (account SAS and container or blob service SAS signed with an account key) |
-| `Microsoft.KeyVault` | Vaults: create, get, update, delete, list, `checkNameAvailability`; soft delete with list, get, recover and purge of deleted vaults; access-policy updates; secrets through Resource Manager (the same store as the data plane); managed HSMs with soft delete, regions and name availability (no HSM data plane) |
+| `Microsoft.KeyVault` | Vaults: create, get, update, delete, list, `checkNameAvailability`; soft delete with list, get, recover and purge of deleted vaults; access-policy updates; secrets through Resource Manager (the same store as the data plane); managed HSMs with soft delete, regions and name availability (no HSM data plane); keys through Resource Manager in vaults and managed HSMs (metadata only; no keys data plane yet) |
 | `Microsoft.ManagedIdentity` | User-assigned identities and federated identity credentials |
 | `Microsoft.ServiceBus` | Namespaces, queues, topics, subscriptions, rules, authorization rules with `listKeys` and `regenerateKeys`, network rule sets, geo-disaster-recovery aliases with failover and break-pairing, legacy IP filter and virtual network rules, private link resources, Standard-to-Premium migration (start and revert; completion is not modeled), `checkNameAvailability` (control plane only: nothing serves messaging) |
 | Key Vault secrets | Set, get (latest or by version), update attributes, list, list versions, soft delete, get and list deleted, recover, purge |
@@ -30,11 +30,11 @@ until someone implements it. `azure-emulator coverage` prints the current score:
 
 ```
 Provider                           Types   Operations   Generic
-Microsoft.KeyVault                 12/16        40/51         0
+Microsoft.KeyVault                 16/16        50/51         0
 Microsoft.ManagedIdentity            2/2        10/14         0
 Microsoft.ServiceBus               19/21        83/91         0
 Microsoft.Storage                  17/32       89/153        30
-Total                              50/71      222/309        30
+Total                              54/71      232/309        30
 ```
 
 Private endpoint connections and network security perimeter configurations
