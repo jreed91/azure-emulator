@@ -667,21 +667,43 @@ fn metadata_endpoints(engine: &Engine, api_version: &str) -> Value {
             "authentication": {"loginEndpoint": format!("{management}/"), "audiences": audiences},
         });
     }
-    json!([{
+    let cloud = json!({
         "name": "AzureEmulator",
         "portal": "",
         "authentication": {
             "loginEndpoint": format!("{management}/"),
             "audiences": audiences,
-            "tenant": config.tenant_id,
+            // As on Azure: the multi-tenant authority. Clients treat anything
+            // else as Azure Stack (Terraform's azurerm provider refuses it).
+            "tenant": "common",
             "identityProvider": "AAD",
         },
         "resourceManager": format!("{management}/"),
+        "graph": "",
+        "graphAudience": "",
+        "gallery": "",
+        "media": "",
+        "batch": "",
+        "sqlManagement": "",
+        "vmImageAliasDoc": "",
+        "activeDirectoryDataLake": "",
+        // There is no Microsoft Graph here; this keeps clients that require
+        // the field (Terraform's azurerm provider) pointed at the emulator.
+        "microsoftGraphResourceId": format!("{management}/"),
         "suffixes": {
             "storage": format!("core.{}{}", config.dns_suffix, port),
             "keyVaultDns": format!("vault.{}{}", config.dns_suffix, port),
+            "mhsmDns": format!("managedhsm.{}{}", config.dns_suffix, port),
         },
-    }])
+    });
+    // 2022-09-01 and later describe the one cloud this endpoint belongs to, as
+    // an object (what the Go SDK behind Terraform's azurerm provider reads);
+    // earlier versions list clouds in an array.
+    if api_version >= "2022-09-01" {
+        cloud
+    } else {
+        json!([cloud])
+    }
 }
 
 /// Serves one Resource Manager request.
@@ -1137,18 +1159,19 @@ impl ArmRequest<'_> {
             Some(group) => format!("{}/", self.group_id(group).to_ascii_lowercase()),
             None => String::new(),
         };
+        let filter = ResourceFilter::parse(self.filter.as_deref())?;
         let state = self.engine.state::<ArmState>();
         let state = state.lock();
-        list(
-            state
-                .resources
-                .iter()
-                .filter(|(id, _)| id.starts_with(&prefix))
-                // The generic listing shows top-level resources, not their children.
-                .filter(|(_, r)| r.resource_type.matches('/').count() == 1)
-                .map(|(_, r)| r.summary())
-                .collect(),
-        )
+        let items: Vec<Value> = state
+            .resources
+            .iter()
+            .filter(|(id, _)| id.starts_with(&prefix))
+            // The generic listing shows top-level resources, not their children.
+            .filter(|(_, r)| r.resource_type.matches('/').count() == 1)
+            .filter(|(_, r)| filter.matches(r))
+            .map(|(_, r)| r.summary())
+            .collect();
+        list(items)
     }
 
     fn handler(&self, namespace: &str, types: &[&str]) -> Result<&Arc<dyn ResourceTypeHandler>, ArmError> {
@@ -1406,6 +1429,117 @@ impl ArmRequest<'_> {
             _ => Err(self.unsupported(rest)),
         }
     }
+}
+
+/// The `$filter` of a generic resource listing:
+/// `resourceType eq '...'`, `name eq '...'`, `location eq '...'`,
+/// `resourceGroup eq '...'`, `substringof('...', name)`, `tagName eq '...'` and
+/// `tagValue eq '...'` (together: a tag with that value), combined with `and`
+/// and `or`.
+#[derive(Default)]
+struct ResourceFilter {
+    /// Alternatives (`or`), each a list of clauses that must all hold (`and`).
+    groups: Vec<Vec<(String, String)>>,
+}
+
+impl ResourceFilter {
+    fn parse(filter: Option<&str>) -> Result<Self, ArmError> {
+        let mut out = Self::default();
+        let Some(raw) = filter.map(str::trim).filter(|f| !f.is_empty()) else {
+            return Ok(out);
+        };
+        // Unverified against Azure: the code for a filter it cannot parse.
+        let invalid = || {
+            ArmError::bad_request(
+                "InvalidFilterInQueryString",
+                format!("Invalid $filter '{raw}' specified in the query string."),
+            )
+        };
+        let unquote = |text: &str| -> Result<String, ArmError> {
+            let text = text.trim();
+            text.strip_prefix('\'')
+                .and_then(|t| t.strip_suffix('\''))
+                .map(|t| t.replace("''", "'"))
+                .ok_or_else(invalid)
+        };
+        for alternative in split_keyword(raw, " or ") {
+            let mut clauses = Vec::new();
+            for clause in split_keyword(&alternative, " and ") {
+                let clause = clause.trim().trim_start_matches('(').trim_end_matches(')').trim();
+                let lower = clause.to_ascii_lowercase();
+                if let Some(inner) = lower.strip_prefix("substringof(") {
+                    let original = &clause[clause.len() - inner.len()..];
+                    let (needle, field) = original.rsplit_once(',').ok_or_else(invalid)?;
+                    if !field.trim().eq_ignore_ascii_case("name") {
+                        return Err(invalid());
+                    }
+                    clauses.push(("substringof".to_string(), unquote(needle)?));
+                    continue;
+                }
+                let (field, value) = clause.split_once(" eq ").ok_or_else(invalid)?;
+                let field = field.trim().to_ascii_lowercase();
+                if !matches!(field.as_str(), "resourcetype" | "name" | "location" | "resourcegroup" | "tagname" | "tagvalue") {
+                    return Err(invalid());
+                }
+                clauses.push((field, unquote(value)?));
+            }
+            out.groups.push(clauses);
+        }
+        Ok(out)
+    }
+
+    fn matches(&self, resource: &Resource) -> bool {
+        if self.groups.is_empty() {
+            return true;
+        }
+        self.groups.iter().any(|clauses| {
+            let tag_name = clauses.iter().find(|(f, _)| f == "tagname").map(|(_, v)| v.as_str());
+            let tags = resource.tags.as_ref().and_then(Value::as_object);
+            clauses.iter().all(|(field, value)| match field.as_str() {
+                "resourcetype" => resource.resource_type.eq_ignore_ascii_case(value),
+                "name" => resource.name.eq_ignore_ascii_case(value),
+                "substringof" => resource.name.to_ascii_lowercase().contains(&value.to_ascii_lowercase()),
+                "location" => resource.location.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(value)),
+                "resourcegroup" => resource
+                    .id
+                    .split('/')
+                    .nth(4)
+                    .is_some_and(|group| group.eq_ignore_ascii_case(value)),
+                "tagname" => tags.is_some_and(|t| t.keys().any(|k| k.eq_ignore_ascii_case(value))),
+                "tagvalue" => tags.is_some_and(|t| {
+                    t.iter().any(|(k, v)| {
+                        tag_name.is_none_or(|name| k.eq_ignore_ascii_case(name)) && v.as_str() == Some(value.as_str())
+                    })
+                }),
+                _ => false,
+            })
+        })
+    }
+}
+
+/// Splits on a keyword (` and `, ` or `) outside quotes, ignoring case.
+fn split_keyword(text: &str, keyword: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    let chars: Vec<char> = text.chars().collect();
+    let keyword: Vec<char> = keyword.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\'' {
+            quoted = !quoted;
+        }
+        let here: String = chars[i..chars.len().min(i + keyword.len())].iter().collect();
+        if !quoted && here.eq_ignore_ascii_case(&keyword.iter().collect::<String>()) {
+            parts.push(std::mem::take(&mut current));
+            i += keyword.len();
+            continue;
+        }
+        current.push(chars[i]);
+        i += 1;
+    }
+    parts.push(current);
+    parts
 }
 
 /// The resource as its handler presents it.

@@ -52,6 +52,22 @@ jobs:
       - run: npm test
         working-directory: tests/sdk-js
 
+  terraform:
+    name: Terraform (azurerm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.13.4"
+          terraform_wrapper: false
+      - run: cargo build -p azure-emulator
+      # The provider resolves per-resource hostnames itself.
+      - run: tests/terraform/run.sh --hosts-line | sudo tee -a /etc/hosts
+      - run: tests/terraform/run.sh
+
   image:
     name: Container image
     runs-on: ubuntu-latest

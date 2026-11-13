@@ -141,6 +141,9 @@ pub(crate) fn permission_for(method: &Method, collection: &str, rest: &[&str]) -
     let lower: Vec<String> = rest.iter().map(|s| s.to_ascii_lowercase()).collect();
     let rest: Vec<&str> = lower.iter().map(String::as_str).collect();
     Some(match (collection, rest.as_slice(), method.as_str()) {
+        // Reading contacts needs only `certificates/read`: no role grants a
+        // `certificatecontacts/read`.
+        ("certificates", ["contacts"], "GET") => (action!("read"), "managecontacts"),
         ("certificates", ["contacts"], _) => ("Microsoft.KeyVault/vaults/certificatecontacts/write", "managecontacts"),
         ("certificates", ["issuers"], "GET") => (CAS_READ, "listissuers"),
         ("certificates", ["issuers", _], "GET") => (CAS_READ, "getissuers"),

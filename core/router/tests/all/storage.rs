@@ -747,3 +747,19 @@ impl PipeBody for Value {
         json!({"properties": self})
     }
 }
+
+#[tokio::test]
+async fn an_account_that_was_never_migrated() {
+    let client = Client::new();
+    client.create_group("mig").await;
+    create_account(&client, "mig", "migacct").await;
+    let base = format!("{SUB}/resourceGroups/mig/providers/Microsoft.Storage/storageAccounts/migacct/accountMigrations");
+    let reply = client.arm(Method::GET, &format!("{base}/default?api-version=2023-05-01"), None).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    let migration = reply.json();
+    assert_eq!(migration["name"], "default");
+    assert!(migration["properties"].get("migrationStatus").is_none());
+    assert!(migration["properties"]["targetSkuName"].is_string());
+    let reply = client.arm(Method::GET, &format!("{base}/other?api-version=2023-05-01"), None).await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+}
