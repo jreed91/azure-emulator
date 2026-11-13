@@ -64,6 +64,7 @@ pub(crate) fn register(registry: &mut ArmRegistry) {
     registry.register_type(Policies {
         resource_type: "Microsoft.Storage/storageAccounts/inventoryPolicies",
     });
+    registry.register_operation("PrivateLinkResources_ListByStorageAccount", Arc::new(private_link_resources));
     registry.register_operation("BlobContainers_List", Arc::new(list_containers));
     registry.register_operation("BlobContainers_Get", Arc::new(get_container));
     registry.register_operation("BlobContainers_Create", Arc::new(put_container));
@@ -490,6 +491,40 @@ fn require_account(ctx: &ArmContext<'_>, name: &str) -> Result<String, ArmError>
             ),
         )
     })
+}
+
+/// The sub-resources of an account a private endpoint can target: one per
+/// service, plus the secondary endpoints of a read-access geo-redundant account.
+fn private_link_resources(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Reply {
+    let id = require_account(ctx, request.param("accountName"))?;
+    let has_secondary = {
+        let state = ctx.engine.state::<ArmState>();
+        let state = state.lock();
+        state
+            .resource(&id)
+            .and_then(|account| account.sku.as_ref())
+            .and_then(|sku| sku.get("name"))
+            .and_then(Value::as_str)
+            .is_some_and(|sku| sku.contains("RAG"))
+    };
+    let mut items = Vec::new();
+    for service in ["blob", "table", "queue", "file", "web", "dfs"] {
+        let suffixes: &[&str] = if has_secondary { &["", "_secondary"] } else { &[""] };
+        for suffix in suffixes {
+            let group = format!("{service}{suffix}");
+            items.push(json!({
+                "id": format!("{id}/privateLinkResources/{group}"),
+                "name": group,
+                "type": "Microsoft.Storage/storageAccounts/privateLinkResources",
+                "properties": {
+                    "groupId": group,
+                    "requiredMembers": [group],
+                    "requiredZoneNames": [format!("privatelink.{service}.core.windows.net")],
+                },
+            }));
+        }
+    }
+    Ok((StatusCode::OK, json!({"value": items})))
 }
 
 fn container_not_found() -> ArmError {

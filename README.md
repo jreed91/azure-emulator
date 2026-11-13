@@ -21,7 +21,7 @@ workloads or to test security.
 | Blob service | Containers: create, delete, properties, list. Block blobs: upload (single request), download with ranges, properties, metadata, delete, list with prefix, delimiter and paging. Authorization by Entra token, verified Shared Key, or shared access signature (account SAS and container or blob service SAS signed with an account key) |
 | `Microsoft.KeyVault` | Vaults: create, get, update, delete, list, `checkNameAvailability`; soft delete with list, get, recover and purge of deleted vaults; access-policy updates; secrets through Resource Manager (the same store as the data plane) |
 | `Microsoft.ManagedIdentity` | User-assigned identities and federated identity credentials |
-| `Microsoft.ServiceBus` | Namespaces, queues, topics, subscriptions, rules, authorization rules with `listKeys` and `regenerateKeys`, network rule sets, `checkNameAvailability` (control plane only: nothing serves messaging) |
+| `Microsoft.ServiceBus` | Namespaces, queues, topics, subscriptions, rules, authorization rules with `listKeys` and `regenerateKeys`, network rule sets, geo-disaster-recovery aliases with failover and break-pairing, legacy IP filter and virtual network rules, private link resources, `checkNameAvailability` (control plane only: nothing serves messaging) |
 | Key Vault secrets | Set, get (latest or by version), update attributes, list, list versions, soft delete, get and list deleted, recover, purge |
 
 Beyond these, every resource type in the Storage, Key Vault, Managed Identity and
@@ -30,11 +30,11 @@ until someone implements it. `azure-emulator coverage` prints the current score:
 
 ```
 Provider                                  Types     Operations
-Microsoft.KeyVault                         4/16          15/51
+Microsoft.KeyVault                         5/16          16/51
 Microsoft.ManagedIdentity                   2/2          10/14
-Microsoft.ServiceBus                       9/21          45/91
-Microsoft.Storage                         13/32         68/153
-Total                                     28/71        138/309
+Microsoft.ServiceBus                      14/21          64/91
+Microsoft.Storage                         14/32         69/153
+Total                                     35/71        159/309
 ```
 
 That score counts control-plane (Resource Manager) operations only; data planes

@@ -99,6 +99,12 @@ impl ArmState {
         self.resources.insert(resource.id.to_ascii_lowercase(), resource);
     }
 
+    /// Removes a resource a handler manages on the service's behalf. Its handler's
+    /// `deleted` hook is not called.
+    pub fn remove(&mut self, id: &str) -> Option<Resource> {
+        self.resources.remove(&id.to_ascii_lowercase())
+    }
+
     /// The resources directly inside the collection `collection_id`, e.g.
     /// `{topic id}/subscriptions`.
     pub fn children<'a>(&'a self, collection_id: &str) -> impl Iterator<Item = &'a Resource> + 'a {
@@ -1077,7 +1083,11 @@ impl ArmRequest<'_> {
 
         if let Some(action) = action {
             let resource = existing.ok_or_else(not_found)?;
-            return ok(handler.action(&ctx, &resource, action, self.body)?);
+            // An action with nothing to return answers with an empty body.
+            return match handler.action(&ctx, &resource, action, self.body)? {
+                Value::Null => Ok(StatusCode::OK.into_response()),
+                body => ok(body),
+            };
         }
 
         match self.method.as_str() {
