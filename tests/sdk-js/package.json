@@ -11,6 +11,7 @@
     "@azure/data-tables": "13.3.2",
     "@azure/event-hubs": "6.0.4",
     "@azure/service-bus": "7.9.5",
+    "@azure/storage-blob": "12.34.0",
     "@azure/storage-queue": "12.32.0"
   }
 }

@@ -148,6 +148,12 @@ enum Route {
     GetBlob,
     HeadBlob,
     DeleteBlob,
+    PutBlock,
+    PutBlockList,
+    GetBlockList,
+    GetMetadata,
+    SetMetadata,
+    SetProperties,
 }
 
 impl Route {
@@ -167,14 +173,17 @@ impl Route {
                 _ => None,
             };
         }
-        if comp.is_some() {
-            return None;
-        }
-        match method {
-            "PUT" => Some(Self::PutBlob),
-            "GET" => Some(Self::GetBlob),
-            "HEAD" => Some(Self::HeadBlob),
-            "DELETE" => Some(Self::DeleteBlob),
+        match (method, comp) {
+            ("PUT", None) => Some(Self::PutBlob),
+            ("GET", None) => Some(Self::GetBlob),
+            ("HEAD", None) => Some(Self::HeadBlob),
+            ("DELETE", None) => Some(Self::DeleteBlob),
+            ("PUT", Some("block")) => Some(Self::PutBlock),
+            ("PUT", Some("blocklist")) => Some(Self::PutBlockList),
+            ("GET", Some("blocklist")) => Some(Self::GetBlockList),
+            ("GET" | "HEAD", Some("metadata")) => Some(Self::GetMetadata),
+            ("PUT", Some("metadata")) => Some(Self::SetMetadata),
+            ("PUT", Some("properties")) => Some(Self::SetProperties),
             _ => None,
         }
     }
@@ -187,8 +196,9 @@ impl Route {
             Self::ContainerProperties => (Level::Container, "r", false),
             Self::DeleteContainer => (Level::Container, "d", false),
             Self::ListBlobs => (Level::Container, "l", true),
-            Self::PutBlob => (Level::Object, "wc", false),
-            Self::GetBlob | Self::HeadBlob => (Level::Object, "r", false),
+            Self::PutBlob | Self::PutBlock | Self::PutBlockList => (Level::Object, "wc", false),
+            Self::SetMetadata | Self::SetProperties => (Level::Object, "w", false),
+            Self::GetBlob | Self::HeadBlob | Self::GetBlockList | Self::GetMetadata => (Level::Object, "r", false),
             Self::DeleteBlob => (Level::Object, "d", false),
         };
         Needed {
@@ -336,9 +346,15 @@ fn check_roles(engine: &Engine, account: &str, oid: &str, container: &str, blob:
         Route::ListContainers | Route::ContainerProperties => vec![Permission::Action(&read)],
         Route::CreateContainer => vec![Permission::Action(&write)],
         Route::DeleteContainer => vec![Permission::Action(&delete)],
-        Route::ListBlobs | Route::GetBlob | Route::HeadBlob => vec![Permission::Data(&blob_read)],
-        Route::PutBlob if is_new() => vec![Permission::Data(&blob_write), Permission::Data(&blob_add)],
-        Route::PutBlob => vec![Permission::Data(&blob_write)],
+        Route::ListBlobs | Route::GetBlob | Route::HeadBlob | Route::GetBlockList | Route::GetMetadata => {
+            vec![Permission::Data(&blob_read)]
+        }
+        Route::PutBlob | Route::PutBlock | Route::PutBlockList if is_new() => {
+            vec![Permission::Data(&blob_write), Permission::Data(&blob_add)]
+        }
+        Route::PutBlob | Route::PutBlock | Route::PutBlockList | Route::SetMetadata | Route::SetProperties => {
+            vec![Permission::Data(&blob_write)]
+        }
         Route::DeleteBlob => vec![Permission::Data(&blob_delete)],
     };
     let account_id = {
@@ -407,7 +423,7 @@ async fn serve(
         Route::ContainerProperties => request.container_properties(&container),
         Route::DeleteContainer => request.delete_container(&container),
         Route::ListBlobs => request.list_blobs(&container),
-        Route::PutBlob => {
+        Route::PutBlob | Route::PutBlock | Route::PutBlockList => {
             let data = read_body(body).await.map_err(|_| {
                 error(
                     StatusCode::PAYLOAD_TOO_LARGE,
@@ -415,11 +431,19 @@ async fn serve(
                     "The request body is too large and exceeds the maximum permissible limit.",
                 )
             })?;
-            request.put_blob(&container, &blob, data)
+            match route {
+                Route::PutBlob => request.put_blob(&container, &blob, data),
+                Route::PutBlock => request.put_block(&container, &blob, data),
+                _ => request.put_block_list(&container, &blob, &data),
+            }
         }
         Route::GetBlob => request.get_blob(&container, &blob, true),
         Route::HeadBlob => request.get_blob(&container, &blob, false),
         Route::DeleteBlob => request.delete_blob(&container, &blob),
+        Route::GetBlockList => request.get_block_list(&container, &blob),
+        Route::GetMetadata => request.get_metadata(&container, &blob),
+        Route::SetMetadata => request.set_metadata(&container, &blob),
+        Route::SetProperties => request.set_properties(&container, &blob),
     }
 }
 
@@ -428,6 +452,45 @@ struct BlobRequest<'a> {
     account: &'a str,
     headers: &'a HeaderMap,
     query: &'a std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum BlockKind {
+    Committed,
+    Uncommitted,
+    Latest,
+}
+
+/// The entries of a Put Block List body, in order:
+/// `<BlockList><Latest>id</Latest><Committed>id</Committed>...</BlockList>`.
+fn parse_block_list(text: &str) -> Option<Vec<(BlockKind, String)>> {
+    let start = text.find("<BlockList>")? + "<BlockList>".len();
+    let end = text.rfind("</BlockList>")?;
+    let mut rest = text.get(start..end)?;
+    let mut out = Vec::new();
+    loop {
+        rest = rest.trim_start();
+        if rest.is_empty() {
+            return Some(out);
+        }
+        let open_end = rest.find('>')?;
+        let tag = rest.strip_prefix('<')?.get(..open_end - 1)?;
+        let kind = match tag {
+            "Committed" => BlockKind::Committed,
+            "Uncommitted" => BlockKind::Uncommitted,
+            "Latest" => BlockKind::Latest,
+            _ => return None,
+        };
+        let close = format!("</{tag}>");
+        let body_end = rest.find(&close)?;
+        let id = rest.get(open_end + 1..body_end)?.trim();
+        out.push((kind, xml_unescape(id)));
+        rest = &rest[body_end + close.len()..];
+    }
+}
+
+fn xml_unescape(text: &str) -> String {
+    text.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
 }
 
 pub(crate) fn is_valid_container_name(name: &str) -> bool {
@@ -510,6 +573,20 @@ impl BlobRequest<'_> {
                 Some((key.to_string(), value.to_str().ok()?.to_string()))
             })
             .collect()
+    }
+
+    /// The standard content headers a write sets (`x-ms-blob-cache-control`, ...),
+    /// under the names a read returns them with.
+    fn content_headers(&self) -> Vec<(&'static str, String)> {
+        [
+            ("cache-control", "x-ms-blob-cache-control"),
+            ("content-encoding", "x-ms-blob-content-encoding"),
+            ("content-language", "x-ms-blob-content-language"),
+            ("content-disposition", "x-ms-blob-content-disposition"),
+        ]
+        .into_iter()
+        .filter_map(|(returned, sent)| Some((returned, self.header(sent)?.to_string())))
+        .collect()
     }
 
     fn create_container(&self, container: &str) -> Result<Response, BlobError> {
@@ -680,9 +757,13 @@ impl BlobRequest<'_> {
             created: existing.map(|b| b.created).unwrap_or(now),
             last_modified: now,
             metadata: self.metadata(),
+            content_headers: self.content_headers(),
+            blocks: Vec::new(),
             replicated_by: Vec::new(),
             replica_of: None,
         };
+        // Put Blob discards any blocks staged for the blob.
+        found.uncommitted.remove(blob);
         found.blobs.insert(blob.to_string(), stored);
         crate::replication::replicate(&mut state, self.account, container, blob);
         Ok(respond(
@@ -695,6 +776,244 @@ impl BlobRequest<'_> {
             ],
             Body::empty(),
         ))
+    }
+
+    /// Put Block: stages a block for a blob, to be committed by Put Block List.
+    fn put_block(&self, container: &str, blob: &str, data: Bytes) -> Result<Response, BlobError> {
+        let id = self.block_id()?;
+        let content_md5 = STANDARD.encode(Md5::digest(&data));
+        if self.header("content-md5").is_some_and(|sent| sent != content_md5) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "Md5Mismatch",
+                "The MD5 value specified in the request did not match with the MD5 value calculated by the server.",
+            ));
+        }
+        let handle = self.engine.state::<StorageState>();
+        let mut state = handle.lock();
+        let account = state.accounts.get_mut(self.account).expect("account checked");
+        let found = account.containers.get_mut(container).ok_or_else(container_not_found)?;
+        // Every block of a blob has an id of the same length.
+        let decoded_len = |id: &str| STANDARD.decode(id).map(|d| d.len()).unwrap_or(0);
+        let length = decoded_len(&id);
+        let staged = found.uncommitted.get(blob).into_iter().flatten().map(|(i, _)| i.as_str());
+        let committed = found.blobs.get(blob).into_iter().flat_map(|b| b.blocks.iter()).map(|(i, _)| i.as_str());
+        if staged.chain(committed).any(|other| decoded_len(other) != length) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "InvalidBlobOrBlock",
+                "The specified blob or block content is invalid.",
+            ));
+        }
+        let blocks = found.uncommitted.entry(blob.to_string()).or_default();
+        blocks.retain(|(existing, _)| *existing != id);
+        blocks.push((id, data));
+        Ok(respond(
+            StatusCode::CREATED,
+            vec![
+                (name("content-md5"), content_md5),
+                (name("x-ms-request-server-encrypted"), "true".into()),
+            ],
+            Body::empty(),
+        ))
+    }
+
+    /// The `blockid` of a Put Block: base64 of at most 64 bytes.
+    fn block_id(&self) -> Result<String, BlobError> {
+        let id = self.query.get("blockid").ok_or_else(|| {
+            error(
+                StatusCode::BAD_REQUEST,
+                "MissingRequiredQueryParameter",
+                "A query parameter that's mandatory for this request is not specified.",
+            )
+        })?;
+        match STANDARD.decode(id) {
+            Ok(decoded) if !decoded.is_empty() && decoded.len() <= 64 => Ok(id.clone()),
+            _ => Err(error(
+                StatusCode::BAD_REQUEST,
+                "InvalidQueryParameterValue",
+                "Value for one of the query parameters specified in the request URI is invalid.",
+            )),
+        }
+    }
+
+    /// Put Block List: commits the listed blocks, in order, as the blob's content.
+    fn put_block_list(&self, container: &str, blob: &str, body: &[u8]) -> Result<Response, BlobError> {
+        let invalid = || error(StatusCode::BAD_REQUEST, "InvalidBlockList", "The specified block list is invalid.");
+        let text = std::str::from_utf8(body).map_err(|_| invalid())?;
+        let wanted = parse_block_list(text).ok_or_else(|| {
+            error(StatusCode::BAD_REQUEST, "InvalidXmlDocument", "XML specified is not syntactically valid.")
+        })?;
+        let handle = self.engine.state::<StorageState>();
+        let mut state = handle.lock();
+        let etag = state.next_etag();
+        let account = state.accounts.get_mut(self.account).expect("account checked");
+        let found = account.containers.get_mut(container).ok_or_else(container_not_found)?;
+        let existing = found.blobs.get(blob);
+        if let Some(protection) = existing.and_then(|b| found.protection(b, SystemTime::now())) {
+            return Err(immutable(protection));
+        }
+        if existing.is_some() && self.header("if-none-match") == Some("*") {
+            return Err(error(StatusCode::CONFLICT, "BlobAlreadyExists", "The specified blob already exists."));
+        }
+        // The committed blocks, as slices of the current content.
+        let mut committed: Vec<(String, Bytes)> = Vec::new();
+        if let Some(current) = existing {
+            let mut offset = 0;
+            for (id, size) in &current.blocks {
+                committed.push((id.clone(), current.data.slice(offset..offset + size)));
+                offset += size;
+            }
+        }
+        let staged = found.uncommitted.get(blob).cloned().unwrap_or_default();
+        let lookup = |list: &[(String, Bytes)], id: &str| list.iter().find(|(i, _)| i == id).map(|(_, d)| d.clone());
+        let mut content = Vec::new();
+        let mut blocks = Vec::new();
+        for (kind, id) in &wanted {
+            let data = match kind {
+                BlockKind::Committed => lookup(&committed, id),
+                BlockKind::Uncommitted => lookup(&staged, id),
+                BlockKind::Latest => lookup(&staged, id).or_else(|| lookup(&committed, id)),
+            }
+            .ok_or_else(invalid)?;
+            content.extend_from_slice(&data);
+            blocks.push((id.clone(), data.len()));
+        }
+        let now = SystemTime::now();
+        let stored = Blob {
+            data: Bytes::from(content),
+            content_type: self.header("x-ms-blob-content-type").unwrap_or("application/octet-stream").to_string(),
+            // Only an MD5 the client states is stored for a blob made from blocks.
+            content_md5: self.header("x-ms-blob-content-md5").unwrap_or("").to_string(),
+            etag: etag.clone(),
+            created: existing.map(|b| b.created).unwrap_or(now),
+            last_modified: now,
+            metadata: self.metadata(),
+            content_headers: self.content_headers(),
+            blocks,
+            replicated_by: Vec::new(),
+            replica_of: None,
+        };
+        found.uncommitted.remove(blob);
+        found.blobs.insert(blob.to_string(), stored);
+        crate::replication::replicate(&mut state, self.account, container, blob);
+        Ok(respond(
+            StatusCode::CREATED,
+            vec![
+                (header::ETAG, etag),
+                (header::LAST_MODIFIED, http_date(now)),
+                // The MD5 of the request: the block list, not the blob.
+                (name("content-md5"), STANDARD.encode(Md5::digest(body))),
+                (name("x-ms-request-server-encrypted"), "true".into()),
+            ],
+            Body::empty(),
+        ))
+    }
+
+    /// Get Block List: the committed blocks, the staged ones, or both.
+    fn get_block_list(&self, container: &str, blob: &str) -> Result<Response, BlobError> {
+        let kind = self.query.get("blocklisttype").map(|v| v.to_ascii_lowercase());
+        let (with_committed, with_uncommitted) = match kind.as_deref() {
+            None | Some("committed") => (true, false),
+            Some("uncommitted") => (false, true),
+            Some("all") => (true, true),
+            Some(_) => {
+                return Err(error(
+                    StatusCode::BAD_REQUEST,
+                    "InvalidQueryParameterValue",
+                    "Value for one of the query parameters specified in the request URI is invalid.",
+                ))
+            }
+        };
+        let handle = self.engine.state::<StorageState>();
+        let state = handle.lock();
+        let found = state.accounts[self.account].containers.get(container).ok_or_else(container_not_found)?;
+        let current = found.blobs.get(blob);
+        let staged = found.uncommitted.get(blob);
+        if current.is_none() && staged.is_none() {
+            return Err(blob_not_found());
+        }
+        let entries = |blocks: Vec<(&str, usize)>| -> String {
+            blocks
+                .iter()
+                .map(|(id, size)| format!("<Block><Name>{}</Name><Size>{size}</Size></Block>", xml_escape(id)))
+                .collect()
+        };
+        let mut xml_body = String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?><BlockList>");
+        if with_committed {
+            let blocks = current.map(|b| b.blocks.iter().map(|(i, s)| (i.as_str(), *s)).collect()).unwrap_or_default();
+            xml_body.push_str(&format!("<CommittedBlocks>{}</CommittedBlocks>", entries(blocks)));
+        }
+        if with_uncommitted {
+            let blocks = staged.map(|b| b.iter().map(|(i, d)| (i.as_str(), d.len())).collect()).unwrap_or_default();
+            xml_body.push_str(&format!("<UncommittedBlocks>{}</UncommittedBlocks>", entries(blocks)));
+        }
+        xml_body.push_str("</BlockList>");
+        let mut headers = vec![(header::CONTENT_TYPE, "application/xml".to_string())];
+        if let Some(current) = current {
+            headers.push((header::ETAG, current.etag.clone()));
+            headers.push((header::LAST_MODIFIED, http_date(current.last_modified)));
+            headers.push((name("x-ms-blob-content-length"), current.data.len().to_string()));
+        }
+        Ok(respond(StatusCode::OK, headers, xml_body))
+    }
+
+    fn get_metadata(&self, container: &str, blob: &str) -> Result<Response, BlobError> {
+        let found = self.find_blob(container, blob)?;
+        let mut headers = vec![
+            (header::ETAG, found.etag.clone()),
+            (header::LAST_MODIFIED, http_date(found.last_modified)),
+        ];
+        for (key, value) in &found.metadata {
+            if let Ok(key) = HeaderName::try_from(format!("x-ms-meta-{key}")) {
+                headers.push((key, value.clone()));
+            }
+        }
+        Ok(respond(StatusCode::OK, headers, Body::empty()))
+    }
+
+    /// Set Blob Metadata and Set Blob Properties: change a blob without
+    /// rewriting it. Properties not given are cleared, as in Azure.
+    fn update_blob(&self, container: &str, blob: &str, change: impl FnOnce(&mut Blob)) -> Result<Response, BlobError> {
+        let handle = self.engine.state::<StorageState>();
+        let mut state = handle.lock();
+        let etag = state.next_etag();
+        let account = state.accounts.get_mut(self.account).expect("account checked");
+        let found = account.containers.get_mut(container).ok_or_else(container_not_found)?;
+        let existing = found.blobs.get(blob).ok_or_else(blob_not_found)?;
+        if let Some(protection) = found.protection(existing, SystemTime::now()) {
+            return Err(immutable(protection));
+        }
+        let target = found.blobs.get_mut(blob).expect("checked above");
+        change(target);
+        let now = SystemTime::now();
+        target.etag = etag.clone();
+        target.last_modified = now;
+        Ok(respond(
+            StatusCode::OK,
+            vec![
+                (header::ETAG, etag),
+                (header::LAST_MODIFIED, http_date(now)),
+                (name("x-ms-request-server-encrypted"), "true".into()),
+            ],
+            Body::empty(),
+        ))
+    }
+
+    fn set_metadata(&self, container: &str, blob: &str) -> Result<Response, BlobError> {
+        let metadata = self.metadata();
+        self.update_blob(container, blob, |b| b.metadata = metadata)
+    }
+
+    fn set_properties(&self, container: &str, blob: &str) -> Result<Response, BlobError> {
+        let content_type = self.header("x-ms-blob-content-type").unwrap_or("application/octet-stream").to_string();
+        let content_md5 = self.header("x-ms-blob-content-md5").unwrap_or("").to_string();
+        let content_headers = self.content_headers();
+        self.update_blob(container, blob, |b| {
+            b.content_type = content_type;
+            b.content_md5 = content_md5;
+            b.content_headers = content_headers;
+        })
     }
 
     fn find_blob(&self, container: &str, blob: &str) -> Result<Blob, BlobError> {
@@ -744,6 +1063,9 @@ impl BlobRequest<'_> {
             headers.push((name("x-ms-or-policy-id"), policy.clone()));
         }
         lease_headers(&mut headers);
+        for (key, value) in &found.content_headers {
+            headers.push((name(key), value.clone()));
+        }
         for (key, value) in &found.metadata {
             if let Ok(key) = HeaderName::try_from(format!("x-ms-meta-{key}")) {
                 headers.push((key, value.clone()));
@@ -753,11 +1075,16 @@ impl BlobRequest<'_> {
             Some((start, end)) => {
                 headers.push((header::CONTENT_RANGE, format!("bytes {start}-{end}/{len}")));
                 // A ranged read reports the whole blob's MD5 under its own header.
-                headers.push((name("x-ms-blob-content-md5"), found.content_md5.clone()));
+                if !found.content_md5.is_empty() {
+                    headers.push((name("x-ms-blob-content-md5"), found.content_md5.clone()));
+                }
                 (StatusCode::PARTIAL_CONTENT, found.data.slice(start..=end))
             }
             None => {
-                headers.push((name("content-md5"), found.content_md5.clone()));
+                // A blob committed from blocks has an MD5 only if the client gave one.
+                if !found.content_md5.is_empty() {
+                    headers.push((name("content-md5"), found.content_md5.clone()));
+                }
                 (StatusCode::OK, found.data.clone())
             }
         };

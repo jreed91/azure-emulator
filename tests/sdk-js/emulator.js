@@ -6,6 +6,11 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+// Requests to the emulator stay local even where an HTTP proxy is configured.
+for (const name of ["NO_PROXY", "no_proxy"]) {
+  process.env[name] = [process.env[name], "localhost", "127.0.0.1", ".localhost"].filter(Boolean).join(",");
+}
+
 const TENANT = "11111111-1111-1111-1111-111111111111";
 const SUBSCRIPTION = "00000000-0000-0000-0000-000000000000";
 const binary = process.env.AZURE_EMULATOR_BIN ?? resolve(import.meta.dirname, "../../target/debug/azure-emulator");

@@ -55,6 +55,9 @@ pub(crate) struct Container {
     pub immutability: Option<ImmutabilityPolicy>,
     pub lease: Option<Lease>,
     pub blobs: BTreeMap<String, Blob>,
+    /// Blocks staged with Put Block and not yet committed, by blob name, in the
+    /// order they were staged; a block staged again under the same id replaces it.
+    pub uncommitted: BTreeMap<String, Vec<(String, Bytes)>>,
 }
 
 pub(crate) struct LegalHoldTag {
@@ -142,6 +145,7 @@ impl Container {
             immutability: None,
             lease: None,
             blobs: BTreeMap::new(),
+            uncommitted: BTreeMap::new(),
         }
     }
 
@@ -179,6 +183,12 @@ pub(crate) struct Blob {
     pub created: SystemTime,
     pub last_modified: SystemTime,
     pub metadata: Vec<(String, String)>,
+    /// `Cache-Control`, `Content-Encoding`, `Content-Language` and
+    /// `Content-Disposition`, as set on upload or with Set Blob Properties.
+    pub content_headers: Vec<(&'static str, String)>,
+    /// The committed blocks, in order, with their sizes: the blob's content is
+    /// their concatenation. Empty for a blob written with Put Blob.
+    pub blocks: Vec<(String, usize)>,
     /// On a source blob: the `{policy}_{rule}` pairs it has been replicated by.
     pub replicated_by: Vec<String>,
     /// On a replica: the policy that wrote it.
