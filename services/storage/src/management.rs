@@ -176,7 +176,7 @@ impl ResourceTypeHandler for Queues {
         "Microsoft.Storage/storageAccounts/queueServices/queues"
     }
 
-    fn put(&self, _ctx: &ArmContext<'_>, request: &PutRequest<'_>) -> Result<Value, ArmError> {
+    fn put(&self, ctx: &ArmContext<'_>, request: &PutRequest<'_>) -> Result<Value, ArmError> {
         // Queue names follow the same rule as container names.
         if !is_valid_container_name(request.name) {
             return Err(invalid(format!(
@@ -184,11 +184,42 @@ impl ResourceTypeHandler for Queues {
                 request.name
             )));
         }
-        Ok(overlay(request, json!({"metadata": {}, "approximateMessageCount": 0}), &["metadata"]))
+        let properties = overlay(request, json!({"metadata": {}, "approximateMessageCount": 0}), &["metadata"]);
+        // The queue the Queue data plane serves, with this metadata.
+        let account = request.id.split('/').skip_while(|p| !p.eq_ignore_ascii_case("storageAccounts")).nth(1).unwrap_or_default().to_string();
+        let metadata: std::collections::BTreeMap<String, String> = properties
+            .get("metadata")
+            .and_then(Value::as_object)
+            .map(|m| m.iter().filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string()))).collect())
+            .unwrap_or_default();
+        let state = ctx.engine.state::<StorageState>();
+        let mut state = state.lock();
+        if let Some(account) = state.accounts.get_mut(&account) {
+            account.queues.entry(request.name.to_string()).or_default().metadata = metadata;
+        }
+        Ok(properties)
     }
 
     fn patch(&self, ctx: &ArmContext<'_>, existing: &Resource, body: &Value) -> Result<Value, ArmError> {
         patch_as_put(self, ctx, existing, body)
+    }
+
+    fn view(&self, ctx: &ArmContext<'_>, resource: &mut Resource) {
+        let account = resource.id.split('/').skip_while(|p| !p.eq_ignore_ascii_case("storageAccounts")).nth(1).unwrap_or_default().to_string();
+        let state = ctx.engine.state::<StorageState>();
+        let mut state = state.lock();
+        if let Some(queue) = state.accounts.get_mut(&account).and_then(|a| a.queues.get_mut(&resource.name)) {
+            resource.properties["approximateMessageCount"] = json!(queue.count());
+        }
+    }
+
+    fn deleted(&self, ctx: &ArmContext<'_>, resource: &Resource) {
+        let account = resource.id.split('/').skip_while(|p| !p.eq_ignore_ascii_case("storageAccounts")).nth(1).unwrap_or_default().to_string();
+        let state = ctx.engine.state::<StorageState>();
+        let mut state = state.lock();
+        if let Some(account) = state.accounts.get_mut(&account) {
+            account.queues.remove(&resource.name);
+        }
     }
 }
 

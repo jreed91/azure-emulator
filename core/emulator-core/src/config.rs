@@ -72,6 +72,15 @@ impl Config {
         format!(".blob.core.{}", self.dns_suffix)
     }
 
+    /// `.queue.core.<suffix>` — what a queue service hostname ends with.
+    pub fn queue_host_suffix(&self) -> String {
+        format!(".queue.core.{}", self.dns_suffix)
+    }
+
+    pub fn queue_endpoint(&self, account: &str) -> String {
+        format!("{}://{}{}{}/", self.scheme, account, self.queue_host_suffix(), self.port_suffix())
+    }
+
     /// `.vault.<suffix>` — what a vault hostname ends with.
     pub fn vault_host_suffix(&self) -> String {
         format!(".vault.{}", self.dns_suffix)
