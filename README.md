@@ -17,6 +17,7 @@ workloads or to test security.
 |---|---|
 | Entra ID (login) | OpenID Connect discovery, instance discovery, signing keys, client-credentials tokens (v1 and v2 endpoints), managed-identity (IMDS) tokens |
 | Resource Manager | Bearer-token verification, `api-version` checks, subscriptions, tenants, resource groups (create, get, exists, tag, list, delete with cascade), providers, generic resource listing, cloud metadata document |
+| Template deployments | ARM templates and compiled Bicep at resource-group and subscription scope: create, get, list, delete, `validate`, `whatIf`, `exportTemplate`, deployment operations, `calculateTemplateHash`. Parameters (types, allowed values, bounds, defaults, user-defined types), variables and variable loops, resource, property and output `copy` loops, conditions, child resources, `dependsOn` ordering, nested deployments (Bicep modules, inner and outer scope, other resource groups), `existing` resources, symbolic names (`languageVersion` 2.0), user-defined functions, lambdas, outputs, and complete mode. About 100 template functions plus every `list*` action, with `uniqueString` and `guid` giving the values Azure gives. See [Template deployments](#template-deployments) |
 | `Microsoft.Storage` | Storage accounts with `listKeys`, `regenerateKey` and `checkNameAvailability`; blob, file, queue and table service properties; blob containers (the same store as the data plane); queues, tables and file shares (Resource Manager only); encryption scopes; lifecycle-management and inventory policies; local users; `listAccountSas` and `listServiceSas`; container legal holds, immutability policies (lock, extend, `If-Match`) and leases, enforced on the Blob data plane; file share leases; object replication policies, with blobs copied between accounts on write |
 | Blob service | Containers: create, delete, properties, list. Block blobs: upload (single request), download with ranges, properties, metadata, delete, list with prefix, delimiter and paging. Authorization by Entra token, verified Shared Key, or shared access signature (account SAS and container or blob service SAS signed with an account key) |
 | `Microsoft.KeyVault` | Vaults: create, get, update, delete, list, `checkNameAvailability`; soft delete with list, get, recover and purge of deleted vaults; access-policy updates; secrets through Resource Manager (the same store as the data plane); managed HSMs with soft delete, regions and name availability (no HSM data plane); keys through Resource Manager in vaults and managed HSMs (metadata only; no keys data plane yet) |
@@ -51,7 +52,7 @@ such as Blob and Key Vault secrets are not in it. Add `--operations` to list eve
 operation with its status.
 
 `tests/sdk/` is a pytest suite that exercises the implemented control planes,
-Blob and secrets through the official Azure SDKs for Python, and runs in CI. No other SDK, the Azure CLI or Terraform has been
+template deployments, Blob and secrets through the official Azure SDKs for Python, and runs in CI. No other SDK, the Azure CLI or Terraform has been
 tried yet.
 
 ### Not implemented, and why
@@ -85,6 +86,13 @@ tried yet.
   lacks (rules, sessions). Plain AMQP only (no TLS, no WebSockets). A first
   delivery reports `delivery_count` as unset rather than 0. Tier restrictions
   (such as topics on a Basic namespace) are not enforced.
+- Template deployments run to completion before the first response; there is
+  no `Running` state and `cancel` always answers `409`. A `templateLink`,
+  `parametersLink` or Key Vault reference in parameters answers `501`, as do
+  management-group and tenant scopes and the `managementGroup()` and
+  `providers()` functions. Expressions are evaluated when a resource is
+  deployed, so a mistake inside a resource's `properties` fails the deployment
+  instead of failing validation. `pickZones` returns no zones.
 - Storage queues, tables and file shares have no data plane. Version-level
   immutability (`migrate`), and the data-plane lease operations themselves, are
   not implemented; a lease taken through Resource Manager is honoured by both.
@@ -201,6 +209,31 @@ subscription resources.
 The broker is built on `fe2o3-amqp`, vendored with small patches listed in
 `vendor/fe2o3-amqp/PATCHED.md`.
 
+### Template deployments
+
+ARM templates, and Bicep compiled with `bicep build`, deploy through the usual
+SDK and CLI calls:
+
+```python
+from azure.mgmt.resource.deployments import DeploymentsMgmtClient
+
+deployments = DeploymentsMgmtClient(credential, SUBSCRIPTION, base_url=BASE, credential_scopes=[BASE + "/.default"])
+result = deployments.deployments.begin_create_or_update(
+    "demo", "main",
+    {"properties": {"mode": "Incremental", "template": template, "parameters": {"prefix": {"value": "app"}}}},
+).result()
+print(result.properties.outputs)
+```
+
+The engine sends each resource through the same Resource Manager routing as a
+client request. Anything the emulator implements can be deployed, and a type it
+does not implement fails the deployment with that resource's own error.
+`environment().suffixes` name the emulator's hostnames, so templates that build
+endpoint URLs from them reach the emulator.
+
+`core/router/tests/templates/` holds Bicep files and the templates the Bicep CLI
+compiled from them; the Rust and SDK suites deploy both.
+
 ### Embedded mode (Rust tests)
 
 ```rust
@@ -216,6 +249,7 @@ Each `Emulator` is fully isolated. `core/router/tests/` shows how to drive it.
 .
 ├── core/
 │   ├── emulator-core/   # engine (state), config, token signing, the ARM layer
+│   │                    #   and its template deployment engine (src/arm/deployments/)
 │   └── router/          # the azure-emulator binary and embedded facade; tests
 ├── services/
 │   ├── entra/           # token service

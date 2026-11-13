@@ -1,0 +1,124 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "languageVersion": "2.0",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.30.23.60470",
+      "templateHash": "8281272719373152945"
+    }
+  },
+  "definitions": {
+    "tier": {
+      "type": "string",
+      "allowedValues": [
+        "Basic",
+        "Standard"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "namespace": "__bicep",
+      "members": {
+        "namespaceName": {
+          "parameters": [
+            {
+              "type": "string",
+              "name": "prefix"
+            }
+          ],
+          "output": {
+            "type": "string",
+            "value": "[format('{0}-bus-{1}', parameters('prefix'), uniqueString(resourceGroup().id))]"
+          }
+        }
+      }
+    }
+  ],
+  "parameters": {
+    "prefix": {
+      "type": "string"
+    },
+    "sku": {
+      "$ref": "#/definitions/tier",
+      "defaultValue": "Standard"
+    },
+    "queues": {
+      "type": "array",
+      "defaultValue": [
+        "orders",
+        "invoices"
+      ]
+    },
+    "accountName": {
+      "type": "string"
+    }
+  },
+  "resources": {
+    "account": {
+      "existing": true,
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2023-01-01",
+      "name": "[parameters('accountName')]"
+    },
+    "bus": {
+      "type": "Microsoft.ServiceBus/namespaces",
+      "apiVersion": "2021-11-01",
+      "name": "[__bicep.namespaceName(parameters('prefix'))]",
+      "location": "[resourceGroup().location]",
+      "sku": {
+        "name": "[parameters('sku')]",
+        "tier": "[parameters('sku')]"
+      },
+      "tags": {
+        "storage": "[resourceId('Microsoft.Storage/storageAccounts', parameters('accountName'))]"
+      },
+      "dependsOn": [
+        "account"
+      ]
+    },
+    "queue": {
+      "copy": {
+        "name": "queue",
+        "count": "[length(parameters('queues'))]"
+      },
+      "type": "Microsoft.ServiceBus/namespaces/queues",
+      "apiVersion": "2021-11-01",
+      "name": "[format('{0}/{1}', __bicep.namespaceName(parameters('prefix')), parameters('queues')[copyIndex()])]",
+      "properties": {
+        "maxDeliveryCount": "[add(5, copyIndex())]",
+        "lockDuration": "PT1M"
+      },
+      "dependsOn": [
+        "bus"
+      ]
+    }
+  },
+  "outputs": {
+    "endpoint": {
+      "type": "string",
+      "value": "[reference('bus').serviceBusEndpoint]"
+    },
+    "blob": {
+      "type": "string",
+      "value": "[reference('account').primaryEndpoints.blob]"
+    },
+    "queueNames": {
+      "type": "array",
+      "copy": {
+        "count": "[length(range(0, length(parameters('queues'))))]",
+        "input": "[parameters('queues')[range(0, length(parameters('queues')))[copyIndex()]]]"
+      }
+    },
+    "upper": {
+      "type": "array",
+      "value": "[map(parameters('queues'), lambda('q', toUpper(lambdaVariables('q'))))]"
+    },
+    "picked": {
+      "type": "array",
+      "value": "[filter(parameters('queues'), lambda('q', startsWith(lambdaVariables('q'), 'o')))]"
+    }
+  }
+}

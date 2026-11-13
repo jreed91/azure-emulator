@@ -5,6 +5,8 @@ mod support;
 
 #[path = "all/arm.rs"]
 mod arm;
+#[path = "all/deployments.rs"]
+mod deployments;
 #[path = "all/entra.rs"]
 mod entra;
 #[path = "all/scaffold.rs"]
