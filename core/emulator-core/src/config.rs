@@ -81,6 +81,15 @@ impl Config {
         format!("{}://{}{}{}/", self.scheme, account, self.queue_host_suffix(), self.port_suffix())
     }
 
+    /// `.file.core.<suffix>` — what a file service hostname ends with.
+    pub fn file_host_suffix(&self) -> String {
+        format!(".file.core.{}", self.dns_suffix)
+    }
+
+    pub fn file_endpoint(&self, account: &str) -> String {
+        format!("{}://{}{}{}/", self.scheme, account, self.file_host_suffix(), self.port_suffix())
+    }
+
     /// `.table.core.<suffix>` — what a table service hostname ends with.
     pub fn table_host_suffix(&self) -> String {
         format!(".table.core.{}", self.dns_suffix)

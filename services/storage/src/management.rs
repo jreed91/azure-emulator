@@ -277,7 +277,7 @@ impl ResourceTypeHandler for FileShares {
         "Microsoft.Storage/storageAccounts/fileServices/shares"
     }
 
-    fn put(&self, _ctx: &ArmContext<'_>, request: &PutRequest<'_>) -> Result<Value, ArmError> {
+    fn put(&self, ctx: &ArmContext<'_>, request: &PutRequest<'_>) -> Result<Value, ArmError> {
         if !is_valid_container_name(request.name) {
             return Err(invalid(format!(
                 "The share name '{}' is invalid. It must be 3 to 63 characters of lowercase letters, numbers and single hyphens, and start and end with a letter or number.",
@@ -313,6 +313,16 @@ impl ResourceTypeHandler for FileShares {
             properties["accessTierChangeTime"] = json!(now);
         }
         properties["lastModifiedTime"] = json!(now);
+        // The share on the Files data plane: made with the resource, and
+        // given its quota.
+        let quota = properties.get("shareQuota").and_then(Value::as_u64).unwrap_or(5120);
+        let account = request.id.split('/').skip_while(|p| !p.eq_ignore_ascii_case("storageAccounts")).nth(1).unwrap_or_default().to_string();
+        let state = ctx.engine.state::<StorageState>();
+        let mut state = state.lock();
+        let etag = state.next_etag();
+        if let Some(account) = state.accounts.get_mut(&account) {
+            account.shares.entry(request.name.to_string()).or_insert_with(|| crate::files::Share::new(quota, etag)).quota = quota;
+        }
         Ok(properties)
     }
 
@@ -371,7 +381,13 @@ impl ResourceTypeHandler for FileShares {
     }
 
     fn deleted(&self, ctx: &ArmContext<'_>, resource: &Resource) {
-        ctx.engine.state::<StorageState>().lock().share_leases.remove(&resource.id.to_ascii_lowercase());
+        let state = ctx.engine.state::<StorageState>();
+        let mut state = state.lock();
+        state.share_leases.remove(&resource.id.to_ascii_lowercase());
+        let account = resource.id.split('/').skip_while(|p| !p.eq_ignore_ascii_case("storageAccounts")).nth(1).unwrap_or_default().to_string();
+        if let Some(account) = state.accounts.get_mut(&account) {
+            account.shares.remove(&resource.name);
+        }
     }
 }
 
