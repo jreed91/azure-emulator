@@ -150,6 +150,13 @@ def deployments(emulator, credential):
 
 
 @pytest.fixture(scope="session")
+def authorization(emulator, credential):
+    from azure.mgmt.authorization import AuthorizationManagementClient
+
+    return AuthorizationManagementClient(credential, SUBSCRIPTION, **emulator.arm)
+
+
+@pytest.fixture(scope="session")
 def storage(emulator, credential):
     from azure.mgmt.storage import StorageManagementClient
 

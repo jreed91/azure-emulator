@@ -276,12 +276,24 @@ async fn session_loop(engine: Arc<Engine>, context: Arc<Context>, mut session: L
         }
         let acceptor = acceptor.build();
         let settled = attach.snd_settle_mode == SenderSettleMode::Settled;
+        // A client's link for a node's replies gets its route now, before the
+        // attach is answered: a client may send its request the moment the
+        // attach is, and a reply with no route yet would be lost.
+        let reply_queue = (attach.role == fe2o3_amqp_types::definitions::Role::Receiver)
+            .then(|| source_address(&attach).map(|a| a.to_ascii_lowercase()))
+            .flatten()
+            .filter(|address| address == "$cbs" || address.ends_with("/$management"))
+            .map(|address| {
+                let (route, queue) = mpsc::unbounded_channel();
+                context.replies.lock().unwrap_or_else(|e| e.into_inner()).insert(address, route);
+                queue
+            });
         match acceptor.accept_incoming_attach(attach, &mut session).await {
             Ok(LinkEndpoint::Receiver(link)) => {
                 tokio::spawn(incoming(engine.clone(), context.clone(), link));
             }
             Ok(LinkEndpoint::Sender(link)) => {
-                tokio::spawn(outgoing(engine.clone(), context.clone(), link, settled, grant));
+                tokio::spawn(outgoing(engine.clone(), context.clone(), link, settled, grant, reply_queue));
             }
             Err(_) => {
                 if let SessionGrant::Held { id, owner, entity } = grant {
@@ -447,11 +459,18 @@ async fn management_requests(engine: Arc<Engine>, context: Arc<Context>, mut lin
 
 /// A link on which the client receives: replies from a node, or messages from
 /// an entity.
-async fn outgoing(engine: Arc<Engine>, context: Arc<Context>, link: Sender, remove: bool, grant: SessionGrant) {
+async fn outgoing(
+    engine: Arc<Engine>,
+    context: Arc<Context>,
+    link: Sender,
+    remove: bool,
+    grant: SessionGrant,
+    reply_queue: Option<mpsc::UnboundedReceiver<AmqpMessage>>,
+) {
     let address = link.source().as_ref().and_then(|s| s.address.clone()).unwrap_or_default();
     let lower = address.to_ascii_lowercase();
-    if lower == "$cbs" || lower.ends_with("/$management") {
-        return replies(context, link, lower).await;
+    if let Some(queue) = reply_queue {
+        return replies(context, link, lower, queue).await;
     }
     let Some((namespace, path)) = context.entity_address(&address) else {
         let _ = link.close_with_error(error("amqp:invalid-field", format!("'{address}' is not an entity address."))).await;
@@ -490,9 +509,7 @@ async fn outgoing(engine: Arc<Engine>, context: Arc<Context>, link: Sender, remo
 }
 
 /// Sends a node's replies to the client's receiver link for it.
-async fn replies(context: Arc<Context>, mut link: Sender, address: String) {
-    let (route, mut queue) = mpsc::unbounded_channel();
-    context.replies.lock().unwrap_or_else(|e| e.into_inner()).insert(address.clone(), route);
+async fn replies(context: Arc<Context>, mut link: Sender, address: String, mut queue: mpsc::UnboundedReceiver<AmqpMessage>) {
     loop {
         tokio::select! {
             message = queue.recv() => {

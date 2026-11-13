@@ -200,7 +200,7 @@ fn steps(file: &Value, default_subscription: &str) -> Result<Vec<Step>, String> 
 /// Provisions what `file` describes. Returns one line per request made.
 pub async fn provision(emulator: &Emulator, file: &Value) -> Result<Vec<String>, String> {
     let config = emulator.config();
-    let token = emulator_core::auth::issue_token(config, "https://management.azure.com/", "azure-emulator-config");
+    let token = emulator_core::auth::issue_token(config, "https://management.azure.com/", emulator_core::auth::PROVISIONING_CLIENT);
     let host = format!("{}:{}", config.host, config.port);
     let mut done = Vec::new();
     for step in steps(file, &config.subscription_id)? {
