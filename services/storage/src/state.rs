@@ -209,6 +209,40 @@ pub(crate) struct Blob {
     pub lease: Option<Lease>,
     /// The last copy that wrote this blob, if a Copy Blob did.
     pub copy: Option<CopyInfo>,
+    /// Block, append or page blob, with what only the last two have.
+    #[serde(default)]
+    pub kind: Kind,
+}
+
+/// A blob's type, with what only append and page blobs have.
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Kind {
+    pub blob_type: BlobType,
+    /// Append blobs: the blocks appended, and whether the blob is sealed.
+    pub append_blocks: u32,
+    pub sealed: bool,
+    /// Page blobs: the sequence number, and the 512-byte pages written
+    /// (by index), which Get Page Ranges reports.
+    pub sequence_number: i64,
+    pub pages: std::collections::BTreeSet<u64>,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) enum BlobType {
+    #[default]
+    Block,
+    Append,
+    Page,
+}
+
+impl BlobType {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Block => "BlockBlob",
+            Self::Append => "AppendBlob",
+            Self::Page => "PageBlob",
+        }
+    }
 }
 
 /// What Get Blob Properties reports about the copy that wrote a blob.
