@@ -54,6 +54,18 @@ operation with its status.
 Blob and secrets through the official Azure SDKs for Python, and runs in CI. No other SDK, the Azure CLI or Terraform has been
 tried yet.
 
+### Not implemented, and why
+
+`azure-emulator coverage --operations` lists every operation still answering
+`501`. Each falls into one of these groups; none is left for lack of time.
+
+| Group | Operations | Why |
+|---|---|---|
+| Fixed service catalogues | `Operations_List` (all four providers), Storage `Skus_List`, `Usages_List`, `Usages_ListByLocation`, `FileServices_ListServiceUsages` / `GetServiceUsage`; Service Bus `PremiumMessagingRegions_List`, `Regions_ListBySku`, `MessagingPlan_Get` / `CreateOrUpdate` | The answer is data about Azure itself (SKUs, regions, quotas, limits, the operation catalogue) that the specification does not contain. Any answer would be invented. |
+| Infrastructure the emulator does not have | Storage `Failover`, `HierarchicalNamespaceMigration`, `AbortHierarchicalNamespaceMigration`, `CustomerInitiatedMigration` / `GetCustomerInitiatedMigration`, `RestoreBlobRanges`, `FileShares_Restore`, `BlobContainers_ObjectLevelWorm`, `DeletedAccounts_List` / `Get`; Service Bus `Namespaces_Failover`, `Namespaces_Migrate`, `MigrationConfigs_CompleteMigration` | Regions to fail over between, migrations of storage layout or DNS names, blob version history, and recovery of deleted accounts and shares. Each needs a model the emulator does not have yet. |
+| Other resource providers | Storage `StorageTaskAssignments_*` and their reports (Microsoft.StorageActions), the three `TestExistingConnection` / `TestProposedConnection` actions (external data sources) | They depend on services outside these four providers. |
+| Not yet built | `UserAssignedIdentities_RevokeTokens`, `ContextCaches_CheckNameAvailability` | Revocation needs per-instance token revocation in the auth layer; context cache name availability needs the names' scope of uniqueness, which the specification does not state. |
+
 ### Known gaps
 
 - Every other Azure service and resource type.
