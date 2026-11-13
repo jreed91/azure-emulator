@@ -9,15 +9,14 @@
 //! plane and security-domain activation are not.
 //!
 //! Keys are created and read through Resource Manager, in vaults and managed
-//! HSMs, and through the keys data plane in vaults (`key_data`), with real
-//! key material for the cryptographic operations.
+//! HSMs, and used through the vault's keys data plane, with real key material.
 //!
-//! Not implemented yet: certificates, and the managed HSM data plane.
-//! Purge protection is stored but does not block a purge.
+//! Not implemented yet: certificates, and the managed HSM data plane. Purge
+//! protection is stored but does not block a purge.
 
 mod crypto;
-mod key_data;
 mod keys;
+mod keys_data;
 mod managed_hsm;
 mod management;
 pub mod scaffold;

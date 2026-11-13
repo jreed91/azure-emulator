@@ -2,8 +2,8 @@
 //! key does not exist), get, list, and their versions.
 //!
 //! Resource Manager only ever shows a key's metadata: its type, size or curve,
-//! permitted operations, attributes and URIs. The key material it generates is
-//! used by the keys data plane, which shares this store (see `key_data`).
+//! permitted operations, attributes and URIs. Every version has real key
+//! material, which the keys data plane (`keys_data`) uses.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -14,7 +14,6 @@ use emulator_core::ArmError;
 use http::StatusCode;
 use serde_json::{json, Value};
 
-use crate::crypto::{Curve, Material};
 use crate::KeyVaultState;
 
 /// Keys by lowercased name.
@@ -42,7 +41,15 @@ pub(crate) struct KeyVersion {
     pub(crate) release_policy: Option<Value>,
     pub(crate) created: i64,
     pub(crate) updated: i64,
-    pub(crate) material: Material,
+    /// `None` only for symmetric (`oct-HSM`) keys in managed HSMs, which have no
+    /// data plane here.
+    pub(crate) material: Option<crate::crypto::Material>,
+}
+
+/// A soft-deleted key.
+pub(crate) struct DeletedKey {
+    pub(crate) key: Key,
+    pub(crate) deleted_date: i64,
 }
 
 pub(crate) fn register(registry: &mut ArmRegistry) {
@@ -73,7 +80,7 @@ fn invalid(message: impl Into<String>) -> ArmError {
     ArmError::bad_request("BadRequest", message)
 }
 
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
@@ -266,10 +273,9 @@ fn create(ctx: &ArmContext<'_>, request: &OperationRequest<'_>, holder: Holder) 
             attributes.insert(member.into(), value.clone());
         }
     }
-    let material = match (key_size, curve.as_deref().and_then(Curve::from_name)) {
-        (_, Some(curve)) => Material::new_ec(curve),
-        (Some(bits), None) if kty.starts_with("RSA") => Material::new_rsa(bits as usize, None).map_err(invalid)?,
-        (bits, None) => Material::new_oct(bits.unwrap_or(256) as usize),
+    let material = match kty.as_str() {
+        "oct-HSM" => None,
+        _ => Some(crate::crypto::Material::generate(&kty, key_size, curve.as_deref(), None).map_err(invalid)?),
     };
     let created = now();
     let version = KeyVersion {
@@ -278,13 +284,13 @@ fn create(ctx: &ArmContext<'_>, request: &OperationRequest<'_>, holder: Holder) 
         key_size,
         curve,
         ops,
+        material,
+        updated: created,
         attributes,
         tags: request.body.get("tags").filter(|t| !t.is_null()).cloned(),
         rotation_policy: given.get("rotationPolicy").filter(|v| !v.is_null()).cloned(),
         release_policy: given.get("release_policy").filter(|v| !v.is_null()).cloned(),
         created,
-        updated: created,
-        material,
     };
     let body = with_keys(ctx, &resource, holder, |store| {
         let key = store.entry(name.to_ascii_lowercase()).or_insert_with(|| Key { name: name.to_string(), versions: Vec::new() });
