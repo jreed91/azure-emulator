@@ -8,6 +8,7 @@ from azure.core.credentials import AzureNamedKeyCredential
 from azure.cosmos import CosmosClient
 from azure.data.tables import TableClient
 from azure.identity import ClientSecretCredential
+from azure.keyvault.certificates import CertificateClient, CertificatePolicy
 from azure.keyvault.keys import KeyClient
 from azure.keyvault.keys.crypto import CryptographyClient, SignatureAlgorithm
 from azure.keyvault.secrets import SecretClient
@@ -65,6 +66,7 @@ def test_state_survives_a_restart(emulator, tmp_path):
         SecretClient(vault.properties.vault_uri, credential).set_secret("db", "p@ss")
         signing = KeyClient(vault.properties.vault_uri, credential).create_ec_key("signer")
         signature = CryptographyClient(signing.id, credential).sign(SignatureAlgorithm.es256, digest).signature
+        certificate = CertificateClient(vault.properties.vault_uri, credential).begin_create_certificate("tls", CertificatePolicy.get_default()).result()
 
         cosmos = make(CosmosDBManagementClient)
         cosmos.database_accounts.begin_create_or_update(
@@ -103,6 +105,9 @@ def test_state_survives_a_restart(emulator, tmp_path):
         crypto = CryptographyClient(restored.id, credential)
         assert crypto.verify(SignatureAlgorithm.es256, digest, signature).is_valid
         assert len(crypto.sign(SignatureAlgorithm.es256, digest).signature) == 64
+        kept = CertificateClient(vault.properties.vault_uri, credential).get_certificate("tls")
+        assert (kept.cer, kept.properties.version) == (certificate.cer, certificate.properties.version)
+        assert SecretClient(vault.properties.vault_uri, credential).get_secret("tls").properties.content_type == "application/x-pkcs12"
 
         connection = make(CosmosDBManagementClient).database_accounts.list_connection_strings(group, cosmos_name).connection_strings[0].connection_string
         with CosmosClient.from_connection_string(connection, connection_verify=second.ca) as documents:

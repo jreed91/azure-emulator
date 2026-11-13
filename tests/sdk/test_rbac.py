@@ -17,6 +17,7 @@ ROLES = {
     "Azure Service Bus Data Sender": "69a216fc-b8fb-44d8-bc22-1f3c2cd27a39",
     "Key Vault Crypto Officer": "14b46e9e-c2b7-41b4-b07b-48a6ebf60603",
     "Key Vault Crypto User": "12338af0-0e69-4776-bea7-57ae8d297424",
+    "Key Vault Certificates Officer": "a4417e6f-fecd-4de8-b567-7b0420556985",
 }
 
 
@@ -148,6 +149,44 @@ def test_key_vault_with_access_policies(enforced):
     with pytest.raises(HttpResponseError) as error:
         worker.set_secret("token", "mine")
     assert "does not have secrets set permission" in str(error.value)
+
+
+def test_key_vault_certificates_with_roles_and_policies(enforced):
+    from azure.keyvault.certificates import CertificateClient, CertificatePolicy
+
+    keyvault = enforced.client("azure.mgmt.keyvault", "KeyVaultManagementClient")
+    sku = {"family": "A", "name": "standard"}
+    vault = keyvault.vaults.begin_create_or_update(
+        enforced.group, unique("kv-"), {"location": "eastus", "properties": {"tenantId": TENANT, "sku": sku, "enableRbacAuthorization": True}}
+    ).result()
+    certificates = CertificateClient(vault.properties.vault_uri, enforced.worker)
+    with pytest.raises(HttpResponseError) as error:
+        certificates.begin_create_certificate("tls", CertificatePolicy.get_default()).result()
+    assert "ForbiddenByRbac" in str(error.value)
+    enforced.grant("Key Vault Certificates Officer", vault.id)
+    assert certificates.begin_create_certificate("tls", CertificatePolicy.get_default()).result().name == "tls"
+
+    policies = keyvault.vaults.begin_create_or_update(
+        enforced.group,
+        unique("kv-"),
+        {
+            "location": "eastus",
+            "properties": {
+                "tenantId": TENANT,
+                "sku": sku,
+                "accessPolicies": [
+                    {"tenantId": TENANT, "objectId": "admin", "permissions": {"certificates": ["all"]}},
+                    {"tenantId": TENANT, "objectId": "worker", "permissions": {"certificates": ["get", "list"]}},
+                ],
+            },
+        },
+    ).result()
+    CertificateClient(policies.properties.vault_uri, enforced.admin).begin_create_certificate("tls", CertificatePolicy.get_default()).result()
+    worker = CertificateClient(policies.properties.vault_uri, enforced.worker)
+    assert worker.get_certificate("tls").name == "tls"
+    with pytest.raises(HttpResponseError) as error:
+        worker.begin_create_certificate("mine", CertificatePolicy.get_default()).result()
+    assert "does not have certificates create permission" in str(error.value)
 
 
 def test_service_bus_data_roles(enforced):
