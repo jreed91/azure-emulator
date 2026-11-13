@@ -86,6 +86,25 @@ impl ArmState {
     pub fn resource(&self, id: &str) -> Option<&Resource> {
         self.resources.get(&id.to_ascii_lowercase())
     }
+
+    /// Stores a resource a handler creates on the service's behalf (a default
+    /// child, for example), replacing any resource with the same id.
+    pub fn insert(&mut self, resource: Resource) {
+        self.resources.insert(resource.id.to_ascii_lowercase(), resource);
+    }
+
+    /// The resources directly inside the collection `collection_id`, e.g.
+    /// `{topic id}/subscriptions`.
+    pub fn children<'a>(&'a self, collection_id: &str) -> impl Iterator<Item = &'a Resource> + 'a {
+        let prefix = format!("{}/", collection_id.to_ascii_lowercase());
+        let from = prefix.clone();
+        let skip = prefix.len();
+        self.resources
+            .range(from..)
+            .take_while(move |(key, _)| key.starts_with(&prefix))
+            .filter(move |(key, _)| !key[skip..].contains('/'))
+            .map(|(_, resource)| resource)
+    }
 }
 
 /// What a handler is told about the request it serves.
@@ -99,6 +118,8 @@ pub struct ArmContext<'a> {
 
 /// A `PUT` of one resource.
 pub struct PutRequest<'a> {
+    /// The resource's canonical id.
+    pub id: &'a str,
     pub name: &'a str,
     /// Normalized location the resource will be stored with.
     pub location: Option<&'a str>,
@@ -138,6 +159,18 @@ pub trait ResourceTypeHandler: Send + Sync {
         }
         Ok(properties)
     }
+
+    /// Adjusts the envelope (`sku`, `kind`, ...) just before a `PUT` or `PATCH` is
+    /// stored, for example to fill in a default SKU.
+    fn prepare(&self, _ctx: &ArmContext<'_>, _resource: &mut Resource) {}
+
+    /// Called once, after a new resource has been stored. This is where a type
+    /// creates the child resources the service creates along with it.
+    fn created(&self, _ctx: &ArmContext<'_>, _resource: &Resource) {}
+
+    /// Adjusts a copy of the resource every time it is returned, for values that
+    /// are computed at read time (counts of children, runtime status).
+    fn view(&self, _ctx: &ArmContext<'_>, _resource: &mut Resource) {}
 
     /// Called after the resource has been removed from the store.
     fn deleted(&self, _ctx: &ArmContext<'_>, _resource: &Resource) {}
@@ -836,16 +869,18 @@ impl ArmRequest<'_> {
     fn list_in_subscription(&self, namespace: &str, kind: &str) -> Result<Response, ArmError> {
         let handler = self.handler(namespace, &[kind])?;
         let wanted = handler.resource_type().to_ascii_lowercase();
-        let state = self.engine.state::<ArmState>();
-        let state = state.lock();
-        list(
+        let found: Vec<Resource> = {
+            let state = self.engine.state::<ArmState>();
+            let state = state.lock();
             state
                 .resources
                 .values()
                 .filter(|r| r.resource_type.to_ascii_lowercase() == wanted)
-                .map(Resource::to_json)
-                .collect(),
-        )
+                .cloned()
+                .collect()
+        };
+        let ctx = self.context("");
+        list(found.into_iter().map(|r| render(handler.as_ref(), &ctx, r)).collect())
     }
 
     /// A request under `.../resourceGroups/{rg}/providers/{namespace}/{rest...}`.
@@ -901,18 +936,9 @@ impl ArmRequest<'_> {
             if self.method != Method::GET {
                 return Err(self.unsupported(rest));
             }
-            let prefix = format!("{}/", id.to_ascii_lowercase());
-            let state = handle.lock();
-            return list(
-                state
-                    .resources
-                    .range(prefix.clone()..)
-                    .take_while(|(key, _)| key.starts_with(&prefix))
-                    // Direct children only: one more segment after the collection.
-                    .filter(|(key, _)| !key[prefix.len()..].contains('/'))
-                    .map(|(_, r)| r.to_json())
-                    .collect(),
-            );
+            // Direct children only, copied out so handlers run without the lock.
+            let found: Vec<Resource> = handle.lock().children(&id).cloned().collect();
+            return list(found.into_iter().map(|r| render(handler.as_ref(), &ctx, r)).collect());
         }
 
         let name = *names.last().expect("a resource path has a name");
@@ -936,7 +962,7 @@ impl ArmRequest<'_> {
         }
 
         match self.method.as_str() {
-            "GET" => ok(existing.ok_or_else(not_found)?.to_json()),
+            "GET" => ok(render(handler.as_ref(), &ctx, existing.ok_or_else(not_found)?)),
             "HEAD" => {
                 existing.ok_or_else(not_found)?;
                 Ok(StatusCode::NO_CONTENT.into_response())
@@ -971,6 +997,7 @@ impl ArmRequest<'_> {
                 let properties = handler.put(
                     &ctx,
                     &PutRequest {
+                        id: existing.as_ref().map(|r| r.id.as_str()).unwrap_or(&id),
                         name,
                         location: location.as_deref(),
                         existing: existing.as_ref(),
@@ -978,7 +1005,8 @@ impl ArmRequest<'_> {
                     },
                 )?;
                 let member = |key: &str| object.get(key).filter(|v| !v.is_null()).cloned();
-                let resource = Resource {
+                let is_new = existing.is_none();
+                let mut resource = Resource {
                     id: existing.as_ref().map(|r| r.id.clone()).unwrap_or(id),
                     name: existing.as_ref().map(|r| r.name.clone()).unwrap_or_else(|| name.into()),
                     resource_type: handler.resource_type().to_string(),
@@ -989,9 +1017,12 @@ impl ArmRequest<'_> {
                     identity: member("identity"),
                     properties,
                 };
-                let body = resource.to_json();
-                handle.lock().resources.insert(key, resource);
-                ok(body)
+                handler.prepare(&ctx, &mut resource);
+                handle.lock().resources.insert(key, resource.clone());
+                if is_new {
+                    handler.created(&ctx, &resource);
+                }
+                ok(render(handler.as_ref(), &ctx, resource))
             }
             "PATCH" => {
                 let mut resource = existing.ok_or_else(not_found)?;
@@ -1007,9 +1038,9 @@ impl ArmRequest<'_> {
                         *slot = Some(value.clone()).filter(|v| !v.is_null());
                     }
                 }
-                let body = resource.to_json();
-                handle.lock().resources.insert(key, resource);
-                ok(body)
+                handler.prepare(&ctx, &mut resource);
+                handle.lock().resources.insert(key, resource.clone());
+                ok(render(handler.as_ref(), &ctx, resource))
             }
             "DELETE" => {
                 if existing.is_none() {
@@ -1033,6 +1064,12 @@ impl ArmRequest<'_> {
             _ => Err(self.unsupported(rest)),
         }
     }
+}
+
+/// The resource as its handler presents it.
+fn render(handler: &dyn ResourceTypeHandler, ctx: &ArmContext<'_>, mut resource: Resource) -> Value {
+    handler.view(ctx, &mut resource);
+    resource.to_json()
 }
 
 fn group_not_found(name: &str) -> ArmError {

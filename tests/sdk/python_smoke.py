@@ -1,7 +1,8 @@
 """Drives a running emulator with the official Azure SDKs for Python.
 
     pip install azure-identity azure-mgmt-resource azure-mgmt-storage \
-        azure-mgmt-keyvault azure-storage-blob azure-keyvault-secrets
+        azure-mgmt-keyvault azure-mgmt-servicebus azure-mgmt-msi \
+        azure-storage-blob azure-keyvault-secrets
     REQUESTS_CA_BUNDLE=~/.azure-emulator/ca.pem python tests/sdk/python_smoke.py
 
 The account and vault hostnames it uses must resolve to the emulator; see the
@@ -15,6 +16,8 @@ from azure.core.exceptions import HttpResponseError, ResourceExistsError, Resour
 from azure.identity import ClientSecretCredential
 from azure.keyvault.secrets import SecretClient
 from azure.mgmt.keyvault import KeyVaultManagementClient
+from azure.mgmt.msi import ManagedServiceIdentityClient
+from azure.mgmt.servicebus import ServiceBusManagementClient
 from azure.mgmt.resource.resources import ResourceManagementClient
 from azure.mgmt.storage import StorageManagementClient
 from azure.storage.blob import BlobServiceClient
@@ -125,6 +128,42 @@ assert secrets.get_secret("api-key").value == "v2"
 secrets.begin_delete_secret("api-key").wait()
 secrets.purge_deleted_secret("api-key")
 step("secret set / get / versions / update / delete / recover / purge")
+
+servicebus = ServiceBusManagementClient(credential, SUBSCRIPTION, **arm)
+BUS = "smoke-bus"
+assert servicebus.namespaces.check_name_availability({"name": BUS}).name_available
+bus = servicebus.namespaces.begin_create_or_update(GROUP, BUS, {"location": "eastus", "sku": {"name": "Standard"}}).result()
+assert bus.provisioning_state == "Succeeded" and bus.sku.tier == "Standard", bus
+assert not servicebus.namespaces.check_name_availability({"name": BUS}).name_available
+keys = servicebus.namespaces.list_keys(GROUP, BUS, "RootManageSharedAccessKey")
+assert keys.primary_connection_string.startswith(f"Endpoint=sb://{BUS}.servicebus.azure.localhost:{PORT}/;")
+queue = servicebus.queues.create_or_update(GROUP, BUS, "jobs", {"properties": {"maxDeliveryCount": 4}})
+assert queue.max_delivery_count == 4 and queue.lock_duration.total_seconds() == 60 and queue.message_count == 0
+servicebus.topics.create_or_update(GROUP, BUS, "events", {})
+servicebus.subscriptions.create_or_update(GROUP, BUS, "events", "audit", {})
+assert servicebus.topics.get(GROUP, BUS, "events").subscription_count == 1
+assert [r.name for r in servicebus.rules.list_by_subscriptions(GROUP, BUS, "events", "audit")] == ["$Default"]
+rule = servicebus.rules.create_or_update(
+    GROUP, BUS, "events", "audit", "errors", {"properties": {"filterType": "SqlFilter", "sqlFilter": {"sqlExpression": "level = 'error'"}}}
+)
+assert rule.sql_filter.compatibility_level == 20
+assert sorted(q.name for q in servicebus.queues.list_by_namespace(GROUP, BUS)) == ["jobs"]
+servicebus.queues.delete(GROUP, BUS, "jobs")
+servicebus.namespaces.begin_delete(GROUP, BUS).result()
+assert servicebus.namespaces.check_name_availability({"name": BUS}).name_available
+step("service bus namespace / keys / queue / topic / subscription / rule")
+
+msi = ManagedServiceIdentityClient(credential, SUBSCRIPTION, **arm)
+identity = msi.user_assigned_identities.create_or_update(GROUP, "smoke-identity", {"location": "eastus"})
+assert identity.tenant_id == TENANT and len(identity.client_id) == 36
+msi.federated_identity_credentials.create_or_update(
+    GROUP,
+    "smoke-identity",
+    "github",
+    {"properties": {"issuer": "https://token.actions.githubusercontent.com", "subject": "repo:o/r:ref:refs/heads/main", "audiences": ["api://AzureADTokenExchange"]}},
+)
+assert [c.name for c in msi.federated_identity_credentials.list(GROUP, "smoke-identity")] == ["github"]
+step("user-assigned identity / federated identity credential")
 
 resources.resource_groups.begin_delete(GROUP).result()
 assert not resources.resource_groups.check_existence(GROUP)

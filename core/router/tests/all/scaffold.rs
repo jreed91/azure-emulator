@@ -3,16 +3,20 @@ use serde_json::json;
 
 use crate::support::{Client, SUB};
 
-const NAMESPACES: &str = "/resourceGroups/rg/providers/Microsoft.ServiceBus/namespaces";
+/// A type that is modeled but not implemented.
+const NAMESPACES: &str = "/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/acct/encryptionScopes";
 
 #[tokio::test]
 async fn scaffolded_types_are_mounted_as_honest_stubs() {
     let client = Client::new();
     client.create_group("rg").await;
+    let account = format!("{SUB}/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/acct?api-version=2024-01-01");
+    let body = json!({"location": "eastus", "kind": "StorageV2", "sku": {"name": "Standard_LRS"}});
+    assert_eq!(client.arm(Method::PUT, &account, Some(body)).await.status, StatusCode::OK);
     let item = format!("{SUB}{NAMESPACES}/demo?api-version=2024-01-01");
 
     // Creating is the part nobody has written yet.
-    let reply = client.arm(Method::PUT, &item, Some(json!({"location": "eastus"}))).await;
+    let reply = client.arm(Method::PUT, &item, Some(json!({"properties": {}}))).await;
     assert_eq!(reply.status, StatusCode::NOT_IMPLEMENTED, "{}", reply.text());
     assert_eq!(reply.error_code(), "NotImplemented");
 
@@ -33,7 +37,7 @@ async fn api_versions_come_from_the_specification() {
     let client = Client::new();
     client.create_group("rg").await;
     let reply = client
-        .arm(Method::GET, &format!("{SUB}{NAMESPACES}?api-version=1999-01-01"), None)
+        .arm(Method::GET, &format!("{SUB}/resourceGroups/rg/providers/Microsoft.ServiceBus/namespaces?api-version=1999-01-01"), None)
         .await;
     assert_eq!(reply.status, StatusCode::BAD_REQUEST);
     assert_eq!(reply.error_code(), "NoRegisteredProviderFound");
@@ -60,7 +64,7 @@ async fn coverage_separates_implemented_from_stubbed() {
     assert!(implemented("Vaults_CreateOrUpdate"));
     assert!(!implemented("StorageAccounts_Failover"), "an action nobody wrote");
     assert!(!implemented("BlobContainers_Create"), "a stubbed nested type");
-    assert!(!implemented("Namespaces_CreateOrUpdate"), "a stubbed provider");
+    assert!(!implemented("MigrationConfigs_CreateAndStartMigration"), "a stubbed type");
     assert!(!implemented("Operations_List"), "not routed yet");
 }
 
@@ -90,14 +94,27 @@ async fn implementing_a_scaffolded_type_only_takes_a_handler() {
     assert_eq!(patched["properties"]["principalId"], created["properties"]["principalId"]);
     assert_eq!(client.arm(Method::HEAD, &path, None).await.status, StatusCode::NO_CONTENT);
 
-    // Its child type is still a stub.
-    let child = path.replace("?", "/federatedIdentityCredentials/gh?");
+    // Its child type validates what the specification requires.
+    let child = path.replace("?", "/federatedIdentityCredentials/github?");
     let reply = client.arm(Method::PUT, &child, Some(json!({"properties": {}}))).await;
-    assert_eq!(reply.status, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+    let body = json!({"properties": {
+        "issuer": "https://token.actions.githubusercontent.com",
+        "subject": "repo:octo/app:ref:refs/heads/main",
+        "audiences": ["api://AzureADTokenExchange"],
+    }});
+    let reply = client.arm(Method::PUT, &child, Some(body)).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(reply.json()["name"], "github");
+    assert!(reply.json().get("location").is_none(), "child resources have no location");
+    let listing = client.arm(Method::GET, &path.replace("?", "/federatedIdentityCredentials?"), None).await;
+    assert_eq!(listing.json()["value"].as_array().unwrap().len(), 1);
+    let orphan = path.replace("app-identity?", "missing/federatedIdentityCredentials/github?");
+    assert_eq!(client.arm(Method::GET, &orphan, None).await.error_code(), "ParentResourceNotFound");
 
     let coverage = client.emulator.coverage();
     let done = |id: &str| coverage.iter().find(|c| c.operation.id == id).unwrap().implemented;
     assert!(done("UserAssignedIdentities_CreateOrUpdate"));
     assert!(!done("UserAssignedIdentities_RevokeTokens"));
-    assert!(!done("FederatedIdentityCredentials_CreateOrUpdate"));
+    assert!(done("FederatedIdentityCredentials_CreateOrUpdate"));
 }
