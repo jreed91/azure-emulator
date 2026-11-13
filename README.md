@@ -19,7 +19,7 @@ workloads or to test security.
 | Resource Manager | Bearer-token verification, `api-version` checks, subscriptions, tenants, resource groups (create, get, exists, tag, list, delete with cascade), providers, generic resource listing, cloud metadata document |
 | `Microsoft.Storage` | Storage accounts: create, get, update, delete, list, `listKeys`, `regenerateKey`, `checkNameAvailability` |
 | Blob service | Containers: create, delete, properties, list. Block blobs: upload (single request), download with ranges, properties, metadata, delete, list with prefix, delimiter and paging. Authorization by Entra token or verified Shared Key |
-| `Microsoft.KeyVault` | Vaults: create, get, update, delete, list, `checkNameAvailability` |
+| `Microsoft.KeyVault` | Vaults: create, get, update, delete, list, `checkNameAvailability`; soft delete with list, get, recover and purge of deleted vaults; access-policy updates; secrets through Resource Manager (the same store as the data plane) |
 | `Microsoft.ManagedIdentity` | User-assigned identities and federated identity credentials |
 | `Microsoft.ServiceBus` | Namespaces, queues, topics, subscriptions, rules, authorization rules with `listKeys` and `regenerateKeys`, `checkNameAvailability` (control plane only: nothing serves messaging) |
 | Key Vault secrets | Set, get (latest or by version), update attributes, list, list versions, soft delete, get and list deleted, recover, purge |
@@ -30,11 +30,11 @@ until someone implements it. `azure-emulator coverage` prints the current score:
 
 ```
 Provider                                  Types     Operations
-Microsoft.KeyVault                         1/16           7/51
+Microsoft.KeyVault                         4/16          15/51
 Microsoft.ManagedIdentity                   2/2          10/14
 Microsoft.ServiceBus                       8/21          42/91
 Microsoft.Storage                          1/32          9/153
-Total                                     12/71         68/309
+Total                                     15/71         76/309
 ```
 
 That score counts control-plane (Resource Manager) operations only; data planes
@@ -63,7 +63,8 @@ tried yet.
 - Blob: block lists (large uploads), page and append blobs, leases, snapshots,
   shared access signatures, copy, and conditional headers other than
   `If-None-Match: *`.
-- Key Vault: keys, certificates, vault-level soft delete, and listing pages.
+- Key Vault: keys, certificates, managed HSMs, private endpoints, and listing
+  pages. Purge protection is stored but does not block a purge.
 - Some error codes and messages are best-effort and have not been compared with
   real Azure; the code marks the ones known to be unverified.
 - State is lost when the process exits.
@@ -192,6 +193,11 @@ deletion and cascade. To implement a type, write a `ResourceTypeHandler` for it
 before the scaffold. `CONTRACT.md` says what the type's body and name must look
 like. `services/managedidentity/src/lib.rs` is a small complete example, and
 `azure-emulator coverage` shows the operations move from `501` to `ok`.
+
+An operation the generic routing cannot express (location- or tenant-scoped, or
+a type whose data lives in a service's own state) is implemented by its
+`operationId` with `registry.register_operation`; the path comes from the
+scaffold. `services/keyvault/src/management.rs` has examples.
 
 A data plane is a function from a request to a response, selected by hostname in
 `core/router/src/lib.rs`.

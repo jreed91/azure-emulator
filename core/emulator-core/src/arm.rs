@@ -87,6 +87,12 @@ impl ArmState {
         self.resources.get(&id.to_ascii_lowercase())
     }
 
+    /// Mutable access to a stored resource, for operations that change one outside
+    /// the usual `PUT`/`PATCH` (an access-policy update, for example).
+    pub fn resource_mut(&mut self, id: &str) -> Option<&mut Resource> {
+        self.resources.get_mut(&id.to_ascii_lowercase())
+    }
+
     /// Stores a resource a handler creates on the service's behalf (a default
     /// child, for example), replacing any resource with the same id.
     pub fn insert(&mut self, resource: Resource) {
@@ -200,6 +206,29 @@ pub trait ResourceTypeHandler: Send + Sync {
 pub type ProviderAction =
     Arc<dyn Fn(&ArmContext<'_>, &Value) -> Result<Value, ArmError> + Send + Sync>;
 
+/// The path parameters and body of a request served by an [`OperationHandler`].
+pub struct OperationRequest<'a> {
+    /// Path parameters by the name the specification gives them, e.g. `vaultName`.
+    pub params: &'a HashMap<String, String>,
+    pub body: &'a Value,
+}
+
+impl OperationRequest<'_> {
+    /// A path parameter; empty if the operation's path has no such parameter.
+    pub fn param(&self, name: &str) -> &str {
+        self.params.get(name).map(String::as_str).unwrap_or("")
+    }
+}
+
+/// Implements one modeled operation, named by its `operationId`, directly. This is
+/// for operations the generic resource routing cannot express: location- or
+/// tenant-scoped ones, and resource types whose data lives in a service's own
+/// state rather than the ARM store. Returns the status and JSON body; a `Null`
+/// body is sent empty.
+pub type OperationHandler = Arc<
+    dyn Fn(&ArmContext<'_>, &OperationRequest<'_>) -> Result<(StatusCode, Value), ArmError> + Send + Sync,
+>;
+
 /// What one modeled operation does, as far as Resource Manager routing goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OperationKind {
@@ -279,6 +308,8 @@ pub struct ArmRegistry {
     types: HashMap<String, Arc<dyn ResourceTypeHandler>>,
     actions: HashMap<String, ProviderAction>,
     scaffolds: Vec<&'static ScaffoldedProvider>,
+    /// `operationId` → the handler that implements it directly.
+    operations: HashMap<&'static str, OperationHandler>,
     /// Lowercased types served by a [`ScaffoldStub`].
     stubs: HashSet<String>,
     /// Lowercased type → the `api-version`s its specification defines.
@@ -318,13 +349,14 @@ impl ArmRegistry {
                 let key = kind.resource_type.to_ascii_lowercase();
                 let handler = self.types.get(&key).filter(|_| !self.stubs.contains(&key));
                 for operation in kind.operations {
-                    let implemented = match (handler, operation.kind) {
-                        (None, _) | (_, OperationKind::Other | OperationKind::ProviderAction(_)) => false,
-                        (Some(handler), OperationKind::Action(name)) => {
-                            handler.actions().iter().any(|a| a.eq_ignore_ascii_case(name))
-                        }
-                        (Some(_), _) => true,
-                    };
+                    let implemented = self.operations.contains_key(operation.id)
+                        || match (handler, operation.kind) {
+                            (None, _) | (_, OperationKind::Other | OperationKind::ProviderAction(_)) => false,
+                            (Some(handler), OperationKind::Action(name)) => {
+                                handler.actions().iter().any(|a| a.eq_ignore_ascii_case(name))
+                            }
+                            (Some(_), _) => true,
+                        };
                     out.push(OperationCoverage {
                         namespace: provider.namespace,
                         resource_type: Some(kind.resource_type),
@@ -334,12 +366,13 @@ impl ArmRegistry {
                 }
             }
             for operation in provider.provider_operations {
-                let implemented = match operation.kind {
-                    OperationKind::ProviderAction(name) => self
-                        .actions
-                        .contains_key(&format!("{}/{name}", provider.namespace).to_ascii_lowercase()),
-                    _ => false,
-                };
+                let implemented = self.operations.contains_key(operation.id)
+                    || match operation.kind {
+                        OperationKind::ProviderAction(name) => self
+                            .actions
+                            .contains_key(&format!("{}/{name}", provider.namespace).to_ascii_lowercase()),
+                        _ => false,
+                    };
                 out.push(OperationCoverage {
                     namespace: provider.namespace,
                     resource_type: None,
@@ -354,6 +387,58 @@ impl ArmRegistry {
     /// Registers `Namespace/actionName`, e.g. `Microsoft.Storage/checkNameAvailability`.
     pub fn register_provider_action(&mut self, path: &str, action: ProviderAction) {
         self.actions.insert(path.to_ascii_lowercase(), action);
+    }
+
+    /// Implements the modeled operation `operation_id` with `handler`. The path it
+    /// answers on is the one the provider's scaffold gives that operation, so the
+    /// scaffold must be registered too. It takes precedence over generic routing.
+    pub fn register_operation(&mut self, operation_id: &'static str, handler: OperationHandler) {
+        self.operations.insert(operation_id, handler);
+    }
+
+    /// The directly implemented operation that `method path` addresses, with the
+    /// path parameters it captured.
+    fn match_operation(
+        &self,
+        method: &Method,
+        segments: &[String],
+    ) -> Option<(&OperationHandler, HashMap<String, String>)> {
+        if self.operations.is_empty() {
+            return None;
+        }
+        let all = self.scaffolds.iter().flat_map(|provider| {
+            provider
+                .types
+                .iter()
+                .flat_map(|kind| kind.operations.iter())
+                .chain(provider.provider_operations.iter())
+        });
+        for operation in all {
+            let Some(handler) = self.operations.get(operation.id) else {
+                continue;
+            };
+            if operation.method != method.as_str() {
+                continue;
+            }
+            let template: Vec<&str> = operation.path.split('/').filter(|s| !s.is_empty()).collect();
+            if template.len() != segments.len() {
+                continue;
+            }
+            let mut params = HashMap::new();
+            let matched = template.iter().zip(segments).all(|(expected, actual)| {
+                match expected.strip_prefix('{').and_then(|e| e.strip_suffix('}')) {
+                    Some(name) => {
+                        params.insert(name.to_string(), actual.clone());
+                        true
+                    }
+                    None => expected.eq_ignore_ascii_case(actual),
+                }
+            });
+            if matched {
+                return Some((handler, params));
+            }
+        }
+        None
     }
 
     /// Canonical namespace → its registered canonical type names (without namespace).
@@ -608,7 +693,39 @@ impl ArmRequest<'_> {
             .ok_or_else(|| invalid_namespace(namespace))
     }
 
+    /// Serves an operation a provider implements directly.
+    fn direct_operation(
+        &self,
+        handler: &OperationHandler,
+        params: &HashMap<String, String>,
+    ) -> Result<Response, ArmError> {
+        if let Some(subscription) = params.get("subscriptionId") {
+            if !subscription.eq_ignore_ascii_case(&self.engine.config().subscription_id) {
+                return Err(ArmError::not_found(
+                    "SubscriptionNotFound",
+                    format!("The subscription '{subscription}' could not be found."),
+                ));
+            }
+        }
+        let group = match params.get("resourceGroupName") {
+            Some(name) => self.require_group(name)?.name,
+            None => String::new(),
+        };
+        let request = OperationRequest {
+            params,
+            body: self.body,
+        };
+        let (status, body) = handler(&self.context(&group), &request)?;
+        Ok(match body {
+            Value::Null => status.into_response(),
+            body => json_response(status, &body),
+        })
+    }
+
     fn route(&self, segments: &[String], lower: &[&str]) -> Result<Response, ArmError> {
+        if let Some((handler, params)) = self.registry.match_operation(self.method, segments) {
+            return self.direct_operation(handler, &params);
+        }
         let get = self.method == Method::GET;
         match lower {
             ["subscriptions"] if get => list(vec![self.subscription_json()]),

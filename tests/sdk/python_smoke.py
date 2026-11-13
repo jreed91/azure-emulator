@@ -129,6 +129,23 @@ secrets.begin_delete_secret("api-key").wait()
 secrets.purge_deleted_secret("api-key")
 step("secret set / get / versions / update / delete / recover / purge")
 
+keyvault.vaults.update_access_policy(
+    GROUP,
+    VAULT,
+    "add",
+    {"properties": {"accessPolicies": [{"tenantId": TENANT, "objectId": "00000000-0000-0000-0000-000000000001", "permissions": {"secrets": ["get"]}}]}},
+)
+assert keyvault.vaults.get(GROUP, VAULT).properties.access_policies[0].permissions.secrets == ["get"]
+keyvault.secrets.create_or_update(GROUP, VAULT, "from-arm", {"properties": {"value": "set through resource manager"}})
+assert secrets.get_secret("from-arm").value == "set through resource manager"
+assert "from-arm" in [s.name for s in keyvault.secrets.list(GROUP, VAULT)]
+keyvault.vaults.delete(GROUP, VAULT)
+assert [v.name for v in keyvault.vaults.list_deleted()] == [VAULT]
+assert keyvault.vaults.get_deleted(VAULT, "eastus").properties.vault_id.endswith(f"/vaults/{VAULT}")
+keyvault.vaults.begin_purge_deleted(VAULT, "eastus").result()
+assert not list(keyvault.vaults.list_deleted())
+step("key vault access policy / management-plane secret / soft delete / purge")
+
 servicebus = ServiceBusManagementClient(credential, SUBSCRIPTION, **arm)
 BUS = "smoke-bus"
 assert servicebus.namespaces.check_name_availability({"name": BUS}).name_available
