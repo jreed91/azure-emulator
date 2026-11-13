@@ -36,3 +36,9 @@ offers the same.
   encoded itself. The broker writes the header section by hand so that
   `delivery-count: 0` is on the wire (the derived encoding leaves default
   fields out, and the Python SDK then reports the count as unset).
+
+- Lenient decoding of performatives (src/frames/amqp.rs): when a frame other
+  than a transfer fails to decode, string map keys are made symbols and it is
+  decoded again. The rhea client behind the JavaScript SDK sends a rejected
+  outcome's error `info` with string keys; strictly decoded, the frame was
+  dropped and `deadLetterMessage` never returned.

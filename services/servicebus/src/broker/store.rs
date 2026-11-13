@@ -25,6 +25,9 @@ use super::duration;
 
 pub(crate) type AmqpMessage = Message<Body<Value>>;
 
+/// The maximum message size of a Standard namespace: 256 KB.
+pub(crate) const DEFAULT_MAX_MESSAGE_SIZE: u64 = 256 * 1024;
+
 const NAMESPACE_TYPE: &str = "Microsoft.ServiceBus/namespaces";
 
 /// Why an operation on an entity was refused, as an AMQP error condition.
@@ -92,6 +95,11 @@ impl Entity {
 
     fn dead_letter_on_expiry(&self) -> bool {
         self.setting("deadLetteringOnMessageExpiration").and_then(Json::as_bool).unwrap_or(false)
+    }
+
+    /// The largest message the entity accepts, in bytes.
+    pub fn max_message_size(&self) -> u64 {
+        self.setting("maxMessageSizeInKilobytes").and_then(Json::as_u64).map_or(DEFAULT_MAX_MESSAGE_SIZE, |kb| kb * 1024)
     }
 
     pub fn requires_session(&self) -> bool {
@@ -304,24 +312,27 @@ pub(crate) fn counts(engine: &Engine, key: &str) -> serde_json::Value {
 
 /// Accepts `message` sent to `entity`: a queue (or a forwarding chain from it),
 /// or a topic, which copies it to every subscription whose rules match.
-pub(crate) fn send(engine: &Engine, entity: &Entity, message: AmqpMessage) -> Result<i64, Refusal> {
+pub(crate) fn send(engine: &Engine, entity: &Entity, mut message: AmqpMessage) -> Result<i64, Refusal> {
     entity.check_send()?;
+    // Service Bus gives a message without a message id one of its own.
+    let properties = message.properties.get_or_insert_with(Default::default);
+    if properties.message_id.is_none() {
+        properties.message_id = Some(MessageId::String(uuid::Uuid::new_v4().simple().to_string()));
+    }
     if entity.dead_letter {
         return Err(refuse("amqp:not-allowed", "Messages cannot be sent to a dead-letter queue."));
     }
-    let max_kb = match entity.kind {
-        Kind::Subscription => {
-            return Err(refuse("amqp:not-allowed", "Messages are sent to a topic, not to one of its subscriptions."))
-        }
-        _ => entity.setting("maxMessageSizeInKilobytes").and_then(Json::as_u64).unwrap_or(256),
-    };
+    if entity.kind == Kind::Subscription {
+        return Err(refuse("amqp:not-allowed", "Messages are sent to a topic, not to one of its subscriptions."));
+    }
+    let max_bytes = entity.max_message_size();
     let size = serde_amqp::to_vec(&fe2o3_amqp_types::messaging::message::__private::Serializable(&message))
         .map(|bytes| bytes.len())
         .unwrap_or(0);
-    if size as u64 > max_kb * 1024 {
+    if size as u64 > max_bytes {
         return Err(refuse(
             "amqp:link:message-size-exceeded",
-            format!("The message ({size} bytes) exceeds the entity's maximum message size ({max_kb} KB)."),
+            format!("The message ({size} bytes) exceeds the entity's maximum message size ({max_bytes} bytes)."),
         ));
     }
     if entity.requires_session() {
