@@ -10,10 +10,15 @@
 //! plane only: nothing serves the messaging protocol, so message counts are always
 //! zero and the endpoint a namespace reports does not accept connections.
 //!
+//! Also implemented: geo-disaster-recovery aliases (pairing, break and failover as
+//! control-plane state; nothing is replicated because there is no data plane), the
+//! legacy IP filter and virtual network rules, and private link resources.
+//!
 //! Not checked against Azure: the code and wording of validation refusals here, and
 //! the tier restrictions (topics on a Basic namespace are accepted).
 
 mod entities;
+mod geo;
 mod namespaces;
 pub mod scaffold;
 
@@ -48,5 +53,6 @@ pub fn register(registry: &mut ArmRegistry) {
             Arc::new(namespaces::check_name_availability),
         );
     }
+    geo::register(registry);
     registry.register_scaffold(&scaffold::PROVIDER);
 }

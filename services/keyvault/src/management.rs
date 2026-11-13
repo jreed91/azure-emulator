@@ -17,6 +17,7 @@ pub(crate) fn register(registry: &mut ArmRegistry) {
     registry.register_operation("Vaults_GetDeleted", Arc::new(get_deleted));
     registry.register_operation("Vaults_PurgeDeleted", Arc::new(purge_deleted));
     registry.register_operation("Vaults_UpdateAccessPolicy", Arc::new(update_access_policy));
+    registry.register_operation("PrivateLinkResources_ListByVault", Arc::new(private_link_resources));
     registry.register_operation("Secrets_List", Arc::new(list_secrets));
     registry.register_operation("Secrets_Get", Arc::new(get_secret));
     registry.register_operation("Secrets_CreateOrUpdate", Arc::new(put_secret));
@@ -215,6 +216,20 @@ fn update_access_policy(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) ->
         "type": "Microsoft.KeyVault/vaults/accessPolicies",
         "properties": {"accessPolicies": policies},
     }))
+}
+
+fn private_link_resources(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Reply {
+    let vault = find_vault(ctx, request.param("vaultName"))?;
+    ok(json!({"value": [{
+        "id": format!("{}/privateLinkResources/vault", vault.id),
+        "name": "vault",
+        "type": "Microsoft.KeyVault/vaults/privateLinkResources",
+        "properties": {
+            "groupId": "vault",
+            "requiredMembers": ["default"],
+            "requiredZoneNames": ["privatelink.vaultcore.azure.net"],
+        },
+    }]}))
 }
 
 // ---- secrets, as Resource Manager sees them -----------------------------------

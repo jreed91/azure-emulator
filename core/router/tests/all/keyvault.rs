@@ -245,6 +245,9 @@ async fn access_policy_updates() {
     assert_eq!(stored(&reply), json!([]));
 
     assert_eq!(client.arm(Method::PUT, &update("merge"), Some(policy(json!(["get"])))).await.status, StatusCode::BAD_REQUEST);
+
+    let links = client.arm(Method::GET, &vault_path("demo-vault/privateLinkResources"), None).await.json();
+    assert_eq!(links["value"][0]["properties"]["groupId"], "vault");
     let missing = vault_path("no-such-vault/accessPolicies/add");
     assert_eq!(client.arm(Method::PUT, &missing, Some(policy(json!(["get"])))).await.error_code(), "ResourceNotFound");
 }

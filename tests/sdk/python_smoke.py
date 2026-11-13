@@ -242,6 +242,19 @@ servicebus.namespaces.begin_delete(GROUP, BUS).result()
 assert servicebus.namespaces.check_name_availability({"name": BUS}).name_available
 step("service bus namespace / keys / queue / topic / subscription / rule")
 
+primary = servicebus.namespaces.begin_create_or_update(GROUP, "smoke-primary", {"location": "eastus", "sku": {"name": "Premium"}}).result()
+secondary = servicebus.namespaces.begin_create_or_update(GROUP, "smoke-secondary", {"location": "westus", "sku": {"name": "Premium"}}).result()
+alias = servicebus.disaster_recovery_configs.create_or_update(
+    GROUP, "smoke-primary", "smoke-alias", {"properties": {"partnerNamespace": secondary.id}}
+)
+assert alias.role == "Primary", alias
+assert servicebus.disaster_recovery_configs.get(GROUP, "smoke-secondary", "smoke-alias").role == "Secondary"
+alias_keys = servicebus.disaster_recovery_configs.list_keys(GROUP, "smoke-primary", "smoke-alias", "RootManageSharedAccessKey")
+assert alias_keys.alias_primary_connection_string.startswith("Endpoint=sb://smoke-alias.servicebus.")
+servicebus.disaster_recovery_configs.fail_over(GROUP, "smoke-secondary", "smoke-alias")
+assert servicebus.disaster_recovery_configs.get(GROUP, "smoke-secondary", "smoke-alias").role == "PrimaryNotReplicating"
+step("service bus geo-disaster-recovery alias / failover")
+
 msi = ManagedServiceIdentityClient(credential, SUBSCRIPTION, **arm)
 identity = msi.user_assigned_identities.create_or_update(GROUP, "smoke-identity", {"location": "eastus"})
 assert identity.tenant_id == TENANT and len(identity.client_id) == 36

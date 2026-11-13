@@ -205,3 +205,110 @@ async fn network_rule_set() {
     let reply = put(&client, "orders-bus/networkRuleSets/other", json!({"properties": {}})).await;
     assert_eq!(reply.status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn geo_disaster_recovery_alias() {
+    let client = Client::new();
+    client.create_group("rg").await;
+    let premium = json!({"location": "eastus", "sku": {"name": "Premium"}});
+    for name in ["primary-bus", "secondary-bus"] {
+        assert_eq!(put(&client, name, premium.clone()).await.status, StatusCode::OK);
+    }
+    put(&client, "standard-bus", json!({"location": "eastus"})).await;
+    let secondary_id = format!("{SUB}/resourceGroups/rg/providers/Microsoft.ServiceBus/namespaces/secondary-bus");
+    let pair = json!({"properties": {"partnerNamespace": secondary_id}});
+
+    // Pairing needs two different Premium namespaces that exist.
+    assert_eq!(put(&client, "standard-bus/disasterRecoveryConfigs/orders-alias", pair.clone()).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(put(&client, "secondary-bus/disasterRecoveryConfigs/orders-alias", pair.clone()).await.status, StatusCode::BAD_REQUEST);
+    let ghost = json!({"properties": {"partnerNamespace": secondary_id.replace("secondary-bus", "ghost-bus")}});
+    assert_eq!(put(&client, "primary-bus/disasterRecoveryConfigs/orders-alias", ghost).await.status, StatusCode::BAD_REQUEST);
+
+    let reply = put(&client, "primary-bus/disasterRecoveryConfigs/orders-alias", pair.clone()).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(reply.json()["properties"]["role"], "Primary");
+    // The partner sees the same alias from its side.
+    let mirror = get(&client, "secondary-bus/disasterRecoveryConfigs/orders-alias").await;
+    assert_eq!(mirror["properties"]["role"], "Secondary");
+    assert!(mirror["properties"]["partnerNamespace"].as_str().unwrap().ends_with("/namespaces/primary-bus"));
+
+    // The alias is a name in the namespace name space.
+    let check = path("primary-bus/disasterRecoveryConfigs/CheckNameAvailability");
+    let reply = client.arm(Method::POST, &check, Some(json!({"name": "orders-alias"}))).await;
+    assert_eq!(reply.json()["reason"], "NameInUse", "{}", reply.text());
+    assert_eq!(put(&client, "orders-alias", premium.clone()).await.status, StatusCode::CONFLICT);
+
+    // The alias exposes the namespace's rules, with alias connection strings.
+    let rules = get(&client, "primary-bus/disasterRecoveryConfigs/orders-alias/authorizationRules").await;
+    assert_eq!(rules["value"][0]["name"], "RootManageSharedAccessKey");
+    let keys = client
+        .arm(Method::POST, &path("primary-bus/disasterRecoveryConfigs/orders-alias/authorizationRules/RootManageSharedAccessKey/listKeys"), None)
+        .await
+        .json();
+    assert!(keys["aliasPrimaryConnectionString"].as_str().unwrap().starts_with("Endpoint=sb://orders-alias.servicebus."));
+    let direct = client
+        .arm(Method::POST, &path("primary-bus/AuthorizationRules/RootManageSharedAccessKey/listKeys"), None)
+        .await
+        .json();
+    assert_eq!(keys["primaryKey"], direct["primaryKey"], "the alias uses the namespace's keys");
+
+    // Failover is the secondary's call; afterwards it holds the alias alone.
+    let failover = path("primary-bus/disasterRecoveryConfigs/orders-alias/failover");
+    assert_eq!(client.arm(Method::POST, &failover, None).await.status, StatusCode::BAD_REQUEST);
+    let failover = path("secondary-bus/disasterRecoveryConfigs/orders-alias/failover");
+    let reply = client.arm(Method::POST, &failover, None).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert!(reply.body.is_empty());
+    let survivor = get(&client, "secondary-bus/disasterRecoveryConfigs/orders-alias").await;
+    assert_eq!(survivor["properties"]["role"], "PrimaryNotReplicating");
+    assert_eq!(survivor["properties"]["partnerNamespace"], "");
+    let reply = client.arm(Method::GET, &path("primary-bus/disasterRecoveryConfigs/orders-alias"), None).await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+
+    // Deleting the last holder frees the name; a new pairing can then be broken.
+    assert_eq!(client.arm(Method::DELETE, &path("secondary-bus/disasterRecoveryConfigs/orders-alias"), None).await.status, StatusCode::OK);
+    let reply = client.arm(Method::POST, &check, Some(json!({"name": "orders-alias"}))).await;
+    assert_eq!(reply.json()["nameAvailable"], true);
+    put(&client, "primary-bus/disasterRecoveryConfigs/orders-alias", pair).await;
+    let reply = client.arm(Method::POST, &path("primary-bus/disasterRecoveryConfigs/orders-alias/breakPairing"), None).await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(get(&client, "primary-bus/disasterRecoveryConfigs/orders-alias").await["properties"]["role"], "PrimaryNotReplicating");
+    let reply = client.arm(Method::GET, &path("secondary-bus/disasterRecoveryConfigs/orders-alias"), None).await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn legacy_filter_rules_and_private_link_resources() {
+    let client = Client::new();
+    namespace(&client).await;
+
+    // The legacy rules exist only in the api-version that introduced them.
+    let legacy = |rest: &str| {
+        format!("{SUB}/resourceGroups/rg/providers/Microsoft.ServiceBus/namespaces/{rest}?api-version=2018-01-01-preview")
+    };
+    let put_legacy = |rest: &str, body: Value| {
+        let path = legacy(rest);
+        let client = &client;
+        async move { client.arm(Method::PUT, &path, Some(body)).await }
+    };
+    let reply = put(&client, "orders-bus/ipfilterrules/office", json!({"properties": {"ipMask": "203.0.113.0/24"}})).await;
+    assert_eq!(reply.error_code(), "NoRegisteredProviderFound");
+    assert_eq!(put_legacy("orders-bus/ipfilterrules/office", json!({"properties": {}})).await.status, StatusCode::BAD_REQUEST);
+    let reply = put_legacy("orders-bus/ipfilterrules/office", json!({"properties": {"ipMask": "203.0.113.0/24"}})).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(reply.json()["properties"]["action"], "Accept");
+    assert_eq!(reply.json()["properties"]["filterName"], "office");
+    let reply = put_legacy("orders-bus/ipfilterrules/office", json!({"properties": {"ipMask": "203.0.113.0/24", "action": "Drop"}})).await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+
+    let subnet = "/subscriptions/x/resourceGroups/net/providers/Microsoft.Network/virtualNetworks/v/subnets/s";
+    let reply = put_legacy("orders-bus/virtualnetworkrules/app", json!({"properties": {"virtualNetworkSubnetId": subnet}})).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(reply.json()["properties"]["virtualNetworkSubnetId"], subnet);
+    let listed = client.arm(Method::GET, &legacy("orders-bus/virtualnetworkrules"), None).await.json();
+    assert_eq!(listed["value"].as_array().unwrap().len(), 1);
+
+    let links = get(&client, "orders-bus/privateLinkResources").await;
+    assert_eq!(links["value"][0]["properties"]["groupId"], "namespace");
+    assert_eq!(links["value"][0]["properties"]["requiredZoneNames"], json!(["privatelink.servicebus.windows.net"]));
+}

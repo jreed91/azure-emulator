@@ -388,6 +388,11 @@ async fn encryption_scopes_and_policies() {
     assert_eq!(client.arm(Method::PUT, &policy, Some(json!({"properties": {}}))).await.status, StatusCode::BAD_REQUEST);
     assert_eq!(client.arm(Method::DELETE, &policy, None).await.status, StatusCode::OK);
 
+    // A locally redundant account has one private link target per service.
+    let links = client.arm(Method::GET, &child("privateLinkResources"), None).await.json();
+    let groups: Vec<&str> = links["value"].as_array().unwrap().iter().map(|l| l["name"].as_str().unwrap()).collect();
+    assert_eq!(groups, ["blob", "table", "queue", "file", "web", "dfs"]);
+
     let inventory = child("inventoryPolicies/default");
     let body = json!({"properties": {"policy": {"enabled": true, "type": "Inventory", "rules": []}}});
     assert_eq!(client.arm(Method::PUT, &inventory, Some(body)).await.status, StatusCode::OK);

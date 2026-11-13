@@ -36,7 +36,7 @@ pub(crate) fn invalid(message: impl Into<String>) -> ArmError {
     ArmError::bad_request("BadRequest", message)
 }
 
-fn is_valid_namespace_name(name: &str) -> bool {
+pub(crate) fn is_valid_namespace_name(name: &str) -> bool {
     let bytes = name.as_bytes();
     (6..=50).contains(&bytes.len())
         && bytes.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'-')
@@ -250,10 +250,22 @@ fn new_key() -> String {
 }
 
 /// The name that follows `segment` in a resource id, e.g. the queue name.
-fn id_part<'a>(id: &'a str, segment: &str) -> Option<&'a str> {
+pub(crate) fn id_part<'a>(id: &'a str, segment: &str) -> Option<&'a str> {
     let mut parts = id.split('/');
     parts.find(|part| part.eq_ignore_ascii_case(segment))?;
     parts.next()
+}
+
+/// The primary and secondary key of the authorization rule `rule_id`, minted the
+/// first time anything asks for them.
+pub(crate) fn rule_keys(ctx: &ArmContext<'_>, rule_id: &str) -> [String; 2] {
+    let state = ctx.engine.state::<ServiceBusState>();
+    let mut state = state.lock();
+    state
+        .keys
+        .entry(rule_id.to_ascii_lowercase())
+        .or_insert_with(|| [new_key(), new_key()])
+        .clone()
 }
 
 /// Authorization rules at one of the three levels; the level is the type name.
