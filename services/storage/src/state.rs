@@ -58,6 +58,8 @@ pub(crate) struct Container {
     /// Blocks staged with Put Block and not yet committed, by blob name, in the
     /// order they were staged; a block staged again under the same id replaces it.
     pub uncommitted: BTreeMap<String, Vec<(String, Bytes)>>,
+    /// Snapshots by blob name, then by snapshot time (`x-ms-snapshot`), oldest first.
+    pub snapshots: BTreeMap<String, BTreeMap<String, Blob>>,
 }
 
 pub(crate) struct LegalHoldTag {
@@ -75,6 +77,7 @@ pub(crate) struct ImmutabilityPolicy {
     pub history: Vec<(&'static str, i64, String)>,
 }
 
+#[derive(Clone)]
 pub(crate) struct Lease {
     pub id: String,
     /// Seconds, or `None` for an infinite lease.
@@ -146,6 +149,7 @@ impl Container {
             lease: None,
             blobs: BTreeMap::new(),
             uncommitted: BTreeMap::new(),
+            snapshots: BTreeMap::new(),
         }
     }
 
@@ -193,4 +197,17 @@ pub(crate) struct Blob {
     pub replicated_by: Vec<String>,
     /// On a replica: the policy that wrote it.
     pub replica_of: Option<String>,
+    /// The blob's lease, if one has been acquired.
+    pub lease: Option<Lease>,
+    /// The last copy that wrote this blob, if a Copy Blob did.
+    pub copy: Option<CopyInfo>,
+}
+
+/// What Get Blob Properties reports about the copy that wrote a blob.
+#[derive(Clone)]
+pub(crate) struct CopyInfo {
+    pub id: String,
+    pub source: String,
+    pub length: usize,
+    pub completed: SystemTime,
 }
