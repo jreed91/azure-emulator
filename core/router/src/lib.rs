@@ -81,5 +81,54 @@ async fn dispatch(State(emulator): State<Emulator>, request: Request<Body>) -> R
     if service_entra::matches(request.uri().path()) {
         return service_entra::handle(engine, request).await;
     }
+    if request.uri().path() == "/$servicebus/websocket" {
+        return servicebus_websocket(engine, request).await;
+    }
     arm::handle(engine, emulator.registry.clone(), request).await
+}
+
+/// AMQP over WebSockets, as the Service Bus SDKs speak it when told to (or
+/// when a firewall allows only 443): binary messages carry the AMQP byte
+/// stream, which is handed to the same broker as the AMQP listeners.
+async fn servicebus_websocket(engine: Arc<Engine>, request: Request<Body>) -> Response {
+    use axum::extract::ws::{Message, WebSocketUpgrade};
+    use axum::extract::FromRequestParts;
+    use axum::response::IntoResponse;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (mut parts, _) = request.into_parts();
+    let upgrade = match WebSocketUpgrade::from_request_parts(&mut parts, &()).await {
+        Ok(upgrade) => upgrade,
+        Err(rejection) => return rejection.into_response(),
+    };
+    upgrade
+        .protocols(["AMQPWSB10"])
+        .on_upgrade(move |mut socket| async move {
+            let (broker_side, bridge_side) = tokio::io::duplex(256 * 1024);
+            tokio::spawn(service_servicebus::broker::serve_stream(engine, broker_side));
+            let (mut from_broker, mut to_broker) = tokio::io::split(bridge_side);
+            let mut buffer = vec![0u8; 64 * 1024];
+            loop {
+                tokio::select! {
+                    message = socket.recv() => match message {
+                        Some(Ok(Message::Binary(bytes))) => {
+                            if to_broker.write_all(&bytes).await.is_err() {
+                                break;
+                            }
+                        }
+                        Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                        Some(Ok(_)) => {}
+                    },
+                    read = from_broker.read(&mut buffer) => match read {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            if socket.send(Message::Binary(buffer[..n].to_vec().into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    },
+                }
+            }
+        })
+        .into_response()
 }

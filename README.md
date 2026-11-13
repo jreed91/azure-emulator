@@ -84,8 +84,7 @@ tried yet.
   refused. Every accepted version gets the same behaviour.
 - Operations the ARM layer cannot route yet (tenant-, location- and
   extension-scoped ones) are listed by `coverage` as `501`.
-- Service Bus messaging does not serve AMQP over WebSockets, and does not
-  enforce tier restrictions (such as topics on a Basic namespace).
+- Service Bus throughput limits, quotas and partitioning are not modelled.
 - Template deployments run to completion before the first response; there is
   no `Running` state and `cancel` always answers `409`. A `templateLink`,
   `parametersLink` or Key Vault reference in parameters answers `501`, as do
@@ -258,6 +257,11 @@ Trust the emulator's CA (`connection_verify` in Python) and resolve
 client = ServiceBusClient("orders.servicebus.azure.localhost", credential, connection_verify=ca_path)
 ```
 
+AMQP over WebSockets is served on the emulator's HTTPS port at
+`/$servicebus/websocket`, for clients configured with
+`TransportType.AmqpOverWebsocket` and a `custom_endpoint_address` of
+`https://<namespace>.servicebus.azure.localhost:10443`.
+
 A connection string does not have to use the namespace's own hostname
 (`<namespace>.servicebus.azure.localhost`): any name that reaches the
 emulator works, such as `localhost` or a container's name. The namespace is
@@ -300,6 +304,11 @@ the lock is released when the receiver closes.
 
 Topic fan-out works through `$Default`, SQL filters, correlation filters and rule actions
 (`SET`/`REMOVE`; a subscription gets a copy per matching rule with an action).
+Namespace tiers are enforced as on Azure: a Basic namespace has no topics,
+sessions, duplicate detection or auto-forwarding, and only a Premium namespace
+sets `maxMessageSizeInKilobytes` (1 MB to 100 MB, 1 MB by default; 256 KB
+otherwise).
+
 Rules can also be managed over AMQP (`add-rule`, `remove-rule`,
 `enumerate-rules`, as the JavaScript SDK's rule manager does); they are the
 same rules Resource Manager lists. Sessions can be listed

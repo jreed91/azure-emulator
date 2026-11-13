@@ -109,6 +109,64 @@ pub(crate) fn forget_messages(ctx: &ArmContext<'_>, resource: &Resource) {
     }
 }
 
+/// The tier (`Basic`, `Standard`, `Premium`) of the namespace `id` is in.
+fn tier(ctx: &ArmContext<'_>, id: &str) -> String {
+    let lower = id.to_ascii_lowercase();
+    let Some(at) = lower.find("/namespaces/") else { return "Standard".into() };
+    let rest = &id[at + "/namespaces/".len()..];
+    let namespace_id = &id[..at + "/namespaces/".len() + rest.find('/').unwrap_or(rest.len())];
+    let state = ctx.engine.state::<ArmState>();
+    let state = state.lock();
+    state
+        .resource(namespace_id)
+        .and_then(|ns| ns.sku.as_ref())
+        .and_then(|sku| sku.get("tier").or_else(|| sku.get("name")))
+        .and_then(Value::as_str)
+        .unwrap_or("Standard")
+        .to_string()
+}
+
+/// Refuses what the namespace's tier does not offer, as Service Bus does:
+/// Basic has no topics, sessions, duplicate detection or auto-forwarding;
+/// only Premium sets the maximum message size (1 MB to 100 MB, 1 MB by
+/// default), which is 256 KB otherwise.
+fn check_tier(ctx: &ArmContext<'_>, request: &PutRequest<'_>, properties: &mut Value, topic: bool) -> Result<(), ArmError> {
+    let tier = tier(ctx, request.id);
+    let refuse = |feature: &str| {
+        invalid(format!(
+            "SubCode=40000. {feature} is not supported in the '{tier}' tier of namespace. Use a Standard or Premium namespace."
+        ))
+    };
+    if tier.eq_ignore_ascii_case("Basic") {
+        if topic {
+            return Err(refuse("A topic"));
+        }
+        for (member, feature) in [("requiresSession", "Sessions"), ("requiresDuplicateDetection", "Duplicate detection")] {
+            if properties.get(member).and_then(Value::as_bool) == Some(true) {
+                return Err(refuse(feature));
+            }
+        }
+        for member in ["forwardTo", "forwardDeadLetteredMessagesTo"] {
+            if properties.get(member).and_then(Value::as_str).is_some_and(|t| !t.is_empty()) {
+                return Err(refuse("Auto-forwarding"));
+            }
+        }
+    }
+    let given = request.body.pointer("/properties/maxMessageSizeInKilobytes").and_then(Value::as_i64);
+    if tier.eq_ignore_ascii_case("Premium") {
+        let size = given.or_else(|| properties.get("maxMessageSizeInKilobytes").and_then(Value::as_i64)).unwrap_or(1024);
+        if !(1024..=102_400).contains(&size) {
+            return Err(invalid("The maxMessageSizeInKilobytes must be between 1024 and 102400."));
+        }
+        properties["maxMessageSizeInKilobytes"] = json!(size);
+    } else if given.is_some() {
+        return Err(invalid(format!(
+            "SubCode=40000. The maxMessageSizeInKilobytes property can only be set on Premium namespaces; this namespace is '{tier}'."
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) struct Queues;
 
 impl ResourceTypeHandler for Queues {
@@ -116,8 +174,8 @@ impl ResourceTypeHandler for Queues {
         "Microsoft.ServiceBus/namespaces/queues"
     }
 
-    fn put(&self, _ctx: &ArmContext<'_>, request: &PutRequest<'_>) -> Result<Value, ArmError> {
-        entity_properties(
+    fn put(&self, ctx: &ArmContext<'_>, request: &PutRequest<'_>) -> Result<Value, ArmError> {
+        let mut properties = entity_properties(
             request,
             json!({
                 "lockDuration": "PT1M",
@@ -157,7 +215,9 @@ impl ResourceTypeHandler for Queues {
                 "userMetadata",
             ],
             &["requiresDuplicateDetection", "requiresSession", "enablePartitioning"],
-        )
+        )?;
+        check_tier(ctx, request, &mut properties, false)?;
+        Ok(properties)
     }
 
     fn patch(&self, ctx: &ArmContext<'_>, existing: &Resource, body: &Value) -> Result<Value, ArmError> {
@@ -180,8 +240,8 @@ impl ResourceTypeHandler for Topics {
         "Microsoft.ServiceBus/namespaces/topics"
     }
 
-    fn put(&self, _ctx: &ArmContext<'_>, request: &PutRequest<'_>) -> Result<Value, ArmError> {
-        entity_properties(
+    fn put(&self, ctx: &ArmContext<'_>, request: &PutRequest<'_>) -> Result<Value, ArmError> {
+        let mut properties = entity_properties(
             request,
             json!({
                 "defaultMessageTimeToLive": FOREVER,
@@ -213,7 +273,9 @@ impl ResourceTypeHandler for Topics {
                 "userMetadata",
             ],
             &["requiresDuplicateDetection", "enablePartitioning"],
-        )
+        )?;
+        check_tier(ctx, request, &mut properties, true)?;
+        Ok(properties)
     }
 
     fn patch(&self, ctx: &ArmContext<'_>, existing: &Resource, body: &Value) -> Result<Value, ArmError> {
@@ -238,8 +300,8 @@ impl ResourceTypeHandler for Subscriptions {
         "Microsoft.ServiceBus/namespaces/topics/subscriptions"
     }
 
-    fn put(&self, _ctx: &ArmContext<'_>, request: &PutRequest<'_>) -> Result<Value, ArmError> {
-        entity_properties(
+    fn put(&self, ctx: &ArmContext<'_>, request: &PutRequest<'_>) -> Result<Value, ArmError> {
+        let mut properties = entity_properties(
             request,
             json!({
                 "lockDuration": "PT1M",
@@ -273,7 +335,9 @@ impl ResourceTypeHandler for Subscriptions {
                 "userMetadata",
             ],
             &["requiresSession"],
-        )
+        )?;
+        check_tier(ctx, request, &mut properties, false)?;
+        Ok(properties)
     }
 
     fn patch(&self, ctx: &ArmContext<'_>, existing: &Resource, body: &Value) -> Result<Value, ArmError> {
