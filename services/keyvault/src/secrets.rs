@@ -21,7 +21,7 @@ use crate::KeyVaultState;
 /// Days a deleted secret stays recoverable.
 const RECOVERABLE_DAYS: i64 = 90;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Vault {
     /// Keyed by lowercased secret name.
     secrets: BTreeMap<String, Secret>,
@@ -31,15 +31,19 @@ pub(crate) struct Vault {
     /// Soft-deleted keys, keyed the same way.
     pub(crate) deleted_keys: BTreeMap<String, crate::keys::DeletedKey>,
     /// Certificates and deleted certificates, by lowercased name.
+    #[serde(default)]
     pub(crate) certificates: BTreeMap<String, crate::certificates::Certificate>,
+    #[serde(default)]
     pub(crate) deleted_certificates: BTreeMap<String, crate::certificates::DeletedCertificate>,
     /// The vault's certificate contacts, as Set Certificate Contacts gave them.
+    #[serde(default)]
     pub(crate) certificate_contacts: Option<Value>,
     /// Certificate issuers by lowercased name.
+    #[serde(default)]
     pub(crate) certificate_issuers: BTreeMap<String, Value>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Secret {
     /// The name as first created; ids keep this casing.
     name: String,
@@ -47,7 +51,7 @@ pub(crate) struct Secret {
     versions: Vec<SecretVersion>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct SecretVersion {
     version: String,
     value: String,
@@ -59,9 +63,11 @@ struct SecretVersion {
     created: i64,
     updated: i64,
     /// For a certificate's secret: the id of the certificate's key.
+    #[serde(default)]
     kid: Option<String>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct DeletedSecret {
     secret: Secret,
     deleted_date: i64,

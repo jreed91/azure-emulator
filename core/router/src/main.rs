@@ -27,6 +27,9 @@ OPTIONS:
         --http             Serve plain HTTP instead of HTTPS
         --config <FILE>    Provision resources from a JSON file at startup
                            (see the README)
+        --persist          Keep state across restarts, in <home>/state.json
+        --state-file <PATH>
+                           With --persist, keep the state in this file instead
         --enforce-rbac     Require a role assignment for every Resource Manager
                            request (by default any valid token may do anything)
         --rbac-owner <ID>  With --enforce-rbac, treat this object id (for the
@@ -37,7 +40,8 @@ Every option can also be set in the environment: AZURE_EMULATOR_PORT,
 AZURE_EMULATOR_AMQP_PORT, AZURE_EMULATOR_AMQPS_PORT,
 AZURE_EMULATOR_BIND, AZURE_EMULATOR_HOST,
 AZURE_EMULATOR_DNS_SUFFIX, AZURE_EMULATOR_HTTP=1, AZURE_EMULATOR_CONFIG,
-AZURE_EMULATOR_ENFORCE_RBAC=1, AZURE_EMULATOR_RBAC_OWNERS (comma-separated).
+AZURE_EMULATOR_ENFORCE_RBAC=1, AZURE_EMULATOR_RBAC_OWNERS (comma-separated),
+AZURE_EMULATOR_PERSIST=1, AZURE_EMULATOR_STATE_FILE.
     -h, --help             Print this help
 ";
 
@@ -129,6 +133,8 @@ async fn main() {
     let mut bind = "127.0.0.1".to_string();
     let mut config_file = std::env::var("AZURE_EMULATOR_CONFIG").ok();
     let env = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    let mut persist = env("AZURE_EMULATOR_PERSIST").is_some_and(|v| v != "0" && !v.eq_ignore_ascii_case("false"));
+    let mut state_file = env("AZURE_EMULATOR_STATE_FILE").map(std::path::PathBuf::from);
     if let Some(port) = env("AZURE_EMULATOR_PORT") {
         config.port = port.parse().unwrap_or_else(|_| fail("AZURE_EMULATOR_PORT is not a port"));
     }
@@ -175,6 +181,8 @@ async fn main() {
             "--http" => config.scheme = "http".into(),
             "--config" => config_file = Some(value("--config")),
             "--enforce-rbac" => config.enforce_rbac = true,
+            "--persist" => persist = true,
+            "--state-file" => state_file = Some(value("--state-file").into()),
             "--rbac-owner" => config.rbac_owners.push(value("--rbac-owner")),
             "-h" | "--help" => {
                 print!("{USAGE}");
@@ -188,6 +196,16 @@ async fn main() {
         .unwrap_or_else(|_| fail("--bind is not an IP address"));
 
     let emulator = Emulator::new(config.clone());
+    // A snapshot is loaded before provisioning, which then updates what it holds.
+    let state_file = persist.then(|| state_file.unwrap_or_else(azure_emulator::persist::default_path));
+    if let Some(path) = &state_file {
+        azure_emulator::persist::register(&emulator.engine());
+        match azure_emulator::persist::load(&emulator.engine(), path) {
+            Ok(true) => println!("Restored state from {}", path.display()),
+            Ok(false) => {}
+            Err(error) => eprintln!("warning: {error}"),
+        }
+    }
     if let Some(path) = &config_file {
         let text = std::fs::read_to_string(path).unwrap_or_else(|e| fail(format!("cannot read {path}: {e}")));
         let file: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|e| fail(format!("{path} is not JSON: {e}")));
@@ -205,6 +223,10 @@ async fn main() {
     println!("  Tenant:                   {}", config.tenant_id);
     if config.enforce_rbac {
         println!("  Role assignments:         enforced (owners: {})", config.rbac_owners.join(", "));
+    }
+    if let Some(path) = &state_file {
+        println!("  State kept in:            {}", path.display());
+        tokio::spawn(azure_emulator::persist::keep(emulator.engine(), path.clone()));
     }
 
     let amqp_address = format!("{bind}:{}", config.amqp_port);
@@ -230,19 +252,55 @@ async fn main() {
     tokio::spawn(service_servicebus::broker::serve(emulator.engine(), amqps, Some(amqps_tls)));
     println!("  CA certificate to trust:  {}", identity.ca_path.display());
 
-    let result = if config.scheme == "https" {
-        let rustls = axum_server::tls_rustls::RustlsConfig::from_pem(
-            identity.certificate_chain_pem.into_bytes(),
-            identity.private_key_pem.into_bytes(),
-        )
-        .await
-        .unwrap_or_else(|e| fail(format!("TLS setup failed: {e}")));
-        axum_server::bind_rustls(address, rustls).serve(app).await
-    } else {
-        axum_server::bind(address).serve(app).await
+    let serving = async {
+        if config.scheme == "https" {
+            let rustls = axum_server::tls_rustls::RustlsConfig::from_pem(
+                identity.certificate_chain_pem.into_bytes(),
+                identity.private_key_pem.into_bytes(),
+            )
+            .await
+            .unwrap_or_else(|e| fail(format!("TLS setup failed: {e}")));
+            axum_server::bind_rustls(address, rustls).serve(app).await
+        } else {
+            axum_server::bind(address).serve(app).await
+        }
+    };
+    let result = tokio::select! {
+        result = serving => result,
+        () = shutdown_signal() => {
+            // The last changes, made since the last periodic save.
+            if let Some(path) = &state_file {
+                if let Err(error) = azure_emulator::persist::save(&emulator.engine(), path, None) {
+                    eprintln!("warning: saving state failed: {error}");
+                }
+            }
+            Ok(())
+        }
     };
     if let Err(error) = result {
         eprintln!("error: {error}");
         std::process::exit(1);
+    }
+}
+
+/// Ctrl-C, or SIGTERM where there is one (as `docker stop` sends).
+async fn shutdown_signal() {
+    let interrupt = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        () = interrupt => {}
+        () = terminate => {}
     }
 }

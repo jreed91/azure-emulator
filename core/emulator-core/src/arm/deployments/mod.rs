@@ -24,7 +24,7 @@ pub use template::Dispatch;
 const DEPLOYMENTS_TYPE: &str = "Microsoft.Resources/deployments";
 
 /// Every stored deployment, keyed by lowercased id.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct DeploymentState {
     deployments: BTreeMap<String, Record>,
 }
@@ -37,7 +37,7 @@ impl DeploymentState {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Record {
     id: String,
     name: String,

@@ -36,7 +36,7 @@ use secrets::Vault;
 const RESOURCE_TYPE: &str = "Microsoft.KeyVault/vaults";
 
 /// Every vault's data, keyed by lowercased vault name (vault names are global).
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct KeyVaultState {
     pub(crate) vaults: BTreeMap<String, Vault>,
     /// Soft-deleted vaults, keyed the same way. Their names stay taken.
@@ -52,6 +52,7 @@ pub struct KeyVaultState {
 }
 
 /// A managed HSM between deletion and recovery or purge.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct DeletedHsm {
     pub resource: Resource,
     pub deletion_date: String,
@@ -59,6 +60,7 @@ pub(crate) struct DeletedHsm {
 }
 
 /// A vault between deletion and recovery or purge.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct DeletedVault {
     /// The vault resource as it was when deleted.
     pub resource: Resource,

@@ -21,7 +21,7 @@ rely on it as a security boundary.
 | Role-based access control | All 506 built-in role definitions with Azure's ids and permissions; custom roles; role assignments at subscription, resource group and resource scope (create, get, get by id, delete, list with `atScope()` and `principalId` filters), removed with the scope they are on. Enforcement on requests inside the subscription, deployments' resources included, and on the Blob, Key Vault and Service Bus data planes, when started with `--enforce-rbac`; see [Role-based access control](#role-based-access-control) |
 | Template deployments | ARM templates and compiled Bicep at resource-group and subscription scope: create, get, list, delete, `validate`, `whatIf`, `exportTemplate`, deployment operations, `calculateTemplateHash`. Parameters (types, allowed values, bounds, defaults, user-defined types), variables and variable loops, resource, property and output `copy` loops, conditions, child resources, `dependsOn` ordering, nested deployments (Bicep modules, inner and outer scope, other resource groups), `existing` resources, symbolic names (`languageVersion` 2.0), user-defined functions, lambdas, outputs, and complete mode. About 100 template functions plus every `list*` action, with `uniqueString` and `guid` giving the values Azure gives. See [Template deployments](#template-deployments) |
 | `Microsoft.Storage` | Storage accounts with `listKeys`, `regenerateKey` and `checkNameAvailability`; blob, file, queue and table service properties; blob containers (the same store as the data plane); file shares (Resource Manager only); encryption scopes; lifecycle-management and inventory policies; local users; `listAccountSas` and `listServiceSas`; container legal holds, immutability policies (lock, extend, `If-Match`) and leases, enforced on the Blob data plane; file share leases; object replication policies, with blobs copied between accounts on write; the Queue data plane (queues, metadata, access policies, and messages with visibility timeouts, pop receipts and time to live; Shared Key, SAS and Entra ID) on `<account>.queue.core.azure.localhost`, sharing its queues with Resource Manager; the Table data plane (tables, entities with typed properties, OData `$filter`, `$select` and `$top` queries with continuation, insert, replace, merge and upsert with `If-Match`, and entity group transactions; Shared Key, Shared Key Lite, SAS and Entra ID) on `<account>.table.core.azure.localhost`, sharing its tables with Resource Manager |
-| Blob service | Containers: create, delete, properties, list. Block blobs: upload in a single request or in blocks (Put Block, Put Block List with committed, uncommitted and latest blocks, Get Block List), so the SDKs' large and parallel uploads work; download with ranges; properties, metadata, Set Blob Metadata and Set Blob Properties (content type, MD5, cache control, encoding, language, disposition); delete; list with prefix, delimiter and paging. Leases on blobs and containers (acquire, renew, change, release, break; writes to a leased blob need its id); snapshots (create, read, list, delete with `x-ms-delete-snapshots`); Copy Blob, synchronous copy and Put Blob From URL from a blob or snapshot, from another account with a SAS or public access; `If-Match`, `If-None-Match`, `If-Modified-Since` and `If-Unmodified-Since` (304 on reads), and the `x-ms-source-` conditions on copies. Authorization by Entra token, verified Shared Key, or shared access signature (account SAS and container or blob service SAS signed with an account key) |
+| Blob service | Containers: create, delete, properties, list. Block blobs: upload in a single request or in blocks (Put Block, Put Block List with committed, uncommitted and latest blocks, Get Block List), so the SDKs' large and parallel uploads work; download with ranges; properties, metadata, Set Blob Metadata and Set Blob Properties (content type, MD5, cache control, encoding, language, disposition); delete; list with prefix, delimiter and paging. Leases on blobs and containers (acquire, renew, change, release, break; writes to a leased blob need its id); snapshots (create, read, list, delete with `x-ms-delete-snapshots`); Copy Blob, synchronous copy and Put Blob From URL from a blob or snapshot, from another account with a SAS or public access; `If-Match`, `If-None-Match`, `If-Modified-Since` and `If-Unmodified-Since` (304 on reads), and the `x-ms-source-` conditions on copies. Append blobs (Append Block with the max-size and append-position conditions, Seal) and page blobs (Put Page update and clear, Get Page Ranges, resize, sequence numbers and their conditions). Authorization by Entra token, verified Shared Key, or shared access signature (account SAS and container or blob service SAS signed with an account key) |
 | `Microsoft.KeyVault` | Vaults: create, get, update, delete, list, `checkNameAvailability`; soft delete with list, get, recover and purge of deleted vaults; access-policy updates; secrets through Resource Manager (the same store as the data plane); managed HSMs with soft delete, regions and name availability (no HSM data plane); keys through Resource Manager in vaults and managed HSMs, with real key material the vault's keys data plane uses |
 | `Microsoft.ManagedIdentity` | User-assigned identities and federated identity credentials; listing the resources that use an identity; reading any resource's system-assigned identity. Every resource's `identity` block is filled in: system-assigned identities get a principal id, and user-assigned identities are checked and given their principal and client ids |
 | `Microsoft.ServiceBus` | Namespaces, queues, topics, subscriptions, rules, authorization rules with `listKeys` and `regenerateKeys`, network rule sets, geo-disaster-recovery aliases with failover and break-pairing, legacy IP filter and virtual network rules, private link resources, Standard-to-Premium migration (start and revert; completion is not modeled), `checkNameAvailability`; messaging over AMQP 1.0 (see [Service Bus messaging](#service-bus-messaging)) |
@@ -114,7 +114,8 @@ tried yet.
   access policies are stored but not used to sign tokens. Version-level
   immutability (`migrate`) is not implemented. A container lease is the same
   lease on Resource Manager and the Blob data plane.
-- Blob: page and append blobs, versions and soft delete. Copies come only
+- Blob: versions and soft delete; page-range diffs between snapshots
+  (`prevsnapshot`); page blobs are held in memory, up to 256 MiB. Copies come only
   from blobs the emulator holds (not from other URLs), always complete before
   the response, and do not check `x-ms-copy-source-authorization`. Shared access
   signatures that name a stored access policy or use a user delegation key are
@@ -127,7 +128,9 @@ tried yet.
   a purge, and a key's `nbf` and `exp` are stored but not enforced.
 - Some error codes and messages are best-effort and have not been compared with
   real Azure; the code marks the ones known to be unverified.
-- State is lost when the process exits.
+- State is kept across restarts only with `--persist`, and then without the
+  messages and events in flight in Service Bus and Event Hubs (see
+  [Keeping state across restarts](#keeping-state-across-restarts)).
 
 ## Quick start
 
@@ -137,7 +140,7 @@ cargo run -p azure-emulator
 
 The emulator serves HTTPS on `127.0.0.1:10443` and prints its endpoints. Options:
 `--port`, `--bind`, `--host`, `--dns-suffix`, `--amqp-port`, `--http`,
-`--config`, `--enforce-rbac`, `--rbac-owner`; each also has an
+`--config`, `--persist`, `--state-file`, `--enforce-rbac`, `--rbac-owner`; each also has an
 `AZURE_EMULATOR_*` environment variable. Run with
 `--help` for details. (Pick ports Node's `fetch` allows if you change them:
 it refuses some, such as `10080`.)
@@ -164,6 +167,41 @@ services:
     volumes:
       - ./azure-emulator.json:/config.json:ro
     ports: ["10443:10443", "5672:5672", "5671:5671"]
+```
+
+### Keeping state across restarts
+
+By default the emulator starts empty every time. With `--persist` (or
+`AZURE_EMULATOR_PERSIST=1`) it keeps its state in `state.json` in its home
+directory (`AZURE_EMULATOR_HOME`, `/data` in the image), or in the file
+`--state-file` (`AZURE_EMULATOR_STATE_FILE`) names:
+
+- It loads the file at startup, before provisioning from `--config`, which
+  then updates what was restored.
+- It writes the file whenever the state changes (checked every two seconds)
+  and again when it stops on Ctrl-C or `SIGTERM` (as `docker stop` sends).
+  Each write replaces the file whole, so it is never left half-written.
+- A file it cannot read (from an incompatible version, say) is moved aside to
+  `state.json.unreadable`, and the emulator starts empty.
+
+What is kept: resource groups and every resource, role assignments and custom
+roles, deployments; storage account keys, blobs (with snapshots, leases and
+staged blocks), queues and their messages, tables and entities; Key Vault
+secrets and keys, with their key material, and deleted items; Cosmos DB
+databases, containers and items; Service Bus and Event Hubs namespaces,
+entities and keys. Not kept: messages and events in flight in Service Bus and
+Event Hubs, which start empty again.
+
+```yaml
+services:
+  azure:
+    image: ghcr.io/<owner>/azure-emulator:edge
+    environment:
+      AZURE_EMULATOR_PERSIST: "1"
+    volumes:
+      - azure-data:/data
+volumes:
+  azure-data:
 ```
 
 ### Provisioning at startup

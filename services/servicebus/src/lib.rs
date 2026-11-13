@@ -30,7 +30,7 @@ use std::sync::Arc;
 use emulator_core::arm::ArmRegistry;
 
 /// Service Bus control-plane state beyond the resources themselves.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct ServiceBusState {
     /// Lowercased namespace names in use; they are global DNS labels.
     pub(crate) namespaces: BTreeSet<String>,

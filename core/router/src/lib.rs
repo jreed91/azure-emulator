@@ -23,6 +23,7 @@ use http::Request;
 
 pub use emulator_core::Config;
 
+pub mod persist;
 pub mod provision;
 pub mod tls;
 

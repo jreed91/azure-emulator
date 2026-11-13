@@ -388,6 +388,7 @@ checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
  "num-traits",
+ "serde",
  "windows-link",
 ]
 
@@ -2224,6 +2225,7 @@ dependencies = [
  "http",
  "percent-encoding",
  "rand 0.8.8",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "uuid",
@@ -2268,6 +2270,7 @@ dependencies = [
  "rand 0.8.8",
  "rcgen",
  "rsa",
+ "serde",
  "serde_json",
  "sha1 0.10.7",
  "sha2 0.10.9",
@@ -2300,6 +2303,7 @@ dependencies = [
  "http",
  "percent-encoding",
  "rand 0.8.8",
+ "serde",
  "serde_amqp",
  "serde_bytes",
  "serde_json",
@@ -2324,6 +2328,7 @@ dependencies = [
  "md-5",
  "percent-encoding",
  "rand 0.8.8",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "uuid",

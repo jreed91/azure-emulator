@@ -83,14 +83,14 @@ class Emulator:
 
 
 @contextlib.contextmanager
-def run_emulator(home, amqps_port=None, extra_args=()):
+def run_emulator(home, amqps_port=None, extra_args=(), port=None, amqp_port=None):
     """Runs an emulator process with its state and CA in `home`, on free
-    ports (and TLS for Service Bus on `amqps_port`, if given)."""
+    ports unless they are given (and TLS for Service Bus on `amqps_port`)."""
     binary = pathlib.Path(os.environ.get("AZURE_EMULATOR_BIN", REPO / "target/debug/azure-emulator"))
     if not binary.exists():
         pytest.exit(f"emulator binary not found at {binary}; run `cargo build -p azure-emulator` first", 2)
-    port = _free_port()
-    amqp_port = _free_port()
+    port = port or _free_port()
+    amqp_port = amqp_port or _free_port()
     amqps_port = amqps_port or _free_port()
     base = f"https://localhost:{port}"
     log = open(home / f"emulator-{port}.log", "w")

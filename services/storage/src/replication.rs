@@ -28,6 +28,7 @@ use serde_json::{json, Value};
 use crate::management::require_account;
 use crate::StorageState;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct Policy {
     /// Properties as the service returns them.
     properties: Value,
@@ -37,6 +38,7 @@ pub(crate) struct Policy {
     rules: Vec<Rule>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Rule {
     id: String,
     source_container: String,

@@ -19,7 +19,7 @@ use md5::{Digest, Md5};
 
 use crate::sas::{self, Level, Needed, SasFailure};
 use crate::shared_key;
-use crate::state::{lease_state, Blob, Container, CopyInfo, Lease, LeaseState, Protection, StorageState};
+use crate::state::{lease_state, Blob, BlobType, Container, CopyInfo, Kind, Lease, LeaseState, Protection, StorageState};
 
 /// Service version reported when the request names none.
 const DEFAULT_VERSION: &str = "2021-08-06";
@@ -160,6 +160,10 @@ enum Route {
     Snapshot,
     CopyBlob,
     AbortCopy,
+    AppendBlock,
+    Seal,
+    PutPage,
+    GetPageList,
 }
 
 impl Route {
@@ -195,6 +199,10 @@ impl Route {
             ("PUT", Some("lease")) => Some(Self::LeaseBlob),
             ("PUT", Some("snapshot")) => Some(Self::Snapshot),
             ("PUT", Some("copy")) => Some(Self::AbortCopy),
+            ("PUT", Some("appendblock")) => Some(Self::AppendBlock),
+            ("PUT", Some("seal")) => Some(Self::Seal),
+            ("PUT", Some("page")) => Some(Self::PutPage),
+            ("GET", Some("pagelist")) => Some(Self::GetPageList),
             _ => None,
         }
     }
@@ -214,7 +222,9 @@ impl Route {
             Self::LeaseBlob => (Level::Object, "wd", false),
             Self::LeaseContainer => (Level::Container, "wd", false),
             Self::Snapshot | Self::CopyBlob => (Level::Object, "cw", false),
-            Self::AbortCopy => (Level::Object, "w", false),
+            Self::AbortCopy | Self::Seal | Self::PutPage => (Level::Object, "w", false),
+            Self::AppendBlock => (Level::Object, "aw", false),
+            Self::GetPageList => (Level::Object, "r", false),
         };
         Needed {
             level,
@@ -361,7 +371,7 @@ fn check_roles(engine: &Engine, account: &str, oid: &str, container: &str, blob:
         Route::ListContainers | Route::ContainerProperties => vec![Permission::Action(&read)],
         Route::CreateContainer | Route::LeaseContainer => vec![Permission::Action(&write)],
         Route::DeleteContainer => vec![Permission::Action(&delete)],
-        Route::ListBlobs | Route::GetBlob | Route::HeadBlob | Route::GetBlockList | Route::GetMetadata => {
+        Route::ListBlobs | Route::GetBlob | Route::HeadBlob | Route::GetBlockList | Route::GetMetadata | Route::GetPageList => {
             vec![Permission::Data(&blob_read)]
         }
         Route::PutBlob | Route::PutBlock | Route::PutBlockList | Route::CopyBlob if is_new() => {
@@ -375,7 +385,10 @@ fn check_roles(engine: &Engine, account: &str, oid: &str, container: &str, blob:
         | Route::CopyBlob
         | Route::AbortCopy
         | Route::LeaseBlob
-        | Route::Snapshot => {
+        | Route::Snapshot
+        | Route::AppendBlock
+        | Route::Seal
+        | Route::PutPage => {
             vec![Permission::Data(&blob_write)]
         }
         Route::DeleteBlob => vec![Permission::Data(&blob_delete)],
@@ -447,7 +460,7 @@ async fn serve(
         Route::ContainerProperties => request.container_properties(&container),
         Route::DeleteContainer => request.delete_container(&container),
         Route::ListBlobs => request.list_blobs(&container),
-        Route::PutBlob | Route::PutBlock | Route::PutBlockList => {
+        Route::PutBlob | Route::PutBlock | Route::PutBlockList | Route::AppendBlock | Route::PutPage => {
             let data = read_body(body).await.map_err(|_| {
                 error(
                     StatusCode::PAYLOAD_TOO_LARGE,
@@ -458,6 +471,8 @@ async fn serve(
             match route {
                 Route::PutBlob => request.put_blob(&container, &blob, data),
                 Route::PutBlock => request.put_block(&container, &blob, data),
+                Route::AppendBlock => request.append_block(&container, &blob, data),
+                Route::PutPage => request.put_page(&container, &blob, data),
                 _ => request.put_block_list(&container, &blob, &data),
             }
         }
@@ -468,6 +483,8 @@ async fn serve(
         Route::GetMetadata => request.get_metadata(&container, &blob),
         Route::SetMetadata => request.set_metadata(&container, &blob),
         Route::SetProperties => request.set_properties(&container, &blob),
+        Route::Seal => request.seal(&container, &blob),
+        Route::GetPageList => request.page_ranges(&container, &blob),
         Route::LeaseBlob => request.lease_blob(&container, &blob),
         Route::LeaseContainer => request.lease_container(&container),
         Route::Snapshot => request.snapshot_blob(&container, &blob),
@@ -497,6 +514,11 @@ enum BlockKind {
 /// The entries of a Put Block List body, in order:
 /// `<BlockList><Latest>id</Latest><Committed>id</Committed>...</BlockList>`.
 fn parse_block_list(text: &str) -> Option<Vec<(BlockKind, String)>> {
+    // An empty list may come self-closing: `<BlockList />`.
+    let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    if compact.ends_with("<BlockList/>") {
+        return Some(Vec::new());
+    }
     let start = text.find("<BlockList>")? + "<BlockList>".len();
     let end = text.rfind("</BlockList>")?;
     let mut rest = text.get(start..end)?;
@@ -533,6 +555,13 @@ pub(crate) fn is_valid_container_name(name: &str) -> bool {
         && bytes[0] != b'-'
         && bytes[bytes.len() - 1] != b'-'
         && !name.contains("--")
+}
+
+/// The largest page blob the emulator makes; page blobs are held in memory.
+const MAX_PAGE_BLOB: u64 = 256 * 1024 * 1024;
+
+fn invalid_blob_type() -> BlobError {
+    error(StatusCode::CONFLICT, "InvalidBlobType", "The blob type is invalid for this operation.")
 }
 
 /// `x-ms-lease-status`, `x-ms-lease-state` and, while leased, `x-ms-lease-duration`.
@@ -772,9 +801,18 @@ impl BlobRequest<'_> {
     }
 
     fn put_blob(&self, container: &str, blob: &str, data: Bytes) -> Result<Response, BlobError> {
-        match self.header("x-ms-blob-type") {
-            Some("BlockBlob") => {}
-            Some(_) => return Err(not_implemented()),
+        let invalid = || {
+            error(
+                StatusCode::BAD_REQUEST,
+                "InvalidHeaderValue",
+                "The value for one of the HTTP headers is not in the correct format.",
+            )
+        };
+        let blob_type = match self.header("x-ms-blob-type") {
+            Some("BlockBlob") => BlobType::Block,
+            Some("AppendBlob") => BlobType::Append,
+            Some("PageBlob") => BlobType::Page,
+            Some(_) => return Err(invalid()),
             None => {
                 return Err(error(
                     StatusCode::BAD_REQUEST,
@@ -782,9 +820,28 @@ impl BlobRequest<'_> {
                     "An HTTP header that's mandatory for this request is not specified.",
                 ))
             }
-        }
-        let content_md5 = STANDARD.encode(Md5::digest(&data));
-        if self.header("content-md5").is_some_and(|sent| sent != content_md5) {
+        };
+        let mut kind = Kind { blob_type, ..Kind::default() };
+        // Append and page blobs are created empty; a page blob at its full
+        // size, zeroed.
+        let data = match blob_type {
+            BlobType::Block => data,
+            _ if !data.is_empty() => return Err(invalid()),
+            BlobType::Append => data,
+            BlobType::Page => {
+                let size = self.header("x-ms-blob-content-length").and_then(|v| v.parse::<u64>().ok()).ok_or_else(invalid)?;
+                if size % 512 != 0 || size > MAX_PAGE_BLOB {
+                    return Err(invalid());
+                }
+                kind.sequence_number = self.header("x-ms-blob-sequence-number").map(str::parse).transpose().map_err(|_| invalid())?.unwrap_or(0);
+                Bytes::from(vec![0u8; size as usize])
+            }
+        };
+        let content_md5 = match blob_type {
+            BlobType::Block => STANDARD.encode(Md5::digest(&data)),
+            _ => self.header("x-ms-blob-content-md5").unwrap_or("").to_string(),
+        };
+        if blob_type == BlobType::Block && self.header("content-md5").is_some_and(|sent| sent != content_md5) {
             return Err(error(
                 StatusCode::BAD_REQUEST,
                 "Md5Mismatch",
@@ -827,6 +884,7 @@ impl BlobRequest<'_> {
             replica_of: None,
             lease: existing.and_then(|b| b.lease.clone()),
             copy: None,
+            kind,
         };
         // Put Blob discards any blocks staged for the blob.
         found.uncommitted.remove(blob);
@@ -860,6 +918,9 @@ impl BlobRequest<'_> {
         let account = state.accounts.get_mut(self.account).expect("account checked");
         let found = account.containers.get_mut(container).ok_or_else(container_not_found)?;
         self.check_lease(found.blobs.get(blob), true)?;
+        if found.blobs.get(blob).is_some_and(|b| b.kind.blob_type != BlobType::Block) {
+            return Err(invalid_blob_type());
+        }
         // Every block of a blob has an id of the same length.
         let decoded_len = |id: &str| STANDARD.decode(id).map(|d| d.len()).unwrap_or(0);
         let length = decoded_len(&id);
@@ -924,6 +985,9 @@ impl BlobRequest<'_> {
             return Err(error(StatusCode::CONFLICT, "BlobAlreadyExists", "The specified blob already exists."));
         }
         self.preconditions(existing, true)?;
+        if existing.is_some_and(|b| b.kind.blob_type != BlobType::Block) {
+            return Err(invalid_blob_type());
+        }
         // The committed blocks, as slices of the current content.
         let mut committed: Vec<(String, Bytes)> = Vec::new();
         if let Some(current) = existing {
@@ -963,6 +1027,7 @@ impl BlobRequest<'_> {
             replica_of: None,
             lease: existing.and_then(|b| b.lease.clone()),
             copy: None,
+            kind: Kind::default(),
         };
         found.uncommitted.remove(blob);
         found.blobs.insert(blob.to_string(), stored);
@@ -1077,6 +1142,9 @@ impl BlobRequest<'_> {
     }
 
     fn set_properties(&self, container: &str, blob: &str) -> Result<Response, BlobError> {
+        if self.headers.contains_key("x-ms-blob-content-length") || self.headers.contains_key("x-ms-sequence-number-action") {
+            return self.set_page_properties(container, blob);
+        }
         let content_type = self.header("x-ms-blob-content-type").unwrap_or("application/octet-stream").to_string();
         let content_md5 = self.header("x-ms-blob-content-md5").unwrap_or("").to_string();
         let content_headers = self.content_headers();
@@ -1124,7 +1192,7 @@ impl BlobRequest<'_> {
             (header::LAST_MODIFIED, http_date(found.last_modified)),
             (header::ACCEPT_RANGES, "bytes".into()),
             (name("x-ms-creation-time"), http_date(found.created)),
-            (name("x-ms-blob-type"), "BlockBlob".into()),
+            (name("x-ms-blob-type"), found.kind.blob_type.as_str().into()),
             (name("x-ms-server-encrypted"), "true".into()),
         ];
         for pair in &found.replicated_by {
@@ -1136,6 +1204,14 @@ impl BlobRequest<'_> {
             headers.push((name("x-ms-or-policy-id"), policy.clone()));
         }
         lease_headers(&mut headers, found.lease.as_ref());
+        match found.kind.blob_type {
+            BlobType::Append => {
+                headers.push((name("x-ms-blob-committed-block-count"), found.kind.append_blocks.to_string()));
+                headers.push((name("x-ms-blob-sealed"), found.kind.sealed.to_string()));
+            }
+            BlobType::Page => headers.push((name("x-ms-blob-sequence-number"), found.kind.sequence_number.to_string())),
+            BlobType::Block => {}
+        }
         if let Some(copy) = &found.copy {
             headers.push((name("x-ms-copy-id"), copy.id.clone()));
             headers.push((name("x-ms-copy-source"), copy.source.clone()));
@@ -1295,13 +1371,19 @@ impl BlobRequest<'_> {
                 out.push_str(&format!("<Snapshot>{snapshot}</Snapshot>"));
             }
             out.push_str(&format!(
-                "<Properties><Creation-Time>{}</Creation-Time><Last-Modified>{}</Last-Modified><Etag>{}</Etag><Content-Length>{}</Content-Length><Content-Type>{}</Content-Type><Content-MD5>{}</Content-MD5><BlobType>BlockBlob</BlobType><LeaseStatus>{status}</LeaseStatus><LeaseState>{state}</LeaseState>{duration}<ServerEncrypted>true</ServerEncrypted></Properties>",
+                "<Properties><Creation-Time>{}</Creation-Time><Last-Modified>{}</Last-Modified><Etag>{}</Etag><Content-Length>{}</Content-Length><Content-Type>{}</Content-Type><Content-MD5>{}</Content-MD5><BlobType>{}</BlobType>{}<LeaseStatus>{status}</LeaseStatus><LeaseState>{state}</LeaseState>{duration}<ServerEncrypted>true</ServerEncrypted></Properties>",
                 http_date(blob.created),
                 http_date(blob.last_modified),
                 xml_escape(blob.etag.trim_matches('"')),
                 blob.data.len(),
                 xml_escape(&blob.content_type),
                 blob.content_md5,
+                blob.kind.blob_type.as_str(),
+                match blob.kind.blob_type {
+                    BlobType::Page => format!("<x-ms-blob-sequence-number>{}</x-ms-blob-sequence-number>", blob.kind.sequence_number),
+                    BlobType::Append => format!("<Sealed>{}</Sealed>", blob.kind.sealed),
+                    BlobType::Block => String::new(),
+                },
             ));
             if with_metadata {
                 out.push_str("<Metadata>");
@@ -1704,6 +1786,7 @@ impl BlobRequest<'_> {
                 length: source.data.len(),
                 completed: now,
             }),
+            kind: if put_from_url { Kind::default() } else { source.kind.clone() },
         };
         found.uncommitted.remove(blob);
         found.blobs.insert(blob.to_string(), stored);
@@ -1719,6 +1802,291 @@ impl BlobRequest<'_> {
         headers.push((name("x-ms-copy-id"), copy_id));
         headers.push((name("x-ms-copy-status"), "success".into()));
         Ok(respond(StatusCode::ACCEPTED, headers, Body::empty()))
+    }
+}
+
+/// Append blobs (Append Block, Seal) and page blobs (Put Page, Get Page
+/// Ranges, resize and sequence numbers).
+impl BlobRequest<'_> {
+    /// The blob to change, checked as a write: it must exist, be of
+    /// `blob_type`, and pass the lease and conditional headers.
+    fn with_typed_blob<T>(
+        &self,
+        container: &str,
+        blob: &str,
+        blob_type: BlobType,
+        change: impl FnOnce(&mut Blob) -> Result<T, BlobError>,
+    ) -> Result<(T, String, SystemTime), BlobError> {
+        let handle = self.engine.state::<StorageState>();
+        let mut state = handle.lock();
+        let etag = state.next_etag();
+        let account = state.accounts.get_mut(self.account).expect("account checked");
+        let found = account.containers.get_mut(container).ok_or_else(container_not_found)?;
+        let existing = found.blobs.get(blob).ok_or_else(blob_not_found)?;
+        if let Some(protection) = found.protection(existing, SystemTime::now()) {
+            return Err(immutable(protection));
+        }
+        self.preconditions(Some(existing), true)?;
+        if existing.kind.blob_type != blob_type {
+            return Err(invalid_blob_type());
+        }
+        let target = found.blobs.get_mut(blob).expect("checked above");
+        let result = change(target)?;
+        let now = SystemTime::now();
+        target.etag = etag.clone();
+        target.last_modified = now;
+        Ok((result, etag, now))
+    }
+
+    /// Append Block: adds `data` at the end of an append blob.
+    fn append_block(&self, container: &str, blob: &str, data: Bytes) -> Result<Response, BlobError> {
+        let content_md5 = STANDARD.encode(Md5::digest(&data));
+        if self.header("content-md5").is_some_and(|sent| sent != content_md5) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "Md5Mismatch",
+                "The MD5 value specified in the request did not match with the MD5 value calculated by the server.",
+            ));
+        }
+        let max_size = self.header("x-ms-blob-condition-maxsize").and_then(|v| v.parse::<usize>().ok());
+        let position = self.header("x-ms-blob-condition-appendpos").and_then(|v| v.parse::<usize>().ok());
+        let ((offset, count), etag, now) = self.with_typed_blob(container, blob, BlobType::Append, |target| {
+            if target.kind.sealed {
+                return Err(error(StatusCode::CONFLICT, "BlobIsSealed", "The blob is sealed and its contents cannot be modified."));
+            }
+            let offset = target.data.len();
+            if max_size.is_some_and(|max| offset + data.len() > max) {
+                return Err(error(
+                    StatusCode::PRECONDITION_FAILED,
+                    "MaxBlobSizeConditionNotMet",
+                    "The max blob size condition specified was not met.",
+                ));
+            }
+            if position.is_some_and(|at| at != offset) {
+                return Err(error(
+                    StatusCode::PRECONDITION_FAILED,
+                    "AppendPositionConditionNotMet",
+                    "The append position condition specified was not met.",
+                ));
+            }
+            if target.kind.append_blocks >= 50_000 {
+                return Err(error(
+                    StatusCode::CONFLICT,
+                    "BlockCountExceedsLimit",
+                    "The committed block count cannot exceed the maximum limit of 50,000 blocks.",
+                ));
+            }
+            let mut content = target.data.to_vec();
+            content.extend_from_slice(&data);
+            target.data = Bytes::from(content);
+            target.content_md5.clear();
+            target.kind.append_blocks += 1;
+            Ok((offset, target.kind.append_blocks))
+        })?;
+        Ok(respond(
+            StatusCode::CREATED,
+            vec![
+                (header::ETAG, etag),
+                (header::LAST_MODIFIED, http_date(now)),
+                (name("content-md5"), content_md5),
+                (name("x-ms-blob-append-offset"), offset.to_string()),
+                (name("x-ms-blob-committed-block-count"), count.to_string()),
+                (name("x-ms-request-server-encrypted"), "true".into()),
+            ],
+            Body::empty(),
+        ))
+    }
+
+    /// Seal: an append blob that takes no more blocks.
+    fn seal(&self, container: &str, blob: &str) -> Result<Response, BlobError> {
+        let position = self.header("x-ms-blob-condition-appendpos").and_then(|v| v.parse::<usize>().ok());
+        let ((), etag, now) = self.with_typed_blob(container, blob, BlobType::Append, |target| {
+            if position.is_some_and(|at| at != target.data.len()) {
+                return Err(error(
+                    StatusCode::PRECONDITION_FAILED,
+                    "AppendPositionConditionNotMet",
+                    "The append position condition specified was not met.",
+                ));
+            }
+            target.kind.sealed = true;
+            Ok(())
+        })?;
+        Ok(respond(
+            StatusCode::OK,
+            vec![(header::ETAG, etag), (header::LAST_MODIFIED, http_date(now)), (name("x-ms-blob-sealed"), "true".into())],
+            Body::empty(),
+        ))
+    }
+
+    /// The `x-ms-range` (or `Range`) of a page operation, as whole pages:
+    /// `(first byte, last byte)`.
+    fn page_range(&self, size: usize) -> Result<(usize, usize), BlobError> {
+        let invalid = || error(StatusCode::RANGE_NOT_SATISFIABLE, "InvalidPageRange", "The page range specified is invalid.");
+        let raw = self.header("x-ms-range").or(self.header("range")).ok_or_else(invalid)?;
+        let (start, end) = raw.trim().strip_prefix("bytes=").and_then(|r| r.split_once('-')).ok_or_else(invalid)?;
+        // An open end (`bytes=0-`) runs to the end of the blob.
+        let end = match end.trim() {
+            "" => size.checked_sub(1).ok_or_else(invalid)?.to_string(),
+            given => given.to_string(),
+        };
+        let (start, end): (usize, usize) = (start.parse().map_err(|_| invalid())?, end.parse().map_err(|_| invalid())?);
+        if start % 512 != 0 || (end + 1) % 512 != 0 || end < start || end >= size {
+            return Err(invalid());
+        }
+        Ok((start, end))
+    }
+
+    /// `x-ms-if-sequence-number-le`, `-lt` and `-eq`.
+    fn check_sequence(&self, current: i64) -> Result<(), BlobError> {
+        let given = |key: &str| self.header(key).and_then(|v| v.parse::<i64>().ok());
+        let met = given("x-ms-if-sequence-number-le").is_none_or(|n| current <= n)
+            && given("x-ms-if-sequence-number-lt").is_none_or(|n| current < n)
+            && given("x-ms-if-sequence-number-eq").is_none_or(|n| current == n);
+        if met {
+            Ok(())
+        } else {
+            Err(error(
+                StatusCode::PRECONDITION_FAILED,
+                "SequenceNumberConditionNotMet",
+                "The sequence number condition specified was not met.",
+            ))
+        }
+    }
+
+    /// Put Page: writes pages (`x-ms-page-write: update`) or zeroes them (`clear`).
+    fn put_page(&self, container: &str, blob: &str, data: Bytes) -> Result<Response, BlobError> {
+        let clear = match self.header("x-ms-page-write") {
+            Some("update") => false,
+            Some("clear") => true,
+            _ => {
+                return Err(error(
+                    StatusCode::BAD_REQUEST,
+                    "InvalidHeaderValue",
+                    "The value for one of the HTTP headers is not in the correct format.",
+                ))
+            }
+        };
+        let ((sequence, md5), etag, now) = self.with_typed_blob(container, blob, BlobType::Page, |target| {
+            self.check_sequence(target.kind.sequence_number)?;
+            let (start, end) = self.page_range(target.data.len())?;
+            let length = end - start + 1;
+            if !clear && data.len() != length {
+                return Err(error(
+                    StatusCode::BAD_REQUEST,
+                    "InvalidHeaderValue",
+                    "The length of the body does not match the page range.",
+                ));
+            }
+            let mut content = target.data.to_vec();
+            match clear {
+                true => content[start..=end].fill(0),
+                false => content[start..=end].copy_from_slice(&data),
+            }
+            target.data = Bytes::from(content);
+            target.content_md5.clear();
+            for page in (start / 512) as u64..=(end / 512) as u64 {
+                if clear {
+                    target.kind.pages.remove(&page);
+                } else {
+                    target.kind.pages.insert(page);
+                }
+            }
+            Ok((target.kind.sequence_number, (!clear).then(|| STANDARD.encode(Md5::digest(&data)))))
+        })?;
+        let mut headers = vec![
+            (header::ETAG, etag),
+            (header::LAST_MODIFIED, http_date(now)),
+            (name("x-ms-blob-sequence-number"), sequence.to_string()),
+            (name("x-ms-request-server-encrypted"), "true".into()),
+        ];
+        if let Some(md5) = md5 {
+            headers.push((name("content-md5"), md5));
+        }
+        Ok(respond(StatusCode::CREATED, headers, Body::empty()))
+    }
+
+    /// Get Page Ranges: the written pages, merged into ranges.
+    fn page_ranges(&self, container: &str, blob: &str) -> Result<Response, BlobError> {
+        let found = self.find_blob(container, blob)?;
+        if found.kind.blob_type != BlobType::Page {
+            return Err(invalid_blob_type());
+        }
+        if self.query.contains_key("prevsnapshot") || self.headers.contains_key("x-ms-previous-snapshot-url") {
+            return Err(not_implemented());
+        }
+        let (from, to) = match self.header("x-ms-range").or(self.header("range")) {
+            Some(_) => {
+                let (start, end) = self.page_range(found.data.len())?;
+                ((start / 512) as u64, (end / 512) as u64)
+            }
+            None => (0, u64::MAX),
+        };
+        let mut ranges: Vec<(u64, u64)> = Vec::new();
+        for &page in found.kind.pages.range(from..=to) {
+            match ranges.last_mut() {
+                Some((_, last)) if *last + 1 == page => *last = page,
+                _ => ranges.push((page, page)),
+            }
+        }
+        let mut body = String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?><PageList>");
+        for (first, last) in ranges {
+            body.push_str(&format!("<PageRange><Start>{}</Start><End>{}</End></PageRange>", first * 512, last * 512 + 511));
+        }
+        body.push_str("</PageList>");
+        Ok(respond(
+            StatusCode::OK,
+            vec![
+                (header::CONTENT_TYPE, "application/xml".into()),
+                (header::ETAG, found.etag.clone()),
+                (header::LAST_MODIFIED, http_date(found.last_modified)),
+                (name("x-ms-blob-content-length"), found.data.len().to_string()),
+            ],
+            body,
+        ))
+    }
+
+    /// Set Blob Properties on a page blob: a new size
+    /// (`x-ms-blob-content-length`) or sequence number
+    /// (`x-ms-sequence-number-action`: `max`, `update` or `increment`).
+    fn set_page_properties(&self, container: &str, blob: &str) -> Result<Response, BlobError> {
+        let invalid = || {
+            error(
+                StatusCode::BAD_REQUEST,
+                "InvalidHeaderValue",
+                "The value for one of the HTTP headers is not in the correct format.",
+            )
+        };
+        let size = self.header("x-ms-blob-content-length").map(|v| v.parse::<u64>().map_err(|_| invalid())).transpose()?;
+        if size.is_some_and(|s| s % 512 != 0 || s > MAX_PAGE_BLOB) {
+            return Err(invalid());
+        }
+        let number = self.header("x-ms-blob-sequence-number").map(|v| v.parse::<i64>().map_err(|_| invalid())).transpose()?;
+        let action = self.header("x-ms-sequence-number-action").map(str::to_ascii_lowercase);
+        let (sequence, etag, now) = self.with_typed_blob(container, blob, BlobType::Page, |target| {
+            if let Some(size) = size {
+                let mut content = target.data.to_vec();
+                content.resize(size as usize, 0);
+                target.data = Bytes::from(content);
+                target.kind.pages.retain(|page| (page + 1) * 512 <= size);
+            }
+            target.kind.sequence_number = match (action.as_deref(), number) {
+                (None, _) => target.kind.sequence_number,
+                (Some("max"), Some(n)) => target.kind.sequence_number.max(n),
+                (Some("update"), Some(n)) => n,
+                (Some("increment"), None) => target.kind.sequence_number + 1,
+                _ => return Err(invalid()),
+            };
+            Ok(target.kind.sequence_number)
+        })?;
+        Ok(respond(
+            StatusCode::OK,
+            vec![
+                (header::ETAG, etag),
+                (header::LAST_MODIFIED, http_date(now)),
+                (name("x-ms-blob-sequence-number"), sequence.to_string()),
+            ],
+            Body::empty(),
+        ))
     }
 }
 
@@ -1746,6 +2114,7 @@ mod tests {
             replica_of: None,
             lease: None,
             copy: None,
+            kind: Kind::default(),
         };
         // A snapshot taken in the same instant as the last one still sorts after it.
         let latest = snapshot_time(None);

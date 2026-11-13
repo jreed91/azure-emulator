@@ -32,6 +32,7 @@ const BACKUP_MARKER: &str = "azure-emulator-certificate-backup-v1";
 const PKCS12: &str = "application/x-pkcs12";
 const PEM: &str = "application/x-pem-file";
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct Certificate {
     name: String,
     /// Oldest first; the last one is the current version.
@@ -42,7 +43,7 @@ pub(crate) struct Certificate {
     operation: Option<Operation>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct CertificateVersion {
     version: String,
     der: Vec<u8>,
@@ -56,9 +57,11 @@ struct CertificateVersion {
     expires: i64,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Operation {
     /// `inProgress`, `completed` or `cancelled`.
-    status: &'static str,
+    #[serde(deserialize_with = "status")]
+    status: Status,
     issuer: String,
     /// The version the operation makes, and its key while it is pending.
     version: String,
@@ -71,11 +74,25 @@ struct Operation {
 }
 
 /// A deleted certificate, with the key and secret it took with it.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct DeletedCertificate {
     certificate: Certificate,
     key: Option<Key>,
     secret: Option<Secret>,
     deleted: i64,
+}
+
+/// A status: an alias, so serde does not take the field for borrowed text.
+type Status = &'static str;
+
+/// An operation's status read back from a snapshot, as the one of the
+/// known statuses it names.
+fn status<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<&'static str, D::Error> {
+    let text = <String as serde::Deserialize>::deserialize(deserializer)?;
+    ["inProgress", "completed", "cancelled"]
+        .into_iter()
+        .find(|known| *known == text)
+        .ok_or_else(|| serde::de::Error::custom(format!("unknown operation status {text}")))
 }
 
 pub(crate) enum Answer {
