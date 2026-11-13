@@ -147,3 +147,144 @@ async fn instances_are_isolated() {
     let reply = call(&second, &auth, Method::GET, "/secrets/only-here", None).await;
     assert_eq!(reply.status, StatusCode::NOT_FOUND);
 }
+
+fn vault_body(client: &Client, extra: Value) -> Value {
+    let mut body = json!({
+        "location": "eastus",
+        "tags": {"team": "payments"},
+        "properties": {"tenantId": client.config().tenant_id, "sku": {"family": "A", "name": "standard"}},
+    });
+    for (key, value) in extra.as_object().unwrap() {
+        body["properties"][key] = value.clone();
+    }
+    body
+}
+
+#[tokio::test]
+async fn vaults_are_soft_deleted_and_recoverable() {
+    let (client, auth) = vault_client().await;
+    call(&client, &auth, Method::PUT, "/secrets/kept", Some(json!({"value": "still here"}))).await;
+    assert_eq!(client.arm(Method::DELETE, &vault_path("demo-vault"), None).await.status, StatusCode::OK);
+
+    // The deleted vault is listed, and addressable by the location it lived in.
+    let listed = client
+        .arm(Method::GET, &format!("{SUB}/providers/Microsoft.KeyVault/deletedVaults?api-version=2023-07-01"), None)
+        .await
+        .json();
+    let deleted = &listed["value"][0];
+    assert_eq!(deleted["name"], "Demo-Vault");
+    assert_eq!(deleted["type"], "Microsoft.KeyVault/deletedVaults");
+    assert_eq!(deleted["properties"]["location"], "eastus");
+    assert!(deleted["properties"]["scheduledPurgeDate"].as_str().unwrap() > deleted["properties"]["deletionDate"].as_str().unwrap());
+    let one = |location: &str| {
+        format!("{SUB}/providers/Microsoft.KeyVault/locations/{location}/deletedVaults/demo-vault?api-version=2023-07-01")
+    };
+    assert_eq!(client.arm(Method::GET, &one("eastus"), None).await.status, StatusCode::OK);
+    assert_eq!(client.arm(Method::GET, &one("westus"), None).await.status, StatusCode::NOT_FOUND);
+
+    // The name stays taken until the vault is recovered or purged.
+    let check = format!("{SUB}/providers/Microsoft.KeyVault/checkNameAvailability?api-version=2023-07-01");
+    let reply = client.arm(Method::POST, &check, Some(json!({"name": "demo-vault"}))).await;
+    assert_eq!(reply.json()["nameAvailable"], false);
+    let reply = client.arm(Method::PUT, &vault_path("demo-vault"), Some(vault_body(&client, json!({})))).await;
+    assert_eq!(reply.status, StatusCode::CONFLICT);
+    assert_eq!(reply.error_code(), "ConflictError");
+
+    // Recovery restores the settings and the contents.
+    let reply = client
+        .arm(Method::PUT, &vault_path("demo-vault"), Some(vault_body(&client, json!({"createMode": "recover"}))))
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(reply.json()["properties"]["enableRbacAuthorization"], true);
+    assert!(reply.json()["properties"].get("createMode").is_none());
+    assert_eq!(call(&client, &auth, Method::GET, "/secrets/kept", None).await.json()["value"], "still here");
+    assert_eq!(client.arm(Method::GET, &one("eastus"), None).await.status, StatusCode::NOT_FOUND);
+
+    // Purging frees the name and drops the contents for good.
+    client.arm(Method::DELETE, &vault_path("demo-vault"), None).await;
+    let purge = one("eastus").replace("?", "/purge?");
+    assert_eq!(client.arm(Method::POST, &purge, None).await.status, StatusCode::OK);
+    assert_eq!(client.arm(Method::POST, &purge, None).await.status, StatusCode::NOT_FOUND);
+    let reply = client.arm(Method::POST, &check, Some(json!({"name": "demo-vault"}))).await;
+    assert_eq!(reply.json()["nameAvailable"], true);
+    let reply = client.arm(Method::PUT, &vault_path("demo-vault"), Some(vault_body(&client, json!({})))).await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(call(&client, &auth, Method::GET, "/secrets/kept", None).await.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn access_policy_updates() {
+    let (client, _) = vault_client().await;
+    let update = |kind: &str| vault_path(&format!("demo-vault/accessPolicies/{kind}"));
+    let policy = |secrets: Value| {
+        json!({"properties": {"accessPolicies": [{
+            "tenantId": client.config().tenant_id,
+            "objectId": "aaaaaaaa-0000-0000-0000-000000000001",
+            "permissions": {"secrets": secrets},
+        }]}})
+    };
+    let stored = |reply: &Reply| reply.json()["properties"]["accessPolicies"].clone();
+
+    let reply = client.arm(Method::PUT, &update("add"), Some(policy(json!(["get"])))).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(reply.json()["type"], "Microsoft.KeyVault/vaults/accessPolicies");
+    // Adding again grants the union; the vault resource reflects it.
+    let reply = client.arm(Method::PUT, &update("add"), Some(policy(json!(["list", "GET"])))).await;
+    assert_eq!(stored(&reply)[0]["permissions"]["secrets"], json!(["get", "list"]));
+    let vault = client.arm(Method::GET, &vault_path("demo-vault"), None).await.json();
+    assert_eq!(vault["properties"]["accessPolicies"][0]["permissions"]["secrets"], json!(["get", "list"]));
+
+    let reply = client.arm(Method::PUT, &update("replace"), Some(policy(json!(["set"])))).await;
+    assert_eq!(stored(&reply)[0]["permissions"]["secrets"], json!(["set"]));
+    let reply = client.arm(Method::PUT, &update("add"), Some(policy(json!(["get"])))).await;
+    let reply_remove = client.arm(Method::PUT, &update("remove"), Some(policy(json!(["set"])))).await;
+    assert_eq!(stored(&reply)[0]["permissions"]["secrets"], json!(["set", "get"]));
+    assert_eq!(stored(&reply_remove)[0]["permissions"]["secrets"], json!(["get"]));
+    // Removing the last permission removes the policy.
+    let reply = client.arm(Method::PUT, &update("remove"), Some(policy(json!(["get"])))).await;
+    assert_eq!(stored(&reply), json!([]));
+
+    assert_eq!(client.arm(Method::PUT, &update("merge"), Some(policy(json!(["get"])))).await.status, StatusCode::BAD_REQUEST);
+    let missing = vault_path("no-such-vault/accessPolicies/add");
+    assert_eq!(client.arm(Method::PUT, &missing, Some(policy(json!(["get"])))).await.error_code(), "ResourceNotFound");
+}
+
+#[tokio::test]
+async fn secrets_are_one_store_seen_from_both_planes() {
+    let (client, auth) = vault_client().await;
+    let secret = |name: &str| vault_path(&format!("demo-vault/secrets/{name}"));
+
+    // Created through Resource Manager, readable on the data plane.
+    let reply = client
+        .arm(Method::PUT, &secret("api-key"), Some(json!({"tags": {"env": "test"}, "properties": {"value": "from-arm", "contentType": "text/plain"}})))
+        .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.text());
+    let created = reply.json();
+    assert_eq!(created["type"], "Microsoft.KeyVault/vaults/secrets");
+    assert_eq!(created["properties"]["secretUri"], "https://demo-vault.vault.azure.localhost:10443/secrets/api-key");
+    assert!(created["properties"].get("value").is_none(), "Resource Manager never returns the value");
+    assert!(created["properties"]["attributes"].get("recoveryLevel").is_none());
+    assert_eq!(call(&client, &auth, Method::GET, "/secrets/api-key", None).await.json()["value"], "from-arm");
+
+    // Created on the data plane, visible through Resource Manager.
+    call(&client, &auth, Method::PUT, "/secrets/db-password", Some(json!({"value": "from-data-plane"}))).await;
+    let listed = client.arm(Method::GET, &secret("").replace("/secrets/?", "/secrets?"), None).await.json();
+    let names: Vec<&str> = listed["value"].as_array().unwrap().iter().map(|s| s["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["api-key", "db-password"]);
+
+    // An update without a value edits the current version; with one, it adds a version.
+    let reply = client.arm(Method::PATCH, &secret("api-key"), Some(json!({"properties": {"attributes": {"enabled": false}}}))).await;
+    assert_eq!(reply.json()["properties"]["attributes"]["enabled"], false);
+    assert_eq!(reply.json()["properties"]["secretUriWithVersion"], created["properties"]["secretUriWithVersion"]);
+    assert_eq!(call(&client, &auth, Method::GET, "/secrets/api-key", None).await.status, StatusCode::FORBIDDEN);
+    let reply = client.arm(Method::PUT, &secret("api-key"), Some(json!({"properties": {"value": "rotated"}}))).await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_ne!(reply.json()["properties"]["secretUriWithVersion"], created["properties"]["secretUriWithVersion"]);
+    let versions = call(&client, &auth, Method::GET, "/secrets/api-key/versions", None).await.json();
+    assert_eq!(versions["value"].as_array().unwrap().len(), 2);
+
+    assert_eq!(client.arm(Method::GET, &secret("missing"), None).await.error_code(), "SecretNotFound");
+    assert_eq!(client.arm(Method::PUT, &secret("no-value"), Some(json!({"properties": {}}))).await.status, StatusCode::BAD_REQUEST);
+    let orphan = vault_path("no-such-vault/secrets/x");
+    assert_eq!(client.arm(Method::GET, &orphan, None).await.error_code(), "ResourceNotFound");
+}

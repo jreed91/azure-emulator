@@ -1,9 +1,15 @@
 //! Azure Key Vault: the `Microsoft.KeyVault/vaults` resource type on Resource Manager
 //! and the secrets data plane on `{vault}.vault.<suffix>`.
 //!
-//! Not implemented yet: keys, certificates, vault soft-delete, and data-plane
-//! authorization (access policies and RBAC are stored but not enforced).
+//! Vaults are soft-deleted: a deleted vault keeps its name and contents until it is
+//! recovered (`createMode: recover`) or purged. Secrets are reachable through both
+//! planes and share one store.
+//!
+//! Not implemented yet: keys, certificates, managed HSMs, private endpoints, and
+//! data-plane authorization (access policies and RBAC are stored but not
+//! enforced). Purge protection is stored but does not block a purge.
 
+mod management;
 pub mod scaffold;
 pub mod secrets;
 
@@ -22,6 +28,17 @@ const RESOURCE_TYPE: &str = "Microsoft.KeyVault/vaults";
 #[derive(Default)]
 pub struct KeyVaultState {
     pub(crate) vaults: BTreeMap<String, Vault>,
+    /// Soft-deleted vaults, keyed the same way. Their names stay taken.
+    pub(crate) deleted: BTreeMap<String, DeletedVault>,
+}
+
+/// A vault between deletion and recovery or purge.
+pub(crate) struct DeletedVault {
+    /// The vault resource as it was when deleted.
+    pub resource: Resource,
+    pub deletion_date: String,
+    pub scheduled_purge_date: String,
+    pub data: Vault,
 }
 
 /// Mounts the Key Vault resource provider on Resource Manager.
@@ -31,6 +48,7 @@ pub fn register(registry: &mut ArmRegistry) {
         "Microsoft.KeyVault/checkNameAvailability",
         Arc::new(check_name_availability),
     );
+    management::register(registry);
     // Everything else in the specification is mounted as a 501 stub.
     registry.register_scaffold(&scaffold::PROVIDER);
 }
@@ -78,25 +96,67 @@ impl ResourceTypeHandler for Vaults {
         let state = ctx.engine.state::<KeyVaultState>();
         let mut state = state.lock();
         let key = name.to_ascii_lowercase();
+        let recover = requested.and_then(|p| p.get("createMode")).and_then(Value::as_str) == Some("recover");
+        let mut recovered = None;
         if request.existing.is_none() {
             if state.vaults.contains_key(&key) {
                 return Err(ArmError::conflict("VaultAlreadyExists", taken_message(name)));
             }
-            state.vaults.insert(key, Vault::default());
+            match (state.deleted.contains_key(&key), recover) {
+                (true, true) => {
+                    // Recovery brings back the vault's settings and its contents.
+                    let deleted = state.deleted.remove(&key).expect("checked above");
+                    state.vaults.insert(key, deleted.data);
+                    recovered = Some(deleted.resource.properties);
+                }
+                (true, false) => {
+                    return Err(ArmError::conflict(
+                        "ConflictError",
+                        format!("A vault with the same name already exists in deleted state. You need to either recover or purge existing key vault. Follow this link https://go.microsoft.com/fwlink/?linkid=2149745 for more information on soft delete. (vault: {name})"),
+                    ));
+                }
+                (false, _) => {
+                    state.vaults.insert(key, Vault::default());
+                }
+            }
         }
 
-        let mut properties = Value::Object(requested.cloned().unwrap_or_default());
+        let mut properties = match recovered {
+            Some(properties) => properties,
+            None => Value::Object(requested.cloned().unwrap_or_default()),
+        };
+        // `createMode` is an instruction, not a setting: it is never stored.
+        if let Some(members) = properties.as_object_mut() {
+            members.remove("createMode");
+        }
         properties["vaultUri"] = json!(ctx.engine.config().vault_uri(&name.to_ascii_lowercase()));
         properties["provisioningState"] = json!("Succeeded");
         Ok(properties)
     }
 
     fn deleted(&self, ctx: &ArmContext<'_>, resource: &Resource) {
-        ctx.engine
-            .state::<KeyVaultState>()
-            .lock()
-            .vaults
-            .remove(&resource.name.to_ascii_lowercase());
+        let key = resource.name.to_ascii_lowercase();
+        let state = ctx.engine.state::<KeyVaultState>();
+        let mut state = state.lock();
+        let Some(data) = state.vaults.remove(&key) else {
+            return;
+        };
+        let retention_days = resource
+            .properties
+            .get("softDeleteRetentionInDays")
+            .and_then(Value::as_i64)
+            .unwrap_or(90);
+        let now = chrono::Utc::now();
+        let render = |time: chrono::DateTime<chrono::Utc>| time.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        state.deleted.insert(
+            key,
+            DeletedVault {
+                resource: resource.clone(),
+                deletion_date: render(now),
+                scheduled_purge_date: render(now + chrono::Duration::days(retention_days)),
+                data,
+            },
+        );
     }
 }
 
@@ -114,12 +174,13 @@ fn check_name_availability(ctx: &ArmContext<'_>, body: &Value) -> Result<Value, 
             "message": invalid_name_message(name),
         }));
     }
-    let taken = ctx
-        .engine
-        .state::<KeyVaultState>()
-        .lock()
-        .vaults
-        .contains_key(&name.to_ascii_lowercase());
+    let taken = {
+        let state = ctx.engine.state::<KeyVaultState>();
+        let state = state.lock();
+        let key = name.to_ascii_lowercase();
+        // A soft-deleted vault still holds its name.
+        state.vaults.contains_key(&key) || state.deleted.contains_key(&key)
+    };
     Ok(if taken {
         json!({"nameAvailable": false, "reason": "AlreadyExists", "message": taken_message(name)})
     } else {

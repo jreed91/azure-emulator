@@ -54,6 +54,92 @@ struct DeletedSecret {
     deleted_date: i64,
 }
 
+/// A secret's current version as the Resource Manager API presents it: never the
+/// value, only what describes it.
+pub(crate) struct SecretSummary {
+    pub name: String,
+    pub version: String,
+    pub content_type: Option<Value>,
+    pub tags: Option<Value>,
+    /// `enabled`, `created`, `updated` and, when set, `nbf` and `exp`.
+    pub attributes: Value,
+}
+
+impl Vault {
+    /// Stores a new version of `name`. `body` carries the optional `contentType`,
+    /// `tags` and `attributes` in the data plane's shape. Returns whether the
+    /// secret is new.
+    pub(crate) fn add_version(&mut self, name: &str, value: &str, body: &Value) -> Result<bool, ArmError> {
+        let key = name.to_ascii_lowercase();
+        if self.deleted.contains_key(&key) {
+            return Err(ArmError::conflict(
+                "Conflict",
+                format!("Secret {name} is currently in a deleted but recoverable state, and its name cannot be reused; in this state, the secret can only be recovered or purged."),
+            ));
+        }
+        let created = now();
+        let mut version = SecretVersion {
+            version: uuid::Uuid::new_v4().simple().to_string(),
+            value: value.to_string(),
+            content_type: None,
+            tags: None,
+            enabled: true,
+            not_before: None,
+            expires: None,
+            created,
+            updated: created,
+        };
+        version.apply(body);
+        let is_new = !self.secrets.contains_key(&key);
+        let secret = self.secrets.entry(key).or_insert_with(|| Secret {
+            name: name.to_string(),
+            versions: Vec::new(),
+        });
+        secret.versions.push(version);
+        Ok(is_new)
+    }
+
+    /// Applies `body` (data-plane shape) to the current version of `name`.
+    /// Returns `false` if there is no such secret.
+    pub(crate) fn update_current(&mut self, name: &str, body: &Value) -> bool {
+        let Some(current) = self
+            .secrets
+            .get_mut(&name.to_ascii_lowercase())
+            .and_then(|secret| secret.versions.last_mut())
+        else {
+            return false;
+        };
+        current.apply(body);
+        current.updated = now();
+        true
+    }
+
+    fn summarize(secret: &Secret) -> Option<SecretSummary> {
+        let current = secret.versions.last()?;
+        let mut attributes = current.attributes();
+        // Recovery settings belong to the data plane's view only.
+        if let Some(members) = attributes.as_object_mut() {
+            members.remove("recoveryLevel");
+            members.remove("recoverableDays");
+        }
+        Some(SecretSummary {
+            name: secret.name.clone(),
+            version: current.version.clone(),
+            content_type: current.content_type.clone(),
+            tags: current.tags.clone(),
+            attributes,
+        })
+    }
+
+    pub(crate) fn summary(&self, name: &str) -> Option<SecretSummary> {
+        Self::summarize(self.secrets.get(&name.to_ascii_lowercase())?)
+    }
+
+    pub(crate) fn summaries(&self) -> Vec<SecretSummary> {
+        self.secrets.values().filter_map(Self::summarize).collect()
+    }
+}
+
 fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -170,31 +256,8 @@ impl SecretRequest<'_> {
             ArmError::bad_request("BadParameter", "The property 'value' is required.")
         })?;
         self.with_vault(|vault| {
-            let key = name.to_ascii_lowercase();
-            if vault.deleted.contains_key(&key) {
-                return Err(ArmError::conflict(
-                    "Conflict",
-                    format!("Secret {name} is currently in a deleted but recoverable state, and its name cannot be reused; in this state, the secret can only be recovered or purged."),
-                ));
-            }
-            let created = now();
-            let mut version = SecretVersion {
-                version: uuid::Uuid::new_v4().simple().to_string(),
-                value: value.to_string(),
-                content_type: None,
-                tags: None,
-                enabled: true,
-                not_before: None,
-                expires: None,
-                created,
-                updated: created,
-            };
-            version.apply(self.body);
-            let secret = vault.secrets.entry(key).or_insert_with(|| Secret {
-                name: name.to_string(),
-                versions: Vec::new(),
-            });
-            secret.versions.push(version);
+            vault.add_version(name, value, self.body)?;
+            let secret = &vault.secrets[&name.to_ascii_lowercase()];
             Ok(self.bundle(&secret.name, secret.versions.last().expect("just pushed"), true, true))
         })
     }
