@@ -284,6 +284,9 @@ pub struct ScaffoldedType {
     pub resource_type: &'static str,
     /// Every `api-version` the type is defined in.
     pub api_versions: &'static [&'static str],
+    /// The rules for the type's name and its `PUT` body, as JSON, for
+    /// [`ArmRegistry::register_generic`]. `None` when the type has no `PUT`.
+    pub schema: Option<&'static str>,
     pub operations: &'static [ScaffoldedOperation],
 }
 
@@ -304,7 +307,10 @@ pub struct OperationCoverage {
     /// `None` for provider-level operations.
     pub resource_type: Option<&'static str>,
     pub operation: &'static ScaffoldedOperation,
+    /// Served by behaviour written for the type.
     pub implemented: bool,
+    /// Served from the specification's schema alone ([`ArmRegistry::register_generic`]).
+    pub generic: bool,
 }
 
 /// A child resource type that only Microsoft.Network creates: private endpoint
@@ -359,6 +365,8 @@ pub struct ArmRegistry {
     operations: HashMap<&'static str, OperationHandler>,
     /// Lowercased types served by a [`ScaffoldStub`].
     stubs: HashSet<String>,
+    /// Lowercased types served by a [`crate::schema::SchemaResource`].
+    generic: HashSet<String>,
     /// Lowercased type → the `api-version`s its specification defines.
     api_versions: HashMap<String, &'static [&'static str]>,
 }
@@ -372,6 +380,34 @@ impl ArmRegistry {
         let key = handler.resource_type().to_ascii_lowercase();
         self.stubs.remove(&key);
         self.types.insert(key, Arc::new(handler));
+    }
+
+    /// Serves each of `types` from the provider's schema alone
+    /// ([`crate::schema::SchemaResource`]). Opt in only for types whose real
+    /// behaviour is storing configuration: the generic handler enforces what the
+    /// specification says and nothing more. `coverage` reports these as generic,
+    /// never as implemented. Call before [`ArmRegistry::register_scaffold`].
+    ///
+    /// Panics if a type is not in the provider, has no `PUT` schema, or already
+    /// has a handler: all three are mistakes in the registration code.
+    pub fn register_generic(&mut self, provider: &'static ScaffoldedProvider, types: &[&str]) {
+        for wanted in types {
+            let kind = provider
+                .types
+                .iter()
+                .find(|kind| kind.resource_type.eq_ignore_ascii_case(wanted))
+                .unwrap_or_else(|| panic!("{wanted} is not a type of {}", provider.namespace));
+            let schema: Value = kind
+                .schema
+                .and_then(|text| serde_json::from_str(text).ok())
+                .unwrap_or_else(|| panic!("{wanted} has no PUT schema to serve it from"));
+            let key = kind.resource_type.to_ascii_lowercase();
+            assert!(!self.types.contains_key(&key) || self.stubs.contains(&key), "{wanted} already has a handler");
+            self.stubs.remove(&key);
+            self.types
+                .insert(key.clone(), Arc::new(crate::schema::SchemaResource::new(kind.resource_type, &schema)));
+            self.generic.insert(key);
+        }
     }
 
     /// Mounts a provider's modeled surface. Types that already have a handler keep
@@ -394,8 +430,18 @@ impl ArmRegistry {
         for provider in &self.scaffolds {
             for kind in provider.types {
                 let key = kind.resource_type.to_ascii_lowercase();
-                let handler = self.types.get(&key).filter(|_| !self.stubs.contains(&key));
+                let is_generic = self.generic.contains(&key);
+                let handler = self
+                    .types
+                    .get(&key)
+                    .filter(|_| !self.stubs.contains(&key) && !is_generic);
                 for operation in kind.operations {
+                    let generic = is_generic
+                        && !self.operations.contains_key(operation.id)
+                        && !matches!(
+                            operation.kind,
+                            OperationKind::Action(_) | OperationKind::ProviderAction(_) | OperationKind::Other
+                        );
                     let implemented = self.operations.contains_key(operation.id)
                         || match (handler, operation.kind) {
                             (None, _) | (_, OperationKind::Other | OperationKind::ProviderAction(_)) => false,
@@ -409,6 +455,7 @@ impl ArmRegistry {
                         resource_type: Some(kind.resource_type),
                         operation,
                         implemented,
+                        generic,
                     });
                 }
             }
@@ -425,6 +472,7 @@ impl ArmRegistry {
                     resource_type: None,
                     operation,
                     implemented,
+                    generic: false,
                 });
             }
         }

@@ -29,6 +29,18 @@ pub fn register(registry: &mut ArmRegistry) {
         "Microsoft.Storage/checkNameAvailability",
         Arc::new(check_name_availability),
     );
+    // Configuration-only types: the specification's rules are their behaviour.
+    registry.register_generic(
+        &scaffold::PROVIDER,
+        &[
+            "Microsoft.Storage/contextCaches",
+            "Microsoft.Storage/contextCaches/contextCacheContainers",
+            "Microsoft.Storage/storageAccounts/blobAccessPointConfigurations",
+            "Microsoft.Storage/storageAccounts/advancedPlatformMetrics",
+            "Microsoft.Storage/storageAccounts/connectors",
+            "Microsoft.Storage/storageAccounts/dataShares",
+        ],
+    );
     management::register(registry);
     protection::register(registry);
     // Everything else in the specification is mounted as a 501 stub.

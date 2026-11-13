@@ -13,7 +13,8 @@ USAGE:
 
 COMMANDS:
     coverage               Print how much of each provider's API specification is
-                           implemented; --operations lists every operation
+                           implemented, served generically from the schema, or
+                           answered with 501; --operations lists every operation
 
 OPTIONS:
     -p, --port <PORT>      Port to listen on [env: AZURE_EMULATOR_PORT] [default: 10443]
@@ -30,7 +31,8 @@ fn fail(message: impl std::fmt::Display) -> ! {
 }
 
 /// Prints, per provider, how many modeled resource types and operations are
-/// implemented rather than answered with 501.
+/// implemented, how many are served generically from the schema, and how many
+/// answer 501.
 fn print_coverage(list_operations: bool) {
     use std::collections::{BTreeMap, BTreeSet};
     let coverage = Emulator::new(Config::default()).coverage();
@@ -38,52 +40,60 @@ fn print_coverage(list_operations: bool) {
     struct Totals<'a> {
         types: BTreeSet<&'a str>,
         implemented_types: BTreeSet<&'a str>,
+        generic_types: BTreeSet<&'a str>,
         operations: usize,
         implemented: usize,
+        generic: usize,
     }
     let mut providers: BTreeMap<&str, Totals> = BTreeMap::new();
     for entry in &coverage {
         let totals = providers.entry(entry.namespace).or_default();
         totals.operations += 1;
         totals.implemented += usize::from(entry.implemented);
+        totals.generic += usize::from(entry.generic);
         if let Some(kind) = entry.resource_type {
             totals.types.insert(kind);
             // A type counts once any of its operations works.
             if entry.implemented {
                 totals.implemented_types.insert(kind);
+            } else if entry.generic {
+                totals.generic_types.insert(kind);
             }
         }
     }
-    println!("{:<34} {:>12} {:>14}", "Provider", "Types", "Operations");
-    let (mut types, mut done_types, mut operations, mut done) = (0, 0, 0, 0);
+    let row = |name: &str, types: String, operations: String, generic: String| {
+        println!("{name:<30} {types:>9} {operations:>12} {generic:>9}");
+    };
+    row("Provider", "Types".into(), "Operations".into(), "Generic".into());
+    let mut all = Totals::default();
     for (namespace, totals) in &providers {
-        println!(
-            "{:<34} {:>12} {:>14}",
+        row(
             namespace,
             format!("{}/{}", totals.implemented_types.len(), totals.types.len()),
-            format!("{}/{}", totals.implemented, totals.operations)
+            format!("{}/{}", totals.implemented, totals.operations),
+            totals.generic.to_string(),
         );
-        types += totals.types.len();
-        done_types += totals.implemented_types.len();
-        operations += totals.operations;
-        done += totals.implemented;
+        all.types.extend(&totals.types);
+        all.implemented_types.extend(&totals.implemented_types);
+        all.operations += totals.operations;
+        all.implemented += totals.implemented;
+        all.generic += totals.generic;
     }
-    println!(
-        "{:<34} {:>12} {:>14}",
+    row(
         "Total",
-        format!("{done_types}/{types}"),
-        format!("{done}/{operations}")
+        format!("{}/{}", all.implemented_types.len(), all.types.len()),
+        format!("{}/{}", all.implemented, all.operations),
+        all.generic.to_string(),
     );
     if list_operations {
         println!();
         for entry in &coverage {
-            println!(
-                "{}  {:<6} {}  ({})",
-                if entry.implemented { "ok  " } else { "501 " },
-                entry.operation.method,
-                entry.operation.path,
-                entry.operation.id
-            );
+            let status = match (entry.implemented, entry.generic) {
+                (true, _) => "ok     ",
+                (false, true) => "generic",
+                (false, false) => "501    ",
+            };
+            println!("{status}  {:<6} {}  ({})", entry.operation.method, entry.operation.path, entry.operation.id);
         }
     }
 }

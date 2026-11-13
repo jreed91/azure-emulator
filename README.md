@@ -29,18 +29,22 @@ Service Bus specifications is mounted from a generated scaffold and answers `501
 until someone implements it. `azure-emulator coverage` prints the current score:
 
 ```
-Provider                                  Types     Operations
-Microsoft.KeyVault                        12/16          40/51
-Microsoft.ManagedIdentity                   2/2          10/14
-Microsoft.ServiceBus                      19/21          83/91
-Microsoft.Storage                         17/32         89/153
-Total                                     50/71        222/309
+Provider                           Types   Operations   Generic
+Microsoft.KeyVault                 12/16        40/51         0
+Microsoft.ManagedIdentity            2/2        10/14         0
+Microsoft.ServiceBus               19/21        83/91         0
+Microsoft.Storage                  17/32       89/153        30
+Total                              50/71      222/309        30
 ```
 
 Private endpoint connections and network security perimeter configurations
 count as implemented: they are created only by Microsoft.Network, which the
 emulator does not model, so they answer as they would in a subscription without
 it (empty listings, `404` for any single one).
+
+"Generic" counts operations on configuration-only types served from the
+specification's schema alone (see *Serving a type from its schema* below); they
+are not in the implemented count.
 
 That score counts control-plane (Resource Manager) operations only; data planes
 such as Blob and Key Vault secrets are not in it. Add `--operations` to list every
@@ -202,6 +206,38 @@ deletion and cascade. To implement a type, write a `ResourceTypeHandler` for it
 before the scaffold. `CONTRACT.md` says what the type's body and name must look
 like. `services/managedidentity/src/lib.rs` is a small complete example, and
 `azure-emulator coverage` shows the operations move from `501` to `ok`.
+
+### Serving a type from its schema
+
+Many resource types are configuration objects: their behaviour is accepting
+valid settings, storing them and returning them. For those, writing a handler is
+unnecessary. The scaffolder emits each type's request schema into
+`src/scaffold.rs`, and listing the type in `registry.register_generic` serves it
+from that schema alone:
+
+- the name is checked against the path parameter's length and pattern;
+- `properties` is checked for types, closed enums, bounds, patterns and
+  required members; spec defaults are filled in on creation;
+- read-only members are dropped from requests, and members the spec fixes at
+  creation (`x-ms-mutability`) cannot change afterwards;
+- `provisioningState` is `Succeeded`, and read-only ids and creation and
+  modification times are set; other read-only values are left out rather than
+  invented.
+
+Actions on these types stay `501`, and `coverage` reports them as generic, not
+implemented. Opt a type in only when storing its configuration really is all the
+service does with it; a type with side effects or cross-resource references needs
+a handler. `services/storage/src/lib.rs` lists the types served this way.
+
+### Checking against the specification's examples
+
+The scaffolder also extracts every create example the specification gives into
+`spec-examples.json`. `core/router/tests/all/spec_examples.rs` replays each one
+for every type the emulator serves, creating parent resources from their own
+examples, and checks the status and that every setting sent comes back. Examples
+known to fail are listed, with the reason, in
+`core/router/spec-examples-known-failures.txt`; the test fails on any other
+failure and on a listed example that starts passing.
 
 An operation the generic routing cannot express (location- or tenant-scoped, or
 a type whose data lives in a service's own state) is implemented by its

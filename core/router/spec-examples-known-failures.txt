@@ -1,0 +1,15 @@
+# Specification examples the emulator is known not to pass, one per line:
+#   <operationId> / <example title> -- <why>
+# The spec-example test fails if one of these starts passing, so remove it then.
+
+# Private endpoint connections are created by Microsoft.Network, which the
+# emulator does not model; a PUT can only update one, so these answer 404.
+PrivateEndpointConnections_Put / StorageAccountPutPrivateEndpointConnection -- created only by Microsoft.Network
+PrivateEndpointConnections_Put / KeyVaultPutPrivateEndpointConnection -- created only by Microsoft.Network
+MHSMPrivateEndpointConnections_Put / ManagedHsmPutPrivateEndpointConnection -- created only by Microsoft.Network
+PrivateEndpointConnections_CreateOrUpdate / NameSpacePrivateEndPointConnectionCreate -- created only by Microsoft.Network
+
+# The example names a partner or target namespace it never creates, and the
+# emulator refuses to pair with one that does not exist.
+DisasterRecoveryConfigs_CreateOrUpdate / SBAliasCreate -- the partner namespace in the example does not exist
+MigrationConfigs_CreateAndStartMigration / MigrationConfigurationsStartMigration -- the target namespace in the example does not exist

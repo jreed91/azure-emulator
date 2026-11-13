@@ -29,7 +29,147 @@ fn operation_literal(operation: &Operation) -> String {
     )
 }
 
+/// A raw string literal holding `text`, with enough `#`s that it cannot end early.
+fn raw_literal(text: &str) -> String {
+    let mut hashes = String::from("#");
+    while text.contains(&format!("\"{hashes}")) {
+        hashes.push('#');
+    }
+    format!("r{hashes}\"{text}\"{hashes}")
+}
+
+/// The schema a scaffolded type is validated against: the rules for its name
+/// and a compact form of its `PUT` body, as JSON. `None` without a `PUT`.
+fn type_schema(resolver: &mut Resolver, kind: &ResourceType) -> Option<String> {
+    let put = kind.operations.values().find(|o| o.kind == Kind::Put)?;
+    let parameters: Vec<Value> = put
+        .definition
+        .get("parameters")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|p| resolver.resolve(&put.file, p).map(|(_, v)| v))
+        .collect();
+    let mut out = serde_json::json!({});
+    let name_parameter = put.path.rsplit('/').next().and_then(|s| s.strip_prefix('{')?.strip_suffix('}'));
+    if let Some(parameter) = parameters
+        .iter()
+        .find(|p| name_parameter.is_some() && p.get("name").and_then(Value::as_str) == name_parameter)
+    {
+        let mut rules = serde_json::Map::new();
+        for key in ["minLength", "maxLength", "pattern"] {
+            if let Some(value) = parameter.get(key) {
+                rules.insert(key.into(), value.clone());
+            }
+        }
+        out["name"] = Value::Object(rules);
+    }
+    let body = parameters.iter().find(|p| p.get("in").and_then(Value::as_str) == Some("body"))?;
+    let schema = body.get("schema").cloned().unwrap_or(Value::Null);
+    out["body"] = compact(resolver, &put.file, &schema, 0);
+    Some(out.to_string())
+}
+
+/// Merges `extra` (a compacted object schema) into `into`.
+fn merge_object(into: &mut serde_json::Map<String, Value>, extra: Value) {
+    let Value::Object(extra) = extra else { return };
+    for (key, value) in extra {
+        match (key.as_str(), into.get_mut(&key)) {
+            ("properties", Some(Value::Object(existing))) => {
+                if let Value::Object(more) = value {
+                    existing.extend(more);
+                }
+            }
+            ("required", Some(Value::Array(existing))) => {
+                if let Value::Array(more) = value {
+                    existing.extend(more);
+                }
+            }
+            _ => {
+                into.insert(key, value);
+            }
+        }
+    }
+}
+
+/// The subset of an OpenAPI schema the emulator validates requests against:
+/// types, enums (when the spec makes them closed), bounds, patterns, required
+/// and read-only members, defaults, and members fixed at creation
+/// (`x-ms-mutability` without `update`). `$ref` and `allOf` are flattened.
+fn compact(resolver: &mut Resolver, file: &Path, schema: &Value, depth: usize) -> Value {
+    let mut out = serde_json::Map::new();
+    if depth > 8 {
+        return Value::Object(out);
+    }
+    let Some((file, schema)) = resolver.resolve(file, schema) else {
+        return Value::Object(out);
+    };
+    for parent in schema.get("allOf").and_then(Value::as_array).into_iter().flatten() {
+        let inherited = compact(resolver, &file, parent, depth + 1);
+        merge_object(&mut out, inherited);
+    }
+    for key in ["type", "format", "pattern", "minLength", "maxLength", "minimum", "maximum", "minItems", "maxItems", "default", "readOnly"] {
+        if let Some(value) = schema.get(key) {
+            out.insert(key.into(), value.clone());
+        }
+    }
+    if let Some(values) = schema.get("enum") {
+        // An enum the spec models as a string is open: services add values.
+        let open = schema.pointer("/x-ms-enum/modelAsString").and_then(Value::as_bool) != Some(false);
+        if !open {
+            out.insert("enum".into(), values.clone());
+        }
+    }
+    if let Some(mutability) = schema.get("x-ms-mutability").and_then(Value::as_array) {
+        let can = |what: &str| mutability.iter().any(|m| m == what);
+        if can("create") && !can("update") {
+            out.insert("createOnly".into(), Value::Bool(true));
+        }
+    }
+    if let Some(members) = schema.get("properties").and_then(Value::as_object) {
+        let mut compacted = serde_json::Map::new();
+        for (name, member) in members {
+            let mut value = compact(resolver, &file, member, depth + 1);
+            // Flags written beside a `$ref` apply to the member, not the target.
+            for key in ["readOnly", "x-ms-mutability", "default"] {
+                if let Some(flag) = member.get(key) {
+                    if key == "x-ms-mutability" {
+                        let list = flag.as_array().cloned().unwrap_or_default();
+                        if list.iter().any(|m| m == "create") && !list.iter().any(|m| m == "update") {
+                            value["createOnly"] = Value::Bool(true);
+                        }
+                    } else {
+                        value[key] = flag.clone();
+                    }
+                }
+            }
+            compacted.insert(name.clone(), value);
+        }
+        let mut wrapper = serde_json::Map::new();
+        wrapper.insert("properties".into(), Value::Object(compacted));
+        merge_object(&mut out, Value::Object(wrapper));
+        out.entry("type").or_insert(Value::String("object".into()));
+    }
+    if let Some(required) = schema.get("required").and_then(Value::as_array) {
+        let mut wrapper = serde_json::Map::new();
+        wrapper.insert("required".into(), Value::Array(required.clone()));
+        merge_object(&mut out, Value::Object(wrapper));
+    }
+    if let Some(items) = schema.get("items") {
+        out.insert("items".into(), compact(resolver, &file, items, depth + 1));
+    }
+    if schema.get("additionalProperties").is_some_and(|a| a != &Value::Bool(false)) {
+        out.insert("map".into(), Value::Bool(true));
+    }
+    // A polymorphic base: subtypes add members this schema cannot list.
+    if schema.get("discriminator").is_some() {
+        out.insert("open".into(), Value::Bool(true));
+    }
+    Value::Object(out)
+}
+
 fn scaffold_source(provider: &Provider) -> String {
+    let mut resolver = Resolver::default();
     let mut out = String::new();
     let _ = writeln!(out, "// @generated by emulator-scaffold from the {} OpenAPI specification.", provider.namespace);
     out.push_str("// Do not edit: rerun the generator instead. See tools/scaffold.\n\n");
@@ -43,6 +183,12 @@ fn scaffold_source(provider: &Provider) -> String {
         let _ = writeln!(out, "            resource_type: {:?},", kind.name);
         let versions: Vec<String> = kind.versions.iter().map(|v| format!("{v:?}")).collect();
         let _ = writeln!(out, "            api_versions: &[{}],", versions.join(", "));
+        match type_schema(&mut resolver, kind) {
+            Some(schema) => {
+                let _ = writeln!(out, "            schema: Some({}),", raw_literal(&schema));
+            }
+            None => out.push_str("            schema: None,\n"),
+        }
         out.push_str("            operations: &[\n");
         for operation in kind.operations.values() {
             let _ = writeln!(out, "                {},", operation_literal(operation));
@@ -254,6 +400,73 @@ fn type_contract(out: &mut String, resolver: &mut Resolver, kind: &ResourceType)
     }
 }
 
+/// The worked examples the specification gives for creating each type, for the
+/// spec-example conformance test: path parameters, request body, the statuses
+/// the operation answers with, and the example response.
+fn spec_examples(provider: &Provider, resolver: &mut Resolver) -> String {
+    let mut out = Vec::new();
+    for kind in provider.types.values() {
+        let Some(put) = kind.operations.values().find(|o| o.kind == Kind::Put) else {
+            continue;
+        };
+        let parameters: Vec<Value> = put
+            .definition
+            .get("parameters")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|p| resolver.resolve(&put.file, p).map(|(_, v)| v))
+            .collect();
+        let body_name = parameters
+            .iter()
+            .find(|p| p.get("in").and_then(Value::as_str) == Some("body"))
+            .and_then(|p| p.get("name").and_then(Value::as_str))
+            .map(str::to_string);
+        let statuses: Vec<u16> = put
+            .definition
+            .get("responses")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+            .filter_map(|(code, _)| code.parse().ok())
+            .collect();
+        let examples = put.definition.get("x-ms-examples").and_then(Value::as_object);
+        for (title, reference) in examples.into_iter().flatten() {
+            let Some((_, example)) = resolver.resolve(&put.file, reference) else {
+                continue;
+            };
+            let given = example.get("parameters").cloned().unwrap_or(Value::Null);
+            let mut path_parameters = serde_json::Map::new();
+            for (name, value) in given.as_object().into_iter().flatten() {
+                if Some(name) != body_name.as_ref() && value.is_string() {
+                    path_parameters.insert(name.clone(), value.clone());
+                }
+            }
+            let body = body_name.as_ref().and_then(|name| given.get(name)).cloned().unwrap_or(Value::Null);
+            let response = example
+                .get("responses")
+                .and_then(Value::as_object)
+                .and_then(|responses| responses.iter().find(|(code, _)| code.starts_with('2')))
+                .and_then(|(_, response)| response.get("body"))
+                .cloned()
+                .unwrap_or(Value::Null);
+            out.push(serde_json::json!({
+                "type": kind.name,
+                "operationId": put.id,
+                "title": title,
+                "path": put.path,
+                "parameters": path_parameters,
+                "body": body,
+                "statuses": statuses,
+                "response": response,
+            }));
+        }
+    }
+    let mut text = serde_json::to_string_pretty(&Value::Array(out)).unwrap_or_default();
+    text.push('\n');
+    text
+}
+
 /// Inserts `line` into `file` immediately before or after the first line equal to
 /// `anchor`, unless the file already contains `line`.
 fn insert_line(file: &Path, anchor: &str, line: &str, before: bool) -> Result<()> {
@@ -294,6 +507,7 @@ pub fn write_crate(repo: &Path, crate_dir: &Path, service: &str, provider: &Prov
     std::fs::write(crate_dir.join("src/scaffold.rs"), scaffold_source(provider))?;
     let mut resolver = Resolver::default();
     std::fs::write(crate_dir.join("CONTRACT.md"), contract(provider, &mut resolver))?;
+    std::fs::write(crate_dir.join("spec-examples.json"), spec_examples(provider, &mut resolver))?;
 
     if created {
         std::fs::write(
