@@ -19,7 +19,7 @@ use http::StatusCode;
 use serde_json::{json, Value};
 
 use crate::management::{container_not_found, require_account};
-use crate::state::{Container, ImmutabilityPolicy, Lease, LeaseState, LegalHoldTag, Protection};
+use crate::state::{lease_state, Container, ImmutabilityPolicy, Lease, LeaseState, LegalHoldTag, Protection};
 use crate::StorageState;
 
 type Reply = Result<(StatusCode, Value), ArmError>;
@@ -322,83 +322,90 @@ fn lease_conflict(message: &str) -> ArmError {
 }
 
 fn lease(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Reply {
-    let body = request.body;
+    let reply = with_container(ctx, request, |container, _| apply_lease_action(&mut container.lease, request.body, "container"))?;
+    Ok((StatusCode::OK, reply))
+}
+
+/// Applies a lease request (`Acquire`, `Renew`, `Change`, `Release`, `Break`)
+/// to `slot`, the lease of a container or file share, and returns the reply.
+pub(crate) fn apply_lease_action(slot: &mut Option<Lease>, body: &Value, what: &str) -> Result<Value, ArmError> {
     let text = |member: &str| body.get(member).and_then(Value::as_str).filter(|v| !v.is_empty());
     let action = text("action").unwrap_or("").to_ascii_lowercase();
-    let reply = with_container(ctx, request, |container, _| {
-        let now = SystemTime::now();
-        let state = container.lease_state(now);
-        let current_id = container.lease.as_ref().map(|l| l.id.clone());
-        let matches_current = |id: Option<&str>| id.is_some_and(|id| current_id.as_deref() == Some(id));
-        let need_id = || {
-            text("leaseId").ok_or_else(|| invalid("'leaseId' is required for this lease action."))
-        };
-        match action.as_str() {
-            "acquire" => {
-                let duration = match body.get("leaseDuration").and_then(Value::as_i64).unwrap_or(-1) {
-                    -1 => None,
-                    seconds @ 15..=60 => Some(seconds as u64),
-                    _ => return Err(invalid("'leaseDuration' must be -1 (infinite) or between 15 and 60 seconds.")),
-                };
-                let proposed = text("proposedLeaseId");
-                if state.blocks() && !matches_current(proposed) {
-                    return Err(lease_conflict("There is already a lease present."));
-                }
-                let id = proposed.map(str::to_string).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-                container.lease = Some(Lease { id: id.clone(), duration, acquired: now, broken_at: None });
-                Ok(json!({"leaseId": id}))
+    let now = SystemTime::now();
+    let state = lease_state(slot.as_ref(), now);
+    let current_id = slot.as_ref().map(|l| l.id.clone());
+    let matches_current = |id: Option<&str>| id.is_some_and(|id| current_id.as_deref() == Some(id));
+    let need_id = || text("leaseId").ok_or_else(|| invalid("'leaseId' is required for this lease action."));
+    let mismatch = || lease_conflict(&format!("The lease ID specified did not match the lease ID for the {what}."));
+    match action.as_str() {
+        "acquire" => {
+            let duration = match body.get("leaseDuration").and_then(Value::as_i64).unwrap_or(-1) {
+                -1 => None,
+                seconds @ 15..=60 => Some(seconds as u64),
+                _ => return Err(invalid("'leaseDuration' must be -1 (infinite) or between 15 and 60 seconds.")),
+            };
+            let proposed = text("proposedLeaseId");
+            if state.blocks() && !matches_current(proposed) {
+                return Err(lease_conflict("There is already a lease present."));
             }
-            "renew" => {
-                let id = need_id()?;
-                if !matches_current(Some(id)) || matches!(state, LeaseState::Breaking | LeaseState::Broken) {
-                    return Err(lease_conflict("The lease ID specified did not match the lease ID for the container, or the lease is broken."));
-                }
-                let lease = container.lease.as_mut().expect("matched");
-                lease.acquired = now;
-                Ok(json!({"leaseId": id}))
-            }
-            "change" => {
-                let id = need_id()?;
-                let proposed = text("proposedLeaseId").ok_or_else(|| invalid("'proposedLeaseId' is required to change a lease."))?;
-                if !matches_current(Some(id)) || !state.blocks() {
-                    return Err(lease_conflict("The lease ID specified did not match the lease ID for the container."));
-                }
-                container.lease.as_mut().expect("matched").id = proposed.to_string();
-                Ok(json!({"leaseId": proposed}))
-            }
-            "release" => {
-                let id = need_id()?;
-                if !matches_current(Some(id)) {
-                    return Err(lease_conflict("The lease ID specified did not match the lease ID for the container."));
-                }
-                container.lease = None;
-                Ok(json!({}))
-            }
-            "break" => {
-                let lease = match (state, container.lease.as_mut()) {
-                    (LeaseState::Leased | LeaseState::Breaking, Some(lease)) => lease,
-                    _ => return Err(ArmError::conflict("LeaseNotPresentWithLeaseOperation", "There is currently no lease on the container.")),
-                };
-                let remaining = match lease.duration {
-                    None => 0,
-                    Some(seconds) => (lease.acquired + Duration::from_secs(seconds))
-                        .duration_since(now)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0),
-                };
-                let period = match body.get("breakPeriod").and_then(Value::as_i64) {
-                    None => remaining,
-                    Some(seconds @ 0..=60) => (seconds as u64).min(remaining.max(seconds as u64)),
-                    Some(_) => return Err(invalid("'breakPeriod' must be between 0 and 60 seconds.")),
-                };
-                let breaks_at = now + Duration::from_secs(period);
-                // A break already under way only ever comes sooner.
-                lease.broken_at = Some(lease.broken_at.map_or(breaks_at, |at| at.min(breaks_at)));
-                let left = lease.broken_at.expect("set").duration_since(now).map(|d| d.as_secs()).unwrap_or(0);
-                Ok(json!({"leaseTimeSeconds": left.to_string()}))
-            }
-            _ => Err(invalid("'action' must be Acquire, Renew, Change, Release or Break.")),
+            let id = proposed.map(str::to_string).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            *slot = Some(Lease { id: id.clone(), duration, acquired: now, broken_at: None });
+            Ok(json!({"leaseId": id}))
         }
-    })?;
-    Ok((StatusCode::OK, reply))
+        "renew" => {
+            let id = need_id()?;
+            if !matches_current(Some(id)) || matches!(state, LeaseState::Breaking | LeaseState::Broken) {
+                return Err(mismatch());
+            }
+            slot.as_mut().expect("matched").acquired = now;
+            Ok(json!({"leaseId": id}))
+        }
+        "change" => {
+            let id = need_id()?;
+            let proposed = text("proposedLeaseId").ok_or_else(|| invalid("'proposedLeaseId' is required to change a lease."))?;
+            if !matches_current(Some(id)) || !state.blocks() {
+                return Err(mismatch());
+            }
+            slot.as_mut().expect("matched").id = proposed.to_string();
+            Ok(json!({"leaseId": proposed}))
+        }
+        "release" => {
+            if !matches_current(Some(need_id()?)) {
+                return Err(mismatch());
+            }
+            *slot = None;
+            Ok(json!({}))
+        }
+        "break" => {
+            let lease = match (state, slot.as_mut()) {
+                (LeaseState::Leased | LeaseState::Breaking, Some(lease)) => lease,
+                _ => {
+                    return Err(ArmError::conflict(
+                        "LeaseNotPresentWithLeaseOperation",
+                        format!("There is currently no lease on the {what}."),
+                    ))
+                }
+            };
+            let remaining = match lease.duration {
+                None => 0,
+                Some(seconds) => (lease.acquired + Duration::from_secs(seconds))
+                    .duration_since(now)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            };
+            let period = match body.get("breakPeriod").and_then(Value::as_i64) {
+                None => remaining,
+                Some(seconds @ 0..=60) => seconds as u64,
+                Some(_) => return Err(invalid("'breakPeriod' must be between 0 and 60 seconds.")),
+            };
+            // A finite lease breaks no later than it would have expired.
+            let period = if lease.duration.is_some() { period.min(remaining) } else { period };
+            let breaks_at = now + Duration::from_secs(period);
+            // A break already under way only ever comes sooner.
+            lease.broken_at = Some(lease.broken_at.map_or(breaks_at, |at| at.min(breaks_at)));
+            let left = lease.broken_at.expect("set").duration_since(now).map(|d| d.as_secs()).unwrap_or(0);
+            Ok(json!({"leaseTimeSeconds": left.to_string()}))
+        }
+        _ => Err(invalid("'action' must be Acquire, Renew, Change, Release or Break.")),
+    }
 }

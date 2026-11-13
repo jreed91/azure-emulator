@@ -638,3 +638,33 @@ async fn container_leases() {
     let ok = [("authorization", bearer.as_str())];
     assert_eq!(client.send(Method::DELETE, host, "/leased?restype=container", &ok, "").await.status, StatusCode::ACCEPTED);
 }
+
+#[tokio::test]
+async fn file_share_leases_and_user_delegation_key_revocation() {
+    let client = management_client().await;
+    let share = child("fileServices/default/shares/docs");
+    client.arm(Method::PUT, &share, Some(json!({}))).await;
+    let lease = child("fileServices/default/shares/docs/lease");
+
+    let reply = client.arm(Method::POST, &lease, Some(json!({"action": "Acquire", "leaseDuration": 30}))).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    let id = reply.json()["leaseId"].as_str().unwrap().to_string();
+    let shown = client.arm(Method::GET, &share, None).await.json();
+    assert_eq!(shown["properties"]["leaseState"], "leased");
+    assert_eq!(shown["properties"]["leaseDuration"], "fixed");
+    assert_eq!(client.arm(Method::DELETE, &share, None).await.status, StatusCode::PRECONDITION_FAILED);
+
+    // A finite lease cannot be broken later than it would have expired.
+    let reply = client.arm(Method::POST, &lease, Some(json!({"action": "Break", "breakPeriod": 60}))).await;
+    assert!(reply.json()["leaseTimeSeconds"].as_str().unwrap().parse::<u64>().unwrap() <= 30);
+    assert_eq!(client.arm(Method::GET, &share, None).await.json()["properties"]["leaseState"], "breaking");
+    let reply = client.arm(Method::POST, &lease, Some(json!({"action": "Release", "leaseId": id}))).await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(client.arm(Method::GET, &share, None).await.json()["properties"]["leaseState"], "available");
+    assert_eq!(client.arm(Method::DELETE, &share, None).await.status, StatusCode::OK);
+
+    let revoke = child("revokeUserDelegationKeys");
+    let reply = client.arm(Method::POST, &revoke, None).await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert!(reply.body.is_empty());
+}

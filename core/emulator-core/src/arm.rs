@@ -184,6 +184,12 @@ pub trait ResourceTypeHandler: Send + Sync {
     /// are computed at read time (counts of children, runtime status).
     fn view(&self, _ctx: &ArmContext<'_>, _resource: &mut Resource) {}
 
+    /// Called before a `DELETE` removes the resource; an error refuses it (a
+    /// lease or lock the resource is under, for example).
+    fn before_delete(&self, _ctx: &ArmContext<'_>, _resource: &Resource) -> Result<(), ArmError> {
+        Ok(())
+    }
+
     /// Called after the resource has been removed from the store.
     fn deleted(&self, _ctx: &ArmContext<'_>, _resource: &Resource) {}
 
@@ -311,6 +317,11 @@ pub struct CreatedByNetwork(pub &'static str);
 impl ResourceTypeHandler for CreatedByNetwork {
     fn resource_type(&self) -> &'static str {
         self.0
+    }
+
+    // `reconcile` on a configuration that cannot exist is the generic 404.
+    fn actions(&self) -> &'static [&'static str] {
+        &["reconcile"]
     }
 
     fn put(&self, _ctx: &ArmContext<'_>, request: &PutRequest<'_>) -> Result<Value, ArmError> {
@@ -1232,9 +1243,10 @@ impl ArmRequest<'_> {
                 ok(render(handler.as_ref(), &ctx, resource))
             }
             "DELETE" => {
-                if existing.is_none() {
+                let Some(target) = &existing else {
                     return Ok(StatusCode::NO_CONTENT.into_response());
-                }
+                };
+                handler.before_delete(&ctx, target)?;
                 let removed: Vec<Resource> = {
                     let mut state = handle.lock();
                     let prefix = format!("{key}/");

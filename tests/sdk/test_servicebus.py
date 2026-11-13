@@ -65,3 +65,24 @@ def test_geo_disaster_recovery_alias(servicebus, group):
 
     servicebus.disaster_recovery_configs.fail_over(group, secondary.name, alias)
     assert servicebus.disaster_recovery_configs.get(group, secondary.name, alias).role == "PrimaryNotReplicating"
+
+
+def test_standard_to_premium_migration(servicebus, group):
+    standard = servicebus.namespaces.begin_create_or_update(group, unique("sb-"), {"location": "eastus", "sku": {"name": "Standard"}}).result()
+    premium = servicebus.namespaces.begin_create_or_update(group, unique("sb-"), {"location": "eastus", "sku": {"name": "Premium"}}).result()
+    servicebus.queues.create_or_update(group, standard.name, "jobs", {"properties": {"maxDeliveryCount": 3}})
+
+    config = servicebus.migration_configs.begin_create_and_start_migration(
+        group, standard.name, "$default",
+        {"properties": {"targetNamespace": premium.id, "postMigrationName": unique("old-")}},
+    ).result()
+    assert config.migration_state == "Active"
+    assert servicebus.queues.get(group, premium.name, "jobs").max_delivery_count == 3
+
+    servicebus.migration_configs.revert(group, standard.name, "$default")
+    assert list(servicebus.migration_configs.list(group, standard.name)) == []
+
+
+def test_authorization_rules_through_post(servicebus, group, namespace):
+    rules = list(servicebus.namespaces.list_authorization_rules(group, namespace.name))
+    assert [r.name for r in rules] == ["RootManageSharedAccessKey"]

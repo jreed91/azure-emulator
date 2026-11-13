@@ -147,7 +147,7 @@ impl ResourceTypeHandler for StorageAccounts {
     }
 
     fn actions(&self) -> &'static [&'static str] {
-        &["listKeys", "regenerateKey", "listAccountSas", "listServiceSas"]
+        &["listKeys", "regenerateKey", "listAccountSas", "listServiceSas", "revokeUserDelegationKeys"]
     }
 
     fn created(&self, ctx: &ArmContext<'_>, resource: &Resource) {
@@ -190,6 +190,9 @@ impl ResourceTypeHandler for StorageAccounts {
                 account.key_created[index] = now_iso();
                 Ok(keys_json(account))
             }
+            // The emulator issues no user delegation keys yet, so there is
+            // never one to revoke; the request itself succeeds.
+            "revokeuserdelegationkeys" => Ok(Value::Null),
             "listaccountsas" => {
                 let token = sas_token(&resource.name, account, body, true)?;
                 Ok(json!({"accountSasToken": token}))

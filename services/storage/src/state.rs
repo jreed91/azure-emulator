@@ -9,6 +9,8 @@ use axum::body::Bytes;
 pub struct StorageState {
     /// Keyed by account name, which is globally unique.
     pub(crate) accounts: BTreeMap<String, Account>,
+    /// File share leases, keyed by the share's lowercased resource id.
+    pub(crate) share_leases: BTreeMap<String, Lease>,
     /// Lowercased local user id → its shared key, minted on first use.
     pub(crate) local_user_keys: BTreeMap<String, String>,
     /// How many local users have ever been created; numbers their user ids.
@@ -100,6 +102,20 @@ impl LeaseState {
     }
 }
 
+/// The state of `lease` (container or file share) at `now`.
+pub(crate) fn lease_state(lease: Option<&Lease>, now: SystemTime) -> LeaseState {
+    let Some(lease) = lease else {
+        return LeaseState::Available;
+    };
+    if let Some(broken_at) = lease.broken_at {
+        return if now >= broken_at { LeaseState::Broken } else { LeaseState::Breaking };
+    }
+    match lease.duration {
+        Some(seconds) if now >= lease.acquired + std::time::Duration::from_secs(seconds) => LeaseState::Expired,
+        _ => LeaseState::Leased,
+    }
+}
+
 /// Why a blob cannot be overwritten or deleted.
 pub(crate) enum Protection {
     LegalHold,
@@ -124,16 +140,7 @@ impl Container {
     }
 
     pub(crate) fn lease_state(&self, now: SystemTime) -> LeaseState {
-        let Some(lease) = &self.lease else {
-            return LeaseState::Available;
-        };
-        if let Some(broken_at) = lease.broken_at {
-            return if now >= broken_at { LeaseState::Broken } else { LeaseState::Breaking };
-        }
-        match lease.duration {
-            Some(seconds) if now >= lease.acquired + std::time::Duration::from_secs(seconds) => LeaseState::Expired,
-            _ => LeaseState::Leased,
-        }
+        lease_state(self.lease.as_ref(), now)
     }
 
     /// Whether `blob` is protected from being overwritten or deleted now.

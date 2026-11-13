@@ -64,7 +64,7 @@ async fn coverage_separates_implemented_from_stubbed() {
     assert!(implemented("Vaults_CreateOrUpdate"));
     assert!(!implemented("StorageAccounts_Failover"), "an action nobody wrote");
     assert!(!implemented("ObjectReplicationPolicies_CreateOrUpdate"), "a stubbed nested type");
-    assert!(!implemented("MigrationConfigs_CreateAndStartMigration"), "a stubbed type");
+    assert!(!implemented("Connectors_Create"), "a stubbed type");
     assert!(!implemented("Operations_List"), "not routed yet");
 }
 
