@@ -668,3 +668,82 @@ async fn file_share_leases_and_user_delegation_key_revocation() {
     assert_eq!(reply.status, StatusCode::OK);
     assert!(reply.body.is_empty());
 }
+
+#[tokio::test]
+async fn object_replication_copies_blobs_between_accounts() {
+    let client = Client::new();
+    client.create_group("rg").await;
+    for account in ["srcacct", "dstacct"] {
+        create_account(&client, "rg", account).await;
+    }
+    let at = |account: &str, rest: &str| format!("{}/{rest}?{API}", account_path("rg", account));
+    let policy_body = |rules: Value| json!({"properties": {"sourceAccount": "srcacct", "destinationAccount": "dstacct", "rules": rules}});
+    let rule = json!([{"sourceContainer": "outbox", "destinationContainer": "inbox", "filters": {"prefixMatch": ["reports/"]}}]);
+
+    // Prerequisites: versioning on both, change feed on the source, containers.
+    let reply = client.arm(Method::PUT, &at("dstacct", "objectReplicationPolicies/default"), Some(policy_body(rule.clone()))).await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+    assert!(reply.text().contains("versioning"));
+    let versioning = json!({"properties": {"isVersioningEnabled": true, "changeFeed": {"enabled": true}}});
+    for account in ["srcacct", "dstacct"] {
+        client.arm(Method::PUT, &at(account, "blobServices/default"), Some(versioning.clone())).await;
+    }
+    let reply = client.arm(Method::PUT, &at("dstacct", "objectReplicationPolicies/default"), Some(policy_body(rule.clone()))).await;
+    assert!(reply.text().contains("container 'inbox' does not exist"), "{}", reply.text());
+    client.arm(Method::PUT, &at("dstacct", "blobServices/default/containers/inbox"), Some(json!({}))).await;
+    client.arm(Method::PUT, &at("srcacct", "blobServices/default/containers/outbox"), Some(json!({}))).await;
+
+    // The destination assigns the ids.
+    let reply = client.arm(Method::PUT, &at("dstacct", "objectReplicationPolicies/default"), Some(policy_body(rule))).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    let created = reply.json();
+    let policy_id = created["name"].as_str().unwrap().to_string();
+    assert_eq!(policy_id.len(), 36);
+    assert!(created["id"].as_str().unwrap().ends_with(&format!("/objectReplicationPolicies/{policy_id}")));
+    assert!(created["properties"].get("enabledTime").is_none());
+    let rule_id = created["properties"]["rules"][0]["ruleId"].as_str().unwrap().to_string();
+
+    // The source must use them.
+    let reply = client.arm(Method::PUT, &at("srcacct", "objectReplicationPolicies/default"), Some(created["properties"].clone().pipe_body())).await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+    let reply = client
+        .arm(Method::PUT, &at("srcacct", &format!("objectReplicationPolicies/{policy_id}")), Some(json!({"properties": created["properties"]})))
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert!(reply.json()["properties"]["enabledTime"].is_string());
+
+    // Matching blobs are copied; others are not.
+    let bearer = format!("Bearer {}", client.token(STORAGE_SCOPE).await);
+    let put = [("authorization", bearer.as_str()), ("x-ms-blob-type", "BlockBlob"), ("x-ms-meta-quarter", "q1")];
+    let source = "srcacct.blob.core.azure.localhost:10443";
+    let destination = "dstacct.blob.core.azure.localhost:10443";
+    client.send(Method::PUT, source, "/outbox/reports/q1.csv", &put, "a,b").await;
+    client.send(Method::PUT, source, "/outbox/scratch/tmp.txt", &put, "x").await;
+
+    let auth = [("authorization", bearer.as_str())];
+    let replica = client.send(Method::GET, destination, "/inbox/reports/q1.csv", &auth, "").await;
+    assert_eq!(replica.status, StatusCode::OK);
+    assert_eq!(replica.text(), "a,b");
+    assert_eq!(replica.header("x-ms-meta-quarter"), "q1");
+    assert_eq!(replica.header("x-ms-or-policy-id"), policy_id);
+    let original = client.send(Method::GET, source, "/outbox/reports/q1.csv", &auth, "").await;
+    assert_eq!(original.header(&format!("x-ms-or-{policy_id}_{rule_id}")), "complete");
+    assert_eq!(client.send(Method::GET, destination, "/inbox/scratch/tmp.txt", &auth, "").await.status, StatusCode::NOT_FOUND);
+
+    let listed = client.arm(Method::GET, &at("srcacct", "objectReplicationPolicies"), None).await.json();
+    assert_eq!(listed["value"][0]["name"], policy_id.as_str());
+    assert_eq!(client.arm(Method::DELETE, &at("srcacct", &format!("objectReplicationPolicies/{policy_id}")), None).await.status, StatusCode::OK);
+    client.send(Method::PUT, source, "/outbox/reports/q2.csv", &put, "c,d").await;
+    assert_eq!(client.send(Method::GET, destination, "/inbox/reports/q2.csv", &auth, "").await.status, StatusCode::NOT_FOUND);
+}
+
+/// Wraps a policy's returned properties as a request body.
+trait PipeBody {
+    fn pipe_body(self) -> Value;
+}
+
+impl PipeBody for Value {
+    fn pipe_body(self) -> Value {
+        json!({"properties": self})
+    }
+}
