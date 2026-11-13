@@ -79,12 +79,24 @@ pub struct ArmState {
     groups: BTreeMap<String, ResourceGroup>,
     /// Keyed by lowercased resource id.
     resources: BTreeMap<String, Resource>,
+    /// The client id of each system-assigned identity, by principal id.
+    pub(crate) system_identity_clients: HashMap<String, String>,
 }
 
 impl ArmState {
     /// Looks a resource up by id, case-insensitively.
     pub fn resource(&self, id: &str) -> Option<&Resource> {
         self.resources.get(&id.to_ascii_lowercase())
+    }
+
+    /// Every stored resource, in id order.
+    pub fn resources(&self) -> impl Iterator<Item = &Resource> {
+        self.resources.values()
+    }
+
+    /// The client id of the system-assigned identity with `principal_id`.
+    pub fn system_identity_client(&self, principal_id: &str) -> Option<&str> {
+        self.system_identity_clients.get(principal_id).map(String::as_str)
     }
 
     /// Mutable access to a stored resource, for operations that change one outside
@@ -516,10 +528,20 @@ impl ArmRegistry {
                 continue;
             }
             let template: Vec<&str> = operation.path.split('/').filter(|s| !s.is_empty()).collect();
+            let mut params = HashMap::new();
+            // `{scope}` at the start stands for a whole resource id: any number
+            // of segments before the rest of the template.
+            let (template, segments) = match template.split_first() {
+                Some((&"{scope}", rest)) if segments.len() > rest.len() => {
+                    let split = segments.len() - rest.len();
+                    params.insert("scope".to_string(), format!("/{}", segments[..split].join("/")));
+                    (rest.to_vec(), &segments[split..])
+                }
+                _ => (template, segments),
+            };
             if template.len() != segments.len() {
                 continue;
             }
-            let mut params = HashMap::new();
             let matched = template.iter().zip(segments).all(|(expected, actual)| {
                 match expected.strip_prefix('{').and_then(|e| e.strip_suffix('}')) {
                     Some(name) => {
@@ -1242,6 +1264,14 @@ impl ArmRequest<'_> {
                         "The location property is required for this definition.",
                     ));
                 }
+                // Checked before the type's handler, which may have side effects.
+                let identity = crate::identity::resolve(
+                    &mut handle.lock(),
+                    object.get("identity"),
+                    existing.as_ref().and_then(|r| r.identity.as_ref()),
+                    &self.engine.config().tenant_id,
+                    false,
+                )?;
                 let properties = handler.put(
                     &ctx,
                     &PutRequest {
@@ -1262,7 +1292,7 @@ impl ArmRequest<'_> {
                     tags: member("tags"),
                     kind: member("kind").or_else(|| existing.as_ref().and_then(|r| r.kind.clone())),
                     sku: member("sku"),
-                    identity: member("identity"),
+                    identity,
                     properties,
                 };
                 handler.prepare(&ctx, &mut resource);
@@ -1274,14 +1304,17 @@ impl ArmRequest<'_> {
             }
             "PATCH" => {
                 let mut resource = existing.ok_or_else(not_found)?;
-                resource.properties = handler.patch(&ctx, &resource, self.body)?;
                 let empty = Map::new();
                 let object = self.body.as_object().unwrap_or(&empty);
-                for (member, slot) in [
-                    ("tags", &mut resource.tags),
-                    ("sku", &mut resource.sku),
-                    ("identity", &mut resource.identity),
-                ] {
+                resource.identity = crate::identity::resolve(
+                    &mut handle.lock(),
+                    object.get("identity"),
+                    resource.identity.as_ref(),
+                    &self.engine.config().tenant_id,
+                    true,
+                )?;
+                resource.properties = handler.patch(&ctx, &resource, self.body)?;
+                for (member, slot) in [("tags", &mut resource.tags), ("sku", &mut resource.sku)] {
                     if let Some(value) = object.get(member) {
                         *slot = Some(value.clone()).filter(|v| !v.is_null());
                     }

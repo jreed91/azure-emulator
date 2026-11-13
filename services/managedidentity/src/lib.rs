@@ -5,12 +5,18 @@
 //! type, write a `ResourceTypeHandler` for it and register it here, before the
 //! scaffold. `CONTRACT.md` describes what the specification says about each type.
 //!
-//! Implemented: user-assigned identities and their federated identity credentials.
+//! Implemented: user-assigned identities and their federated identity credentials,
+//! the resources that use a user-assigned identity, and reading any resource's
+//! system-assigned identity. Identities on resources themselves are filled in by
+//! the ARM layer (`emulator_core::identity`). Revoking an identity's tokens is
+//! not implemented.
 //! The code and wording of validation refusals have not been checked against Azure.
 
 pub mod scaffold;
 
-use emulator_core::arm::{ArmContext, ArmRegistry, PutRequest, ResourceTypeHandler};
+use std::sync::Arc;
+
+use emulator_core::arm::{ArmContext, ArmRegistry, ArmState, OperationRequest, PutRequest, Resource, ResourceTypeHandler};
 use emulator_core::ArmError;
 use serde_json::{json, Value};
 
@@ -18,6 +24,7 @@ use serde_json::{json, Value};
 pub fn register(registry: &mut ArmRegistry) {
     registry.register_type(UserAssignedIdentities);
     registry.register_type(FederatedIdentityCredentials);
+    registry.register_operation("SystemAssignedIdentities_GetByScope", Arc::new(system_assigned_by_scope));
     registry.register_scaffold(&scaffold::PROVIDER);
 }
 
@@ -45,6 +52,41 @@ impl ResourceTypeHandler for UserAssignedIdentities {
             }
         }
         Ok(properties)
+    }
+
+    fn actions(&self) -> &'static [&'static str] {
+        &["listAssociatedResources"]
+    }
+
+    fn action(&self, ctx: &ArmContext<'_>, resource: &Resource, action: &str, _body: &Value) -> Result<Value, ArmError> {
+        if !action.eq_ignore_ascii_case("listAssociatedResources") {
+            return Err(ArmError::not_implemented(format_args!("the '{action}' action on {}", self.resource_type())));
+        }
+        // Every resource whose identity block names this identity.
+        let state = ctx.engine.state::<ArmState>();
+        let state = state.lock();
+        let users: Vec<Value> = state
+            .resources()
+            .filter(|r| {
+                r.identity
+                    .as_ref()
+                    .and_then(|i| i.get("userAssignedIdentities"))
+                    .and_then(Value::as_object)
+                    .is_some_and(|ids| ids.keys().any(|id| id.eq_ignore_ascii_case(&resource.id)))
+            })
+            .map(|r| {
+                let group = r.id.split('/').nth(4).unwrap_or("");
+                json!({
+                    "id": r.id,
+                    "name": r.name,
+                    "type": r.resource_type,
+                    "resourceGroup": group,
+                    "subscriptionId": ctx.subscription_id,
+                    "subscriptionDisplayName": "Azure Emulator",
+                })
+            })
+            .collect();
+        Ok(json!({"totalCount": users.len(), "value": users}))
     }
 
     fn patch(
@@ -114,4 +156,37 @@ impl ResourceTypeHandler for FederatedIdentityCredentials {
         }
         Ok(properties)
     }
+}
+
+/// The system-assigned identity of the resource at `scope`.
+fn system_assigned_by_scope(
+    ctx: &ArmContext<'_>,
+    request: &OperationRequest<'_>,
+) -> Result<(http::StatusCode, Value), ArmError> {
+    let scope = request.param("scope");
+    let state = ctx.engine.state::<ArmState>();
+    let state = state.lock();
+    let missing = || {
+        ArmError::not_found(
+            "ResourceNotFound",
+            format!("The resource '{scope}' was not found or has no system-assigned identity."),
+        )
+    };
+    let resource = state.resource(scope).ok_or_else(missing)?;
+    let identity = resource.identity.as_ref().ok_or_else(missing)?;
+    let principal = identity.get("principalId").and_then(Value::as_str).ok_or_else(missing)?;
+    let mut out = json!({
+        "id": format!("{}/providers/Microsoft.ManagedIdentity/identities/default", resource.id),
+        "name": "default",
+        "type": "Microsoft.ManagedIdentity/identities",
+        "properties": {
+            "tenantId": identity.get("tenantId"),
+            "principalId": principal,
+            "clientId": state.system_identity_client(principal),
+        },
+    });
+    if let Some(location) = &resource.location {
+        out["location"] = json!(location);
+    }
+    Ok((http::StatusCode::OK, out))
 }

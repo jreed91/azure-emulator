@@ -1,5 +1,5 @@
 use http::{Method, StatusCode};
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::support::{Client, SUB};
 
@@ -143,4 +143,72 @@ async fn resources_only_microsoft_network_creates_never_exist() {
     assert!(reply.json()["error"]["message"].as_str().unwrap().contains("Microsoft.Network"));
     let reconcile = format!("{account}/networkSecurityPerimeterConfigurations/nsp1/reconcile?api-version=2024-01-01");
     assert_eq!(client.arm(Method::POST, &reconcile, None).await.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn managed_identities_on_resources() {
+    let client = Client::new();
+    client.create_group("rg").await;
+    let uai = |name: &str| format!("{SUB}/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{name}");
+    for name in ["app", "jobs"] {
+        client.arm(Method::PUT, &format!("{}?api-version=2024-11-30", uai(name)), Some(json!({"location": "eastus"}))).await;
+    }
+    let app = client.arm(Method::GET, &format!("{}?api-version=2024-11-30", uai("app")), None).await.json();
+    let account = format!("{SUB}/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/idacct");
+    let at = |path: &str| format!("{path}?api-version=2024-01-01");
+    let body = |identity: Value| json!({"location": "eastus", "kind": "StorageV2", "sku": {"name": "Standard_LRS"}, "identity": identity});
+
+    // A system-assigned identity gets ids, kept across updates.
+    let created = client.arm(Method::PUT, &at(&account), Some(body(json!({"type": "SystemAssigned"})))).await.json();
+    let principal = created["identity"]["principalId"].as_str().unwrap().to_string();
+    assert_eq!(principal.len(), 36);
+    assert_eq!(created["identity"]["tenantId"], client.config().tenant_id);
+    let both = json!({"type": "SystemAssigned,UserAssigned", "userAssignedIdentities": {uai("app"): {}}});
+    let updated = client.arm(Method::PUT, &at(&account), Some(body(both))).await.json();
+    assert_eq!(updated["identity"]["type"], "SystemAssigned, UserAssigned");
+    assert_eq!(updated["identity"]["principalId"], principal.as_str());
+    let attached = &updated["identity"]["userAssignedIdentities"][uai("app")];
+    assert_eq!(attached["clientId"], app["properties"]["clientId"]);
+
+    // A PATCH adds identities, and null removes one.
+    let patched = client
+        .arm(Method::PATCH, &at(&account), Some(json!({"identity": {"type": "SystemAssigned,UserAssigned", "userAssignedIdentities": {uai("jobs"): {}}}})))
+        .await
+        .json();
+    assert_eq!(patched["identity"]["userAssignedIdentities"].as_object().unwrap().len(), 2);
+    let patched = client
+        .arm(Method::PATCH, &at(&account), Some(json!({"identity": {"type": "SystemAssigned,UserAssigned", "userAssignedIdentities": {uai("jobs"): null}}})))
+        .await
+        .json();
+    assert_eq!(patched["identity"]["userAssignedIdentities"].as_object().unwrap().len(), 1);
+
+    // The system-assigned identity can be read by the resource's id.
+    let by_scope = format!("{account}/providers/Microsoft.ManagedIdentity/identities/default?api-version=2024-11-30");
+    let reply = client.arm(Method::GET, &by_scope, None).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(reply.json()["properties"]["principalId"], principal.as_str());
+    assert_eq!(reply.json()["properties"]["clientId"].as_str().unwrap().len(), 36);
+
+    // The user-assigned identity knows who uses it.
+    let associated = format!("{}/listAssociatedResources?api-version=2024-11-30", uai("app"));
+    let reply = client.arm(Method::POST, &associated, None).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(reply.json()["totalCount"], 1);
+    assert_eq!(reply.json()["value"][0]["id"], account.as_str());
+
+    // Refusals: unknown identities and types.
+    let ghost = json!({"type": "UserAssigned", "userAssignedIdentities": {uai("ghost"): {}}});
+    let reply = client.arm(Method::PUT, &at(&format!("{account}x")), Some(body(ghost))).await;
+    assert_eq!(reply.error_code(), "InvalidIdentity");
+    let reply = client.arm(Method::PUT, &at(&format!("{account}x")), Some(body(json!({"type": "Magic"})))).await;
+    assert_eq!(reply.error_code(), "InvalidIdentity");
+    let check = format!("{SUB}/providers/Microsoft.Storage/checkNameAvailability?api-version=2024-01-01");
+    let reply = client.arm(Method::POST, &check, Some(json!({"name": "idacctx"}))).await;
+    assert_eq!(reply.json()["nameAvailable"], true, "a refused PUT leaves nothing behind");
+
+    // Turning the system identity off and on again gives a new principal.
+    client.arm(Method::PUT, &at(&account), Some(body(json!({"type": "None"})))).await;
+    assert_eq!(client.arm(Method::GET, &by_scope, None).await.status, StatusCode::NOT_FOUND);
+    let again = client.arm(Method::PUT, &at(&account), Some(body(json!({"type": "SystemAssigned"})))).await.json();
+    assert_ne!(again["identity"]["principalId"], principal.as_str());
 }

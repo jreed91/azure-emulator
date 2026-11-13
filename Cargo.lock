@@ -1200,6 +1200,7 @@ name = "service-managedidentity"
 version = "0.1.0"
 dependencies = [
  "emulator-core",
+ "http",
  "serde_json",
  "uuid",
 ]

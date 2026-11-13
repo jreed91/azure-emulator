@@ -77,6 +77,26 @@ fn parent_type(kind: &str) -> Option<String> {
     Some(format!("{namespace}/{parent}"))
 }
 
+/// `value` with every resource id moved into `subscription`: the emulator has
+/// one subscription, and examples use made-up ones and placeholders.
+fn in_this_subscription(value: &Value, subscription: &str) -> Value {
+    let rewrite = |text: &str| -> String {
+        let mut parts: Vec<&str> = text.split('/').collect();
+        if text.starts_with("/subscriptions/") && parts.len() > 2 {
+            parts[2] = subscription;
+        }
+        parts.join("/")
+    };
+    match value {
+        Value::String(text) => Value::String(rewrite(text)),
+        Value::Array(items) => Value::Array(items.iter().map(|v| in_this_subscription(v, subscription)).collect()),
+        Value::Object(members) => Value::Object(
+            members.iter().map(|(k, v)| (rewrite(k), in_this_subscription(v, subscription))).collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
 struct Run<'a> {
     client: &'a Client,
     examples: &'a [Example],
@@ -87,8 +107,29 @@ impl Run<'_> {
     async fn send(&self, example: &Example, parameters: &BTreeMap<String, String>) -> crate::support::Reply {
         let path = fill(&example.path, parameters, &example.parameters, &self.client.config().subscription_id);
         let version = parameters.get("api-version").or_else(|| example.parameters.get("api-version")).cloned().unwrap_or_default();
-        let body = (!example.body.is_null()).then(|| example.body.clone());
+        let body = (!example.body.is_null()).then(|| in_this_subscription(&example.body, &self.client.config().subscription_id));
+        if let Some(body) = &body {
+            self.create_identities(body).await;
+        }
         self.client.arm(Method::PUT, &format!("{path}?api-version={version}"), body).await
+    }
+
+    /// Creates the user-assigned identities a request body refers to, as a
+    /// caller would have before sending it.
+    async fn create_identities(&self, body: &Value) {
+        let ids: Vec<String> = body
+            .pointer("/identity/userAssignedIdentities")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in ids {
+            let group = id.split('/').nth(4).unwrap_or("rg");
+            let path = format!("/subscriptions/{}/resourcegroups/{group}?api-version=2021-04-01", self.client.config().subscription_id);
+            self.client.arm(Method::PUT, &path, Some(json!({"location": "eastus"}))).await;
+            self.client.arm(Method::PUT, &format!("{id}?api-version=2024-11-30"), Some(json!({"location": "eastus"}))).await;
+        }
     }
 
     /// Creates `kind` and its ancestors from their first examples, named by
@@ -130,7 +171,8 @@ impl Run<'_> {
         }
         // Every setting sent comes back. The service may add to it (a default
         // inside an object, permissions already granted), but not change it.
-        let sent = example.body.get("properties").and_then(Value::as_object);
+        let body = in_this_subscription(&example.body, &self.client.config().subscription_id);
+        let sent = body.get("properties").and_then(Value::as_object);
         let returned = reply.json();
         for (name, value) in sent.into_iter().flatten() {
             if let Some(back) = returned.pointer(&format!("/properties/{name}")) {

@@ -20,7 +20,7 @@ workloads or to test security.
 | `Microsoft.Storage` | Storage accounts with `listKeys`, `regenerateKey` and `checkNameAvailability`; blob, file, queue and table service properties; blob containers (the same store as the data plane); queues, tables and file shares (Resource Manager only); encryption scopes; lifecycle-management and inventory policies; local users; `listAccountSas` and `listServiceSas`; container legal holds, immutability policies (lock, extend, `If-Match`) and leases, enforced on the Blob data plane; file share leases; object replication policies, with blobs copied between accounts on write |
 | Blob service | Containers: create, delete, properties, list. Block blobs: upload (single request), download with ranges, properties, metadata, delete, list with prefix, delimiter and paging. Authorization by Entra token, verified Shared Key, or shared access signature (account SAS and container or blob service SAS signed with an account key) |
 | `Microsoft.KeyVault` | Vaults: create, get, update, delete, list, `checkNameAvailability`; soft delete with list, get, recover and purge of deleted vaults; access-policy updates; secrets through Resource Manager (the same store as the data plane); managed HSMs with soft delete, regions and name availability (no HSM data plane); keys through Resource Manager in vaults and managed HSMs (metadata only; no keys data plane yet) |
-| `Microsoft.ManagedIdentity` | User-assigned identities and federated identity credentials |
+| `Microsoft.ManagedIdentity` | User-assigned identities and federated identity credentials; listing the resources that use an identity; reading any resource's system-assigned identity. Every resource's `identity` block is filled in: system-assigned identities get a principal id, and user-assigned identities are checked and given their principal and client ids |
 | `Microsoft.ServiceBus` | Namespaces, queues, topics, subscriptions, rules, authorization rules with `listKeys` and `regenerateKeys`, network rule sets, geo-disaster-recovery aliases with failover and break-pairing, legacy IP filter and virtual network rules, private link resources, Standard-to-Premium migration (start and revert; completion is not modeled), `checkNameAvailability` (control plane only: nothing serves messaging) |
 | Key Vault secrets | Set, get (latest or by version), update attributes, list, list versions, soft delete, get and list deleted, recover, purge |
 
@@ -31,10 +31,10 @@ until someone implements it. `azure-emulator coverage` prints the current score:
 ```
 Provider                           Types   Operations   Generic
 Microsoft.KeyVault                 16/16        50/51         0
-Microsoft.ManagedIdentity            2/2        10/14         0
+Microsoft.ManagedIdentity            2/2        12/14         0
 Microsoft.ServiceBus               19/21        83/91         0
 Microsoft.Storage                  18/32       93/153        30
-Total                              55/71      236/309        30
+Total                              55/71      238/309        30
 ```
 
 Private endpoint connections and network security perimeter configurations
