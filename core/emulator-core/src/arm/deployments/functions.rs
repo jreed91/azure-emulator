@@ -330,8 +330,8 @@ pub fn murmur64(data: &[u8]) -> u64 {
         bytes.iter().enumerate().fold(0u32, |acc, (i, b)| acc | (u32::from(*b) << (8 * i)))
     };
     let (mut h1, mut h2) = (0u32, 0u32);
-    let mut chunks = data.chunks_exact(8);
-    for chunk in &mut chunks {
+    let (chunks, tail) = data.as_chunks::<8>();
+    for chunk in chunks {
         let k1 = word(&chunk[..4]).wrapping_mul(C1).rotate_left(15).wrapping_mul(C2);
         h1 ^= k1;
         h1 = h1.rotate_left(19).wrapping_add(h2).wrapping_mul(5).wrapping_add(0x561ccd1b);
@@ -339,7 +339,6 @@ pub fn murmur64(data: &[u8]) -> u64 {
         h2 ^= k2;
         h2 = h2.rotate_left(13).wrapping_add(h1).wrapping_mul(5).wrapping_add(0x0bcaa747);
     }
-    let tail = chunks.remainder();
     if !tail.is_empty() {
         let k1 = word(&tail[..tail.len().min(4)]).wrapping_mul(C1).rotate_left(15).wrapping_mul(C2);
         h1 ^= k1;
