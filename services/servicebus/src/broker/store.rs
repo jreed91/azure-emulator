@@ -368,11 +368,7 @@ pub(crate) fn send(engine: &Engine, entity: &Entity, mut message: AmqpMessage) -
         Some(Value::Timestamp(at)) => SystemTime::UNIX_EPOCH + Duration::from_millis(at.milliseconds().max(0) as u64),
         _ => now,
     };
-    let targets = match entity.kind {
-        Kind::Queue => vec![(entity.clone(), message.clone())],
-        Kind::Topic => matching_subscriptions(engine, entity, &message)?,
-        Kind::Subscription => Vec::new(),
-    };
+    let targets = destinations(engine, entity.clone(), message.clone(), 0)?;
     let mut filled = std::collections::HashSet::new();
     for (target, message) in &targets {
         if target.requires_session() && session_of(message).is_none() {
@@ -389,7 +385,6 @@ pub(crate) fn send(engine: &Engine, entity: &Entity, mut message: AmqpMessage) -
         // A second copy for the same subscription (another rule's action)
         // needs a sequence number of its own.
         let sequence = if filled.insert(target.key.clone()) { sequence } else { broker.next_sequence(&entity.key) };
-        let target = forwarded(engine, target)?;
         let message_ttl = message
             .header
             .as_ref()
@@ -414,18 +409,28 @@ pub(crate) fn send(engine: &Engine, entity: &Entity, mut message: AmqpMessage) -
     Ok(sequence)
 }
 
-/// Follows a queue's or subscription's `forwardTo` chain to where messages end up.
-fn forwarded(engine: &Engine, mut entity: Entity) -> Result<Entity, Refusal> {
-    for _ in 0..4 {
-        let Some(next) = entity.setting("forwardTo").and_then(Json::as_str).filter(|n| !n.is_empty()) else {
-            return Ok(entity);
-        };
-        entity = resolve(engine, &entity.namespace, next)?;
-        if entity.kind == Kind::Topic {
-            return Err(refuse("amqp:not-implemented", "Auto-forwarding to a topic is not supported by the emulator yet."));
-        }
+/// Where a message sent to `entity` is stored: a queue or subscription, or
+/// wherever its `forwardTo` leads; for a topic, the destinations of each
+/// matching subscription's copy. Forwarding goes at most four hops, as on
+/// Service Bus.
+fn destinations(engine: &Engine, entity: Entity, message: AmqpMessage, hops: u32) -> Result<Vec<(Entity, AmqpMessage)>, Refusal> {
+    if hops > 4 {
+        return Err(refuse("amqp:not-allowed", "The auto-forwarding chain is longer than four hops."));
     }
-    Err(refuse("amqp:not-allowed", "The auto-forwarding chain is longer than four hops."))
+    if entity.kind == Kind::Topic {
+        let mut out = Vec::new();
+        for (subscription, copy) in matching_subscriptions(engine, &entity, &message)? {
+            out.extend(destinations(engine, subscription, copy, hops)?);
+        }
+        return Ok(out);
+    }
+    match entity.setting("forwardTo").and_then(Json::as_str).filter(|n| !n.is_empty()) {
+        Some(next) if !entity.dead_letter => {
+            let next = resolve(engine, &entity.namespace, next)?;
+            destinations(engine, next, message, hops + 1)
+        }
+        _ => Ok(vec![(entity, message)]),
+    }
 }
 
 /// The copies of `message` the subscriptions of `topic` receive. A
@@ -828,6 +833,27 @@ pub(crate) fn acquire_session(
     };
     broker.sessions.entry(entity.key.clone()).or_default().entry(id.clone()).or_default().lock = Some((owner, until));
     Ok((id, until))
+}
+
+/// The sessions of `entity` with messages or state, in order of their
+/// oldest message.
+pub(crate) fn session_ids(engine: &Engine, entity: &Entity) -> Vec<String> {
+    let broker = engine.state::<BrokerState>();
+    let broker = broker.lock();
+    let mut ids: Vec<String> = Vec::new();
+    for message in broker.queues.get(&entity.key).map(|q| q.messages.values()).into_iter().flatten() {
+        if let Some(id) = session_of(&message.message) {
+            if !ids.iter().any(|known| known == id) {
+                ids.push(id.to_string());
+            }
+        }
+    }
+    for (id, session) in broker.sessions.get(&entity.key).into_iter().flatten() {
+        if session.state.is_some() && !ids.contains(id) {
+            ids.push(id.clone());
+        }
+    }
+    ids
 }
 
 /// Whether the link `owner` still holds the lock on session `id`.

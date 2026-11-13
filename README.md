@@ -79,11 +79,8 @@ tried yet.
   refused. Every accepted version gets the same behaviour.
 - Operations the ARM layer cannot route yet (tenant-, location- and
   extension-scoped ones) are listed by `coverage` as `501`.
-- Service Bus messaging does not forward to topics, does not list sessions
-  (`get-message-sessions`), and answers `501` to the rule management
-  operations over AMQP (rules are managed through Resource Manager). AMQP over
-  WebSockets is not served. Tier restrictions (such as topics on a Basic
-  namespace) are not enforced.
+- Service Bus messaging does not serve AMQP over WebSockets, and does not
+  enforce tier restrictions (such as topics on a Basic namespace).
 - Storage queues, tables and file shares have no data plane. Version-level
   immutability (`migrate`), and the data-plane lease operations themselves, are
   not implemented; a lease taken through Resource Manager is honoured by both.
@@ -276,7 +273,8 @@ with ServiceBusClient.from_connection_string(keys.primary_connection_string) as 
 Queues, topics and subscriptions are the Resource Manager resources, read fresh
 for every message, so their settings apply: lock duration, max delivery count,
 time to live and dead-lettering on expiry, duplicate detection, status,
-maximum message size and `forwardTo`. Supported: single and batched sends,
+maximum message size and `forwardTo` (to a queue or a topic, up to four
+hops). Supported: single and batched sends,
 peek-lock (complete, abandon, defer, dead-letter, lock renewal) and
 receive-and-delete, the dead-letter subqueue, scheduled messages (and
 cancelling them), deferred messages by sequence number, and peeking.
@@ -289,6 +287,10 @@ the lock is released when the receiver closes.
 
 Topic fan-out works through `$Default`, SQL filters, correlation filters and rule actions
 (`SET`/`REMOVE`; a subscription gets a copy per matching rule with an action).
+Rules can also be managed over AMQP (`add-rule`, `remove-rule`,
+`enumerate-rules`, as the JavaScript SDK's rule manager does); they are the
+same rules Resource Manager lists. Sessions can be listed
+(`get-message-sessions`).
 The SQL dialect covers comparison, `AND`/`OR`/`NOT`, arithmetic, `IS [NOT]
 NULL`, `[NOT] IN`, `[NOT] LIKE` with `ESCAPE`, `EXISTS`, and `sys.`/`user.`
 properties; an invalid expression is refused when the rule is created.

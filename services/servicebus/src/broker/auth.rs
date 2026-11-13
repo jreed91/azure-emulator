@@ -93,6 +93,17 @@ pub(crate) fn namespace_for_host(engine: &Engine, host: &str) -> String {
     }
 }
 
+/// The entity a token's path is for: a token for an entity's `$management`
+/// node (as the JavaScript SDK's rule manager asks for) is for the entity.
+fn entity_of(path: &str) -> String {
+    let lower = path.to_ascii_lowercase();
+    match lower.strip_suffix("/$management") {
+        Some(_) => path[..path.len() - "/$management".len()].to_string(),
+        None if lower == "$management" => String::new(),
+        None => path.to_string(),
+    }
+}
+
 /// `sb://host[:port]/path` (or `amqp`, `amqps`) as `(namespace, path)`.
 pub(crate) fn split_uri(engine: &Engine, uri: &str) -> Option<(String, String)> {
     let (host, path) = split_host(uri)?;
@@ -107,6 +118,7 @@ fn percent_decode(text: &str) -> String {
 /// declared (`servicebus.windows.net:sastoken` or `jwt`).
 pub(crate) fn verify(engine: &Engine, kind: &str, token: &str, audience: &str) -> Result<Grant, String> {
     let (namespace, audience_path) = split_uri(engine, audience).ok_or("The token's audience is not a Service Bus address.")?;
+    let audience_path = entity_of(&audience_path);
     // The SDKs declare `jwt` for shared access signatures too, so the token's
     // own form decides how it is checked.
     let _ = kind;
@@ -136,7 +148,8 @@ pub(crate) fn verify(engine: &Engine, kind: &str, token: &str, audience: &str) -
         return Err("The shared access signature has expired.".into());
     }
     let resource = percent_decode(&raw_resource);
-    let (token_namespace, token_path) = split_uri(engine, &resource).ok_or("The token's resource is not a Service Bus address.")?;
+    let (token_namespace, raw_token_path) = split_uri(engine, &resource).ok_or("The token's resource is not a Service Bus address.")?;
+    let token_path = entity_of(&raw_token_path);
     if token_namespace != namespace {
         return Err("The token was issued for another namespace.".into());
     }
@@ -235,6 +248,13 @@ mod tests {
             Some(("orders.servicebus.azure.localhost".into(), "events/Subscriptions/audit".into()))
         );
         assert_eq!(split_host("sb://localhost"), Some(("localhost".into(), String::new())));
+    }
+
+    #[test]
+    fn management_nodes_belong_to_their_entity() {
+        assert_eq!(entity_of("t/Subscriptions/s/$management"), "t/Subscriptions/s");
+        assert_eq!(entity_of("jobs/$Management"), "jobs");
+        assert_eq!(entity_of("jobs"), "jobs");
     }
 
     #[test]

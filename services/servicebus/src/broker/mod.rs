@@ -19,6 +19,7 @@ mod auth;
 mod duration;
 mod filters;
 mod management;
+mod rules;
 pub(crate) mod sql;
 pub(crate) mod store;
 
