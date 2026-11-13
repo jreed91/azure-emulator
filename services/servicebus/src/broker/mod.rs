@@ -19,6 +19,7 @@ mod auth;
 mod duration;
 mod filters;
 mod management;
+pub(crate) mod sql;
 pub(crate) mod store;
 
 use std::collections::HashMap;
@@ -374,13 +375,18 @@ async fn deliver(engine: Arc<Engine>, mut link: Sender, entity: Entity, remove: 
             }
             continue;
         };
+        let payload = match store::encode(delivery.message) {
+            Ok(payload) => payload,
+            Err(_) => {
+                if !remove {
+                    store::unreserve(&engine, &entity, delivery.sequence);
+                }
+                return;
+            }
+        };
         // The lock token is the delivery tag: a 16-byte little-endian UUID.
-        let sendable = Sendable::builder()
-            .message(delivery.message)
-            .settled(remove)
-            .delivery_tag(delivery.lock_token.to_bytes_le().to_vec())
-            .build();
-        let sent = tokio::time::timeout(CREDIT_WAIT, link.send_batchable(sendable)).await;
+        let tag = delivery.lock_token.to_bytes_le().to_vec();
+        let sent = tokio::time::timeout(CREDIT_WAIT, link.send_encoded(payload, remove, tag)).await;
         let outcome = match sent {
             Ok(Ok(outcome)) => outcome,
             Ok(Err(_)) => {

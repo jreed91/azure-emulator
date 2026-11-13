@@ -108,6 +108,7 @@ def test_send_receive_complete(servicebus, group, namespace):
             got = receiver.receive_messages(max_message_count=5, max_wait_time=2)
             assert [str(m) for m in got] == ["one", "two", "three"]
             assert [m.sequence_number for m in got] == [1, 2, 3]
+            assert [m.delivery_count for m in got] == [0, 0, 0]
             assert got[0].application_properties[b"kind"] == b"greeting"
             for message in got:
                 receiver.complete_message(message)
@@ -212,3 +213,40 @@ def test_wrong_key_is_refused(servicebus, group, namespace):
         with pytest.raises(Exception):
             with client.get_queue_sender("jobs") as sender:
                 sender.send_messages(ServiceBusMessage("nope"))
+
+
+def test_sql_filters_and_actions(servicebus, group, namespace):
+    from azure.core.exceptions import HttpResponseError
+    from azure.mgmt.servicebus.models import Action, SqlFilter
+
+    servicebus.topics.create_or_update(group, namespace.name, "orders", {})
+    servicebus.subscriptions.create_or_update(group, namespace.name, "orders", "big", {})
+    servicebus.rules.delete(group, namespace.name, "orders", "big", "$Default")
+    servicebus.rules.create_or_update(
+        group, namespace.name, "orders", "big", "large-red",
+        Rule(
+            filter_type="SqlFilter",
+            sql_filter=SqlFilter(sql_expression="quantity > 10 AND color IN ('red', 'crimson') AND sys.Label LIKE 'ord%'"),
+            action=Action(sql_expression="SET priority = 'high'; SET quantity = quantity * 2; REMOVE color"),
+        ),
+    )
+    with pytest.raises(HttpResponseError):
+        servicebus.rules.create_or_update(
+            group, namespace.name, "orders", "big", "broken",
+            Rule(filter_type="SqlFilter", sql_filter=SqlFilter(sql_expression="quantity >")),
+        )
+    with _client(servicebus, group, namespace) as client:
+        with client.get_topic_sender("orders") as sender:
+            sender.send_messages([
+                ServiceBusMessage("match", subject="order", application_properties={"quantity": 12, "color": "red"}),
+                ServiceBusMessage("small", subject="order", application_properties={"quantity": 2, "color": "red"}),
+                ServiceBusMessage("no-color", subject="order", application_properties={"quantity": 50}),
+            ])
+        with client.get_subscription_receiver("orders", "big", max_wait_time=2) as receiver:
+            got = receiver.receive_messages(max_message_count=5, max_wait_time=2)
+            assert [str(m) for m in got] == ["match"]
+            properties = got[0].application_properties
+            assert properties[b"priority"] == b"high"
+            assert properties[b"quantity"] == 24
+            assert b"color" not in properties
+            receiver.complete_message(got[0])

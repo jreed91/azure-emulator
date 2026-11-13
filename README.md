@@ -79,12 +79,10 @@ tried yet.
 - Operations the ARM layer cannot route yet (tenant-, location- and
   extension-scoped ones) are listed by `coverage` as `501`.
 - Service Bus messaging has no sessions (session-enabled entities refuse sends
-  and receives), evaluates only `1=1`/`1=0` SQL filters (correlation filters
-  are complete; other SQL expressions and rule actions refuse the send), does
-  not forward to topics, and answers `501` to the management operations it
-  lacks (rules, sessions). Plain AMQP only (no TLS, no WebSockets). A first
-  delivery reports `delivery_count` as unset rather than 0. Tier restrictions
-  (such as topics on a Basic namespace) are not enforced.
+  and receives), does not forward to topics, and answers `501` to the
+  management operations it lacks (rules, sessions). Plain AMQP only (no TLS,
+  no WebSockets). Tier restrictions (such as topics on a Basic namespace) are
+  not enforced.
 - Storage queues, tables and file shares have no data plane. Version-level
   immutability (`migrate`), and the data-plane lease operations themselves, are
   not implemented; a lease taken through Resource Manager is honoured by both.
@@ -193,7 +191,11 @@ maximum message size and `forwardTo`. Supported: single and batched sends,
 peek-lock (complete, abandon, defer, dead-letter, lock renewal) and
 receive-and-delete, the dead-letter subqueue, scheduled messages (and
 cancelling them), deferred messages by sequence number, peeking, and topic
-fan-out through `$Default`, `1=1`/`1=0` SQL filters and correlation filters.
+fan-out through `$Default`, SQL filters, correlation filters and rule actions
+(`SET`/`REMOVE`; a subscription gets a copy per matching rule with an action).
+The SQL dialect covers comparison, `AND`/`OR`/`NOT`, arithmetic, `IS [NOT]
+NULL`, `[NOT] IN`, `[NOT] LIKE` with `ESCAPE`, `EXISTS`, and `sys.`/`user.`
+properties; an invalid expression is refused when the rule is created.
 Shared access signatures are verified against the namespace's or entity's
 authorization rule keys and their rights. Message counts show up on the queue and
 subscription resources.

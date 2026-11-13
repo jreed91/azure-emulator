@@ -31,3 +31,8 @@ offers the same.
 - The settled disposition a sender echoes for a `rejected` outcome carries no
   error (src/session/mod.rs): the receiver's error describes why it rejected,
   and echoed back it reads as a failed settlement to the Service Bus SDKs.
+
+- `Sender::send_encoded()` (src/link/sender.rs): sends a message the caller
+  encoded itself. The broker writes the header section by hand so that
+  `delivery-count: 0` is on the wire (the derived encoding leaves default
+  fields out, and the Python SDK then reports the count as unset).

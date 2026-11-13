@@ -335,6 +335,9 @@ impl ResourceTypeHandler for Rules {
                 if filter.get("compatibilityLevel").is_none() {
                     filter["compatibilityLevel"] = json!(20);
                 }
+                let expression = filter["sqlExpression"].as_str().unwrap_or_default();
+                crate::broker::sql::Filter::parse(expression)
+                    .map_err(|e| invalid(format!("The SQL filter '{expression}' is not valid: {e}")))?;
                 properties["sqlFilter"] = filter;
             }
             Some("CorrelationFilter") => {
@@ -348,6 +351,10 @@ impl ResourceTypeHandler for Rules {
         if let Some(mut action) = given("action") {
             if action.get("sqlExpression").is_some() && action.get("compatibilityLevel").is_none() {
                 action["compatibilityLevel"] = json!(20);
+            }
+            if let Some(text) = action.get("sqlExpression").and_then(Value::as_str).filter(|t| !t.trim().is_empty()) {
+                crate::broker::sql::Action::parse(text)
+                    .map_err(|e| invalid(format!("The rule action '{text}' is not valid: {e}")))?;
             }
             properties["action"] = action;
         }
