@@ -1,0 +1,12 @@
+{
+  "name": "azure-emulator-sdk-js-tests",
+  "private": true,
+  "description": "Drives the emulator with the Azure SDK for JavaScript.",
+  "type": "module",
+  "scripts": {
+    "test": "node --require ./dns.cjs --test --test-concurrency=1"
+  },
+  "dependencies": {
+    "@azure/service-bus": "7.9.5"
+  }
+}

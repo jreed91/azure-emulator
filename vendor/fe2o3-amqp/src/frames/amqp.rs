@@ -248,9 +248,19 @@ impl Decoder for FrameDecoder {
         let body = if src.is_empty() {
             FrameBody::Empty
         } else {
+            // A frame other than a transfer is the performative alone, so it
+            // can be decoded again leniently if the strict decoding fails.
+            let is_transfer = src.len() >= 3 && src[..3] == [0x00, 0x53, 0x14];
+            let copy = (!is_transfer).then(|| src.clone());
             let reader = IoReader::new(src.reader());
             let mut deserializer = Deserializer::new(reader);
-            let performative: Performative = Deserialize::deserialize(&mut deserializer)?;
+            let performative: Performative = match Deserialize::deserialize(&mut deserializer) {
+                Ok(performative) => performative,
+                Err(error) => match copy.and_then(|bytes| lenient_performative(&bytes)) {
+                    Some(performative) => performative,
+                    None => return Err(error.into()),
+                },
+            };
 
             match performative {
                 Performative::Open(performative) => FrameBody::Open(performative),
@@ -273,6 +283,42 @@ impl Decoder for FrameDecoder {
 
         Ok(Some(Frame { channel, body }))
     }
+}
+
+/// Decodes a performative whose maps have string keys where the
+/// specification asks for symbols (the `info` of an error, say), as some
+/// clients send them: the keys are made symbols and the frame decoded again.
+/// (Patched in for the azure-emulator: the rhea client behind the JavaScript
+/// Service Bus SDK dead-letters with string-keyed error info.)
+fn lenient_performative(bytes: &[u8]) -> Option<Performative> {
+    use serde_amqp::primitives::Symbol;
+    use serde_amqp::Value;
+
+    fn symbolize(value: Value) -> Value {
+        match value {
+            Value::Map(map) => Value::Map(
+                map.into_iter()
+                    .map(|(key, value)| {
+                        let key = match key {
+                            Value::String(key) => Value::Symbol(Symbol::from(key)),
+                            other => other,
+                        };
+                        (key, symbolize(value))
+                    })
+                    .collect(),
+            ),
+            Value::List(items) => Value::List(items.into_iter().map(symbolize).collect()),
+            Value::Described(mut described) => {
+                described.value = symbolize(described.value);
+                Value::Described(described)
+            }
+            other => other,
+        }
+    }
+
+    let value: Value = serde_amqp::from_slice(bytes).ok()?;
+    let bytes = serde_amqp::to_vec(&symbolize(value)).ok()?;
+    serde_amqp::from_slice(&bytes).ok()
 }
 
 /// AMQP frame body

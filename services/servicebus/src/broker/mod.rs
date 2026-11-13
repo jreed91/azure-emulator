@@ -131,11 +131,24 @@ fn refusal_error(refusal: &Refusal) -> AmqpError {
 }
 
 async fn session_loop(engine: Arc<Engine>, context: Arc<Context>, mut session: ListenerSessionHandle) {
-    let acceptor = LinkAcceptor::builder()
-        .supported_sender_settle_modes(SupportedSenderSettleModes::All)
-        .supported_receiver_settle_modes(SupportedReceiverSettleModes::Both)
-        .build();
     while let Some(attach) = session.next_incoming_attach().await {
+        // The largest message the link takes: what the SDKs size batches by.
+        let max_message_size = attach
+            .target
+            .as_ref()
+            .and_then(|t| match t.as_ref() {
+                fe2o3_amqp_types::messaging::TargetArchetype::Target(t) => t.address.as_deref(),
+                #[allow(unreachable_patterns)]
+                _ => None,
+            })
+            .and_then(|address| context.entity_address(address))
+            .and_then(|(namespace, path)| store::resolve(&engine, &namespace, &path).ok())
+            .map_or(store::DEFAULT_MAX_MESSAGE_SIZE, |entity| entity.max_message_size());
+        let acceptor = LinkAcceptor::builder()
+            .supported_sender_settle_modes(SupportedSenderSettleModes::All)
+            .supported_receiver_settle_modes(SupportedReceiverSettleModes::Both)
+            .max_message_size(max_message_size)
+            .build();
         let settled = attach.snd_settle_mode == SenderSettleMode::Settled;
         let session_filter = attach
             .source
@@ -448,17 +461,19 @@ fn properties_to_modify(fields: Option<&Fields>) -> Vec<(String, SimpleValue)> {
         .collect()
 }
 
-/// What a receiver's outcome means for the message.
+/// What a receiver's outcome means for the message. Every abandon counts as
+/// a delivery attempt, as on Service Bus, whatever `delivery-failed` says:
+/// the JavaScript SDK abandons with `modified` and leaves the flag unset.
 fn settlement(outcome: Outcome) -> Settlement {
     match outcome {
         Outcome::Accepted(_) => Settlement::Complete,
-        Outcome::Released(_) => Settlement::Abandon { failed: false, properties: Vec::new() },
+        Outcome::Released(_) => Settlement::Abandon { failed: true, properties: Vec::new() },
         Outcome::Modified(modified) => {
             let properties = properties_to_modify(modified.message_annotations.as_ref());
             if modified.undeliverable_here == Some(true) {
                 Settlement::Defer { properties }
             } else {
-                Settlement::Abandon { failed: modified.delivery_failed.unwrap_or(false), properties }
+                Settlement::Abandon { failed: true, properties }
             }
         }
         Outcome::Rejected(rejected) => {
@@ -472,6 +487,6 @@ fn settlement(outcome: Outcome) -> Settlement {
             }
         }
         #[allow(unreachable_patterns)]
-        _ => Settlement::Abandon { failed: false, properties: Vec::new() },
+        _ => Settlement::Abandon { failed: true, properties: Vec::new() },
     }
 }
