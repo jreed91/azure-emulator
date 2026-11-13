@@ -8,10 +8,14 @@
 //! Managed HSMs are modeled on Resource Manager (with soft delete), but their data
 //! plane and security-domain activation are not.
 //!
-//! Not implemented yet: keys, certificates, managed HSM keys, and
+//! Keys are created and read through Resource Manager, in vaults and managed
+//! HSMs; there is no keys data plane yet, so no key material is generated.
+//!
+//! Not implemented yet: the keys data plane, certificates, and
 //! data-plane authorization (access policies and RBAC are stored but not
 //! enforced). Purge protection is stored but does not block a purge.
 
+mod keys;
 mod managed_hsm;
 mod management;
 pub mod scaffold;
@@ -39,6 +43,9 @@ pub struct KeyVaultState {
     pub(crate) hsm_names: std::collections::BTreeSet<String>,
     /// Soft-deleted managed HSMs, keyed by lowercased name.
     pub(crate) deleted_hsms: BTreeMap<String, DeletedHsm>,
+    /// Each managed HSM's keys, by lowercased HSM name. They survive a soft
+    /// delete and go with a purge.
+    pub(crate) hsm_keys: BTreeMap<String, keys::KeyStore>,
 }
 
 /// A managed HSM between deletion and recovery or purge.
@@ -66,6 +73,7 @@ pub fn register(registry: &mut ArmRegistry) {
     );
     management::register(registry);
     managed_hsm::register(registry);
+    keys::register(registry);
     for kind in [
         "Microsoft.KeyVault/vaults/privateEndpointConnections",
         "Microsoft.KeyVault/managedHSMs/privateEndpointConnections",

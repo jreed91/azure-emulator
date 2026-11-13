@@ -74,3 +74,14 @@ def test_managed_hsm_soft_delete_and_purge(emulator, keyvault, group):
 
 def test_no_private_endpoint_connections_without_microsoft_network(keyvault, group, vault):
     assert list(keyvault.private_endpoint_connections.list_by_resource(group, vault.name)) == []
+
+
+def test_keys_through_resource_manager(keyvault, group, vault):
+    created = keyvault.keys.create_if_not_exist(group, vault.name, "signing", {"properties": {"kty": "EC", "curveName": "P-384"}})
+    assert created.curve_name == "P-384" and created.key_ops == ["sign", "verify"]
+    again = keyvault.keys.create_if_not_exist(group, vault.name, "signing", {"properties": {"kty": "EC"}})
+    assert again.key_uri_with_version == created.key_uri_with_version
+    assert [k.name for k in keyvault.keys.list(group, vault.name)] == ["signing"]
+    assert len(list(keyvault.keys.list_versions(group, vault.name, "signing"))) == 1
+    version = created.key_uri_with_version.rsplit("/", 1)[1]
+    assert keyvault.keys.get_version(group, vault.name, "signing", version).kty == "EC"

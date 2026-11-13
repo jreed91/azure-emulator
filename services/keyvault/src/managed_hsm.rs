@@ -265,11 +265,13 @@ fn purge_deleted(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Reply 
     }
     state.deleted_hsms.remove(&key);
     state.hsm_names.remove(&key);
+    // Purging an HSM destroys its keys.
+    state.hsm_keys.remove(&key);
     // The specification makes this a long-running operation: 202 only.
     Ok((StatusCode::ACCEPTED, Value::Null))
 }
 
-fn find_hsm(ctx: &ArmContext<'_>, name: &str) -> Result<Resource, ArmError> {
+pub(crate) fn find_hsm(ctx: &ArmContext<'_>, name: &str) -> Result<Resource, ArmError> {
     let id = format!(
         "/subscriptions/{}/resourceGroups/{}/providers/{HSM_TYPE}/{name}",
         ctx.subscription_id, ctx.resource_group

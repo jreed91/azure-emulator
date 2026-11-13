@@ -26,6 +26,8 @@ pub(crate) struct Vault {
     /// Keyed by lowercased secret name.
     secrets: BTreeMap<String, Secret>,
     deleted: BTreeMap<String, DeletedSecret>,
+    /// Keyed by lowercased key name.
+    pub(crate) keys: crate::keys::KeyStore,
 }
 
 #[derive(Clone)]
