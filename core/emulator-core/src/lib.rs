@@ -8,6 +8,7 @@ pub mod config;
 pub mod engine;
 pub mod error;
 pub mod http_util;
+pub mod identity;
 pub mod schema;
 
 pub use config::Config;
