@@ -178,7 +178,7 @@ def test_token_issued_by_resource_manager(storage, group, signed):
             "signedServices": "b",
             "signedResourceTypes": "o",
             "signedPermission": "r",
-            "signedExpiryTime": expiry().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "signedExpiry": expiry().strftime("%Y-%m-%dT%H:%M:%SZ"),
         },
     ).account_sas_token
     assert BlobClient(signed.blob_url, "sas", "a.txt", credential=token).download_blob().readall() == b"signed"

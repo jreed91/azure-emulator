@@ -36,3 +36,34 @@ def test_role_assignment_lifecycle(authorization, msi, group):
     assert authorization.role_assignments.get_by_id(created.id).name == name
     authorization.role_assignments.delete(scope, name)
     assert not list(authorization.role_assignments.list_for_scope(scope, filter="atScope()"))
+
+
+def test_custom_role_definition(authorization, group):
+    import pytest
+    from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
+
+    scope = f"/subscriptions/{SUBSCRIPTION}"
+    role_id = str(uuid.uuid4())
+    created = authorization.role_definitions.create_or_update(
+        scope,
+        role_id,
+        {
+            "role_name": "Blob Auditor",
+            "description": "Reads blobs and nothing else.",
+            "role_type": "CustomRole",
+            "permissions": [{"actions": ["Microsoft.Storage/storageAccounts/read"], "data_actions": ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]}],
+            "assignable_scopes": [scope],
+        },
+    )
+    assert (created.role_name, created.role_type) == ("Blob Auditor", "CustomRole")
+    found = list(authorization.role_definitions.list(scope, filter="roleName eq 'Blob Auditor'"))
+    assert [r.name for r in found] == [role_id]
+    assert authorization.role_definitions.get(scope, role_id).permissions[0].data_actions == ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+
+    # Built-in roles cannot be changed.
+    with pytest.raises(HttpResponseError):
+        authorization.role_definitions.create_or_update(scope, READER, {"role_name": "Mine now", "permissions": [], "assignable_scopes": [scope]})
+
+    authorization.role_definitions.delete(scope, role_id)
+    with pytest.raises(ResourceNotFoundError):
+        authorization.role_definitions.get(scope, role_id)

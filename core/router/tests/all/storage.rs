@@ -413,7 +413,7 @@ async fn shared_access_signatures_issued_by_resource_manager() {
     let anonymous = |path: String| async move { client.send(Method::GET, host, &path, &[], "").await };
 
     // An account SAS: read and list on containers and objects, not the service.
-    let request = json!({"signedServices": "b", "signedResourceTypes": "co", "signedPermission": "rl", "signedExpiryTime": "2099-01-01T00:00:00Z", "keyToSign": "key2"});
+    let request = json!({"signedServices": "b", "signedResourceTypes": "co", "signedPermission": "rl", "signedExpiry": "2099-01-01T00:00:00Z", "keyToSign": "key2"});
     let reply = client.arm(Method::POST, &action("listAccountSas"), Some(request)).await;
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
     let token = reply.json()["accountSasToken"].as_str().unwrap().to_string();
@@ -435,7 +435,7 @@ async fn shared_access_signatures_issued_by_resource_manager() {
     assert_eq!(reply.header("x-ms-error-code"), "AuthenticationFailed");
 
     // A service SAS is bound to its container.
-    let request = json!({"canonicalizedResource": "/blob/mgmtacct/reports", "signedResource": "c", "signedPermission": "rl", "signedExpiryTime": "2099-01-01"});
+    let request = json!({"canonicalizedResource": "/blob/mgmtacct/reports", "signedResource": "c", "signedPermission": "rl", "signedExpiry": "2099-01-01"});
     let reply = client.arm(Method::POST, &action("listServiceSas"), Some(request)).await;
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
     let token = reply.json()["serviceSasToken"].as_str().unwrap().to_string();
@@ -447,18 +447,18 @@ async fn shared_access_signatures_issued_by_resource_manager() {
     assert_eq!(reply.header("x-ms-error-code"), "AuthorizationPermissionMismatch");
 
     // Expired tokens are issued as asked and then refused.
-    let request = json!({"signedServices": "b", "signedResourceTypes": "o", "signedPermission": "r", "signedExpiryTime": "2001-01-01T00:00:00Z"});
+    let request = json!({"signedServices": "b", "signedResourceTypes": "o", "signedPermission": "r", "signedExpiry": "2001-01-01T00:00:00Z"});
     let token = client.arm(Method::POST, &action("listAccountSas"), Some(request)).await.json()["accountSasToken"].as_str().unwrap().to_string();
     assert_eq!(anonymous(format!("/reports/q1.csv?{token}")).await.header("x-ms-error-code"), "AuthenticationFailed");
 
     // Regenerating the signing key revokes what it signed.
-    let request = json!({"signedServices": "b", "signedResourceTypes": "o", "signedPermission": "r", "signedExpiryTime": "2099-01-01"});
+    let request = json!({"signedServices": "b", "signedResourceTypes": "o", "signedPermission": "r", "signedExpiry": "2099-01-01"});
     let token = client.arm(Method::POST, &action("listAccountSas"), Some(request)).await.json()["accountSasToken"].as_str().unwrap().to_string();
     assert_eq!(anonymous(format!("/reports/q1.csv?{token}")).await.status, StatusCode::OK);
     client.arm(Method::POST, &action("regenerateKey"), Some(json!({"keyName": "key1"}))).await;
     assert_eq!(anonymous(format!("/reports/q1.csv?{token}")).await.status, StatusCode::FORBIDDEN);
 
-    for bad in [json!({"signedServices": "b"}), json!({"signedServices": "b", "signedResourceTypes": "o", "signedPermission": "r", "signedExpiryTime": "soon"})] {
+    for bad in [json!({"signedServices": "b"}), json!({"signedServices": "b", "signedResourceTypes": "o", "signedPermission": "r", "signedExpiry": "soon"})] {
         assert_eq!(client.arm(Method::POST, &action("listAccountSas"), Some(bad)).await.status, StatusCode::BAD_REQUEST);
     }
 }

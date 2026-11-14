@@ -65,7 +65,7 @@ pub(crate) fn register(registry: &mut ArmRegistry) {
 
 fn id(prefix: &str, operation: &str) -> &'static str {
     // The registry keys operations by `'static` ids; these few are leaked once.
-    Box::leak(format!("{prefix}_{operation}").into_boxed_str())
+    Box::leak(format!("Microsoft.KeyVault/{prefix}_{operation}").into_boxed_str())
 }
 
 /// Where a key lives.

@@ -31,10 +31,19 @@ jobs:
           cache-dependency-path: tests/sdk/requirements.txt
       - run: cargo build -p azure-emulator
       - run: pip install -r tests/sdk/requirements.txt
+      - run: mkdir -p target/trace
       # Every test file counts towards a service's fidelity score.
       - run: python tests/fidelity/score.py --check
       - run: python -m pytest -n auto
         working-directory: tests/sdk
+        env:
+          AZURE_EMULATOR_TRACE: ${{ github.workspace }}/target/trace/python.trace
+      # The implemented operations, for the operations job to check the traces against.
+      - run: target/debug/azure-emulator coverage --operations > target/trace/operations.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trace-python
+          path: ${{ github.workspace }}/target/trace/
 
   sdk-js:
     name: Azure SDK for JavaScript
@@ -51,8 +60,15 @@ jobs:
       - run: cargo build -p azure-emulator
       - run: npm ci
         working-directory: tests/sdk-js
+      - run: mkdir -p target/trace
       - run: npm test
         working-directory: tests/sdk-js
+        env:
+          AZURE_EMULATOR_TRACE: ${{ github.workspace }}/target/trace/js.trace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trace-js
+          path: ${{ github.workspace }}/target/trace/
 
   terraform:
     name: Terraform (azurerm)
@@ -68,7 +84,49 @@ jobs:
       - run: cargo build -p azure-emulator
       # The provider resolves per-resource hostnames itself.
       - run: tests/terraform/run.sh --hosts-line | sudo tee -a /etc/hosts
+      - run: mkdir -p target/trace
       - run: tests/terraform/run.sh
+        env:
+          AZURE_EMULATOR_TRACE: ${{ github.workspace }}/target/trace/terraform.trace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trace-terraform
+          path: ${{ github.workspace }}/target/trace/
+
+  cli:
+    name: Azure CLI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p azure-emulator
+      # The CLI resolves per-resource hostnames itself; the runner has `az`.
+      - run: tests/cli/run.sh --hosts-line | sudo tee -a /etc/hosts
+      - run: mkdir -p target/trace
+      - run: tests/cli/run.sh
+        env:
+          AZURE_EMULATOR_TRACE: ${{ github.workspace }}/target/trace/cli.trace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trace-cli
+          path: ${{ github.workspace }}/target/trace/
+
+  operations:
+    name: Every implemented operation is tested
+    needs: [sdk, sdk-js, terraform, cli]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: trace-*
+          merge-multiple: true
+          path: traces
+      - run: python tests/operations/check.py --operations traces/operations.txt traces/*.trace
 
   image:
     name: Container image

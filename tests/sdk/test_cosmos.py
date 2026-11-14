@@ -92,3 +92,38 @@ def test_wrong_key_is_refused(emulator, cosmos, group, account):
         with CosmosClient(endpoint, credential="A" * 86 + "==", connection_verify=emulator.ca) as forged:
             list(forged.list_databases())
     assert refused.value.status_code == 401
+
+
+def test_account_get_update_list_and_delete(cosmos, group, account):
+    assert cosmos.database_accounts.get(group, account.name).document_endpoint == account.document_endpoint
+    updated = cosmos.database_accounts.begin_update(group, account.name, {"tags": {"tier": "dev"}}).result()
+    assert updated.tags == {"tier": "dev"}
+    assert [a.name for a in cosmos.database_accounts.list_by_resource_group(group)] == [account.name]
+    assert account.name in [a.name for a in cosmos.database_accounts.list()]
+
+    cosmos.database_accounts.begin_delete(group, account.name).result()
+    from azure.core.exceptions import ResourceNotFoundError
+
+    with pytest.raises(ResourceNotFoundError):
+        cosmos.database_accounts.get(group, account.name)
+    assert list(cosmos.database_accounts.list_by_resource_group(group)) == []
+
+
+def test_sql_database_and_container_get_and_delete(cosmos, group, account):
+    from azure.core.exceptions import ResourceNotFoundError
+
+    sql = cosmos.sql_resources
+    sql.begin_create_update_sql_database(group, account.name, "shop", {"properties": {"resource": {"id": "shop"}}}).result()
+    sql.begin_create_update_sql_container(
+        group, account.name, "shop", "orders", {"properties": {"resource": {"id": "orders", "partitionKey": {"paths": ["/customer"], "kind": "Hash"}}}}
+    ).result()
+    assert sql.get_sql_database(group, account.name, "shop").resource.id == "shop"
+    container = sql.get_sql_container(group, account.name, "shop", "orders")
+    assert container.resource.partition_key.paths == ["/customer"]
+
+    sql.begin_delete_sql_container(group, account.name, "shop", "orders").result()
+    with pytest.raises(ResourceNotFoundError):
+        sql.get_sql_container(group, account.name, "shop", "orders")
+    assert list(sql.list_sql_containers(group, account.name, "shop")) == []
+    with pytest.raises(ResourceNotFoundError):
+        sql.get_sql_database(group, account.name, "missing")

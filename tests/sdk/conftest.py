@@ -209,6 +209,19 @@ def msi(emulator, credential):
     return ManagedServiceIdentityClient(credential, SUBSCRIPTION, **emulator.arm)
 
 
+@pytest.fixture(scope="session")
+def arm_request(emulator, resources):
+    """Sends a Resource Manager request no SDK method covers, with a token:
+    ``arm_request("POST", "/subscriptions/.../authorizationRules", "2021-11-01")``."""
+    from azure.core.rest import HttpRequest
+
+    def send(method, path, api_version, body=None):
+        url = f"{emulator.base}{path}?api-version={api_version}"
+        return resources._client.send_request(HttpRequest(method, url, json=body))
+
+    return send
+
+
 @pytest.fixture
 def group(resources):
     """A fresh resource group, deleted (with everything in it) afterwards."""

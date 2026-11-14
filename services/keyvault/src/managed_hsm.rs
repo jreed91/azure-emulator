@@ -23,11 +23,11 @@ pub(crate) fn register(registry: &mut ArmRegistry) {
         "Microsoft.KeyVault/checkMhsmNameAvailability",
         Arc::new(check_name_availability),
     );
-    registry.register_operation("ManagedHsms_ListDeleted", Arc::new(list_deleted));
-    registry.register_operation("ManagedHsms_GetDeleted", Arc::new(get_deleted));
-    registry.register_operation("ManagedHsms_PurgeDeleted", Arc::new(purge_deleted));
-    registry.register_operation("MHSMRegions_ListByResource", Arc::new(regions));
-    registry.register_operation("MHSMPrivateLinkResources_ListByMHSMResource", Arc::new(private_link_resources));
+    registry.register_operation("Microsoft.KeyVault/ManagedHsms_ListDeleted", Arc::new(list_deleted));
+    registry.register_operation("Microsoft.KeyVault/ManagedHsms_GetDeleted", Arc::new(get_deleted));
+    registry.register_operation("Microsoft.KeyVault/ManagedHsms_PurgeDeleted", Arc::new(purge_deleted));
+    registry.register_operation("Microsoft.KeyVault/MHSMRegions_ListByResource", Arc::new(regions));
+    registry.register_operation("Microsoft.KeyVault/MHSMPrivateLinkResources_ListByMHSMResource", Arc::new(private_link_resources));
 }
 
 fn invalid(message: impl Into<String>) -> ArmError {

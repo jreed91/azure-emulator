@@ -228,3 +228,18 @@ def test_time_to_live(client):
     assert sorted(i["id"] for i in container.query_items("SELECT * FROM c", partition_key="p")) == ["kept"]
     with pytest.raises(exceptions.CosmosResourceNotFoundError):
         container.read_item("gone", partition_key="p")
+
+
+def test_order_by_across_types(client):
+    """Mixed types sort as null, then booleans, then numbers, then strings."""
+    container = client.create_database_if_not_exists("querydb").create_container_if_not_exists("mixed", partition_key=PartitionKey(path="/pk"))
+    for i, v in enumerate(["b", 2, None, True, "a", False, 1]):
+        container.upsert_item({"id": str(i), "pk": "p", "v": v})
+    ordered = values(container, "SELECT VALUE c.v FROM c ORDER BY c.v")
+    assert ordered == [None, False, True, 1, 2, "a", "b"]
+
+
+def test_iterating_an_array_in_from(people):
+    assert sorted(values(people, "SELECT VALUE t FROM t IN c.tags")) == ["a", "b", "b"]
+    # The alias names each element, which can be filtered and projected.
+    assert sorted(values(people, "SELECT VALUE UPPER(t) FROM t IN c.tags WHERE t != 'a'")) == ["B", "B"]

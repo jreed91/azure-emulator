@@ -399,6 +399,8 @@ pub struct ArmRegistry {
     actions: HashMap<String, ProviderAction>,
     scaffolds: Vec<&'static ScaffoldedProvider>,
     /// `operationId` → the handler that implements it directly.
+    /// Directly implemented operations, by `Namespace/OperationId`: operation
+    /// ids repeat across providers (`PrivateEndpointConnections_Get`, ...).
     operations: HashMap<&'static str, OperationHandler>,
     /// Lowercased types served by a [`ScaffoldStub`].
     stubs: HashSet<String>,
@@ -461,6 +463,10 @@ impl ArmRegistry {
         self.scaffolds.push(provider);
     }
 
+    fn has_operation(&self, namespace: &str, id: &str) -> bool {
+        self.operations.contains_key(format!("{namespace}/{id}").as_str())
+    }
+
     /// Every modeled operation and whether the emulator implements it.
     pub fn coverage(&self) -> Vec<OperationCoverage> {
         let mut out = Vec::new();
@@ -474,12 +480,12 @@ impl ArmRegistry {
                     .filter(|_| !self.stubs.contains(&key) && !is_generic);
                 for operation in kind.operations {
                     let generic = is_generic
-                        && !self.operations.contains_key(operation.id)
+                        && !self.has_operation(provider.namespace, operation.id)
                         && !matches!(
                             operation.kind,
                             OperationKind::Action(_) | OperationKind::ProviderAction(_) | OperationKind::Other
                         );
-                    let implemented = self.operations.contains_key(operation.id)
+                    let implemented = self.has_operation(provider.namespace, operation.id)
                         || match (handler, operation.kind) {
                             (None, _) | (_, OperationKind::Other | OperationKind::ProviderAction(_)) => false,
                             (Some(handler), OperationKind::Action(name)) => {
@@ -497,7 +503,7 @@ impl ArmRegistry {
                 }
             }
             for operation in provider.provider_operations {
-                let implemented = self.operations.contains_key(operation.id)
+                let implemented = self.has_operation(provider.namespace, operation.id)
                     || match operation.kind {
                         OperationKind::ProviderAction(name) => self
                             .actions
@@ -529,7 +535,9 @@ impl ArmRegistry {
         self.secret_resolver = Some(resolver);
     }
 
+    /// `operation_id` is qualified by the provider: `Microsoft.Storage/BlobContainers_Lease`.
     pub fn register_operation(&mut self, operation_id: &'static str, handler: OperationHandler) {
+        assert!(operation_id.contains('/'), "{operation_id} must be qualified by its provider namespace");
         self.operations.insert(operation_id, handler);
     }
 
@@ -549,9 +557,10 @@ impl ArmRegistry {
                 .iter()
                 .flat_map(|kind| kind.operations.iter())
                 .chain(provider.provider_operations.iter())
+                .map(move |operation| (provider.namespace, operation))
         });
-        for operation in all {
-            let Some(handler) = self.operations.get(operation.id) else {
+        for (namespace, operation) in all {
+            let Some(handler) = self.operations.get(format!("{namespace}/{}", operation.id).as_str()) else {
                 continue;
             };
             if operation.method != method.as_str() {
@@ -586,6 +595,49 @@ impl ArmRegistry {
             }
         }
         None
+    }
+
+    /// The modeled operation `method path` addresses, with its provider's
+    /// namespace, whether or not it is
+    /// implemented: the one whose template matches with the most literal
+    /// segments. Used to record which operations a test run reached.
+    pub fn spec_operation(&self, method: &str, path: &str) -> Option<(&'static str, &'static str)> {
+        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let mut best: Option<(usize, (&'static str, &'static str))> = None;
+        let all = self.scaffolds.iter().flat_map(|provider| {
+            provider
+                .types
+                .iter()
+                .flat_map(|kind| kind.operations.iter())
+                .chain(provider.provider_operations.iter())
+                .map(move |operation| (provider.namespace, operation))
+        });
+        for (namespace, operation) in all {
+            if !operation.method.eq_ignore_ascii_case(method) {
+                continue;
+            }
+            let template: Vec<&str> = operation.path.split('/').filter(|s| !s.is_empty()).collect();
+            let (template, segments) = match template.split_first() {
+                Some((&"{scope}", rest)) if segments.len() > rest.len() => (rest, &segments[segments.len() - rest.len()..]),
+                _ => (&template[..], &segments[..]),
+            };
+            if template.len() != segments.len() {
+                continue;
+            }
+            let mut literals = 0;
+            let matched = template.iter().zip(segments).all(|(expected, actual)| {
+                if expected.starts_with('{') && expected.ends_with('}') {
+                    true
+                } else {
+                    literals += 1;
+                    expected.eq_ignore_ascii_case(actual)
+                }
+            });
+            if matched && best.is_none_or(|(most, _)| literals > most) {
+                best = Some((literals, (namespace, operation.id)));
+            }
+        }
+        best.map(|(_, id)| id)
     }
 
     /// Canonical namespace → its registered canonical type names (without namespace).
@@ -728,6 +780,12 @@ pub async fn handle(
         Ok(response) => response,
         Err(error) => error,
     };
+    if crate::trace::enabled() {
+        let path = percent_decode(parts.uri.path(), false);
+        if let Some((namespace, id)) = registry.spec_operation(parts.method.as_str(), &path) {
+            crate::trace::record("arm", &format!("{namespace}/{id}"), response.status());
+        }
+    }
     let id = request_id();
     for name in ["x-ms-request-id", "x-ms-correlation-request-id"] {
         if let Ok(value) = HeaderValue::from_str(&id) {
@@ -792,7 +850,7 @@ async fn serve(
     let body: Value = if bytes.iter().all(u8::is_ascii_whitespace) {
         Value::Null
     } else {
-        serde_json::from_slice(&bytes).map_err(|_| {
+        serde_json::from_slice(&bytes).or_else(|_| crate::lenient_json::parse(&bytes)).map_err(|_| {
             ArmError::bad_request(
                 "InvalidRequestContent",
                 "The request content was invalid and could not be deserialized.",

@@ -13,15 +13,15 @@ use crate::{DeletedVault, KeyVaultState};
 type Reply = Result<(StatusCode, Value), ArmError>;
 
 pub(crate) fn register(registry: &mut ArmRegistry) {
-    registry.register_operation("Vaults_ListDeleted", Arc::new(list_deleted));
-    registry.register_operation("Vaults_GetDeleted", Arc::new(get_deleted));
-    registry.register_operation("Vaults_PurgeDeleted", Arc::new(purge_deleted));
-    registry.register_operation("Vaults_UpdateAccessPolicy", Arc::new(update_access_policy));
-    registry.register_operation("PrivateLinkResources_ListByVault", Arc::new(private_link_resources));
-    registry.register_operation("Secrets_List", Arc::new(list_secrets));
-    registry.register_operation("Secrets_Get", Arc::new(get_secret));
-    registry.register_operation("Secrets_CreateOrUpdate", Arc::new(put_secret));
-    registry.register_operation("Secrets_Update", Arc::new(patch_secret));
+    registry.register_operation("Microsoft.KeyVault/Vaults_ListDeleted", Arc::new(list_deleted));
+    registry.register_operation("Microsoft.KeyVault/Vaults_GetDeleted", Arc::new(get_deleted));
+    registry.register_operation("Microsoft.KeyVault/Vaults_PurgeDeleted", Arc::new(purge_deleted));
+    registry.register_operation("Microsoft.KeyVault/Vaults_UpdateAccessPolicy", Arc::new(update_access_policy));
+    registry.register_operation("Microsoft.KeyVault/PrivateLinkResources_ListByVault", Arc::new(private_link_resources));
+    registry.register_operation("Microsoft.KeyVault/Secrets_List", Arc::new(list_secrets));
+    registry.register_operation("Microsoft.KeyVault/Secrets_Get", Arc::new(get_secret));
+    registry.register_operation("Microsoft.KeyVault/Secrets_CreateOrUpdate", Arc::new(put_secret));
+    registry.register_operation("Microsoft.KeyVault/Secrets_Update", Arc::new(patch_secret));
 }
 
 fn ok(body: Value) -> Reply {

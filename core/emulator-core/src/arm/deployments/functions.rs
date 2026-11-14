@@ -239,27 +239,39 @@ fn composite_format(pattern: &str, args: &[Value]) -> Result<String, ArmError> {
 }
 
 fn format_value(value: &Value, format: &str) -> String {
-    let Some(number) = value.as_i64() else {
-        return to_text(value);
-    };
     let (kind, digits) = format.split_at(format.len().min(1));
-    let digits: usize = digits.parse().unwrap_or(0);
-    match kind {
-        "N" | "n" => {
-            let text = number.unsigned_abs().to_string();
+    let precision: Option<usize> = digits.parse().ok();
+    // Fixed-point and number formats take fractions too; .NET shows two
+    // decimal places when the format names none.
+    if let ("N" | "n" | "F" | "f", Some(number)) = (kind, value.as_f64()) {
+        let places = precision.unwrap_or(2);
+        // .NET rounds half away from zero, as `f64::round` does.
+        let scale = 10f64.powi(places as i32);
+        let scaled = (number.abs() * scale).round();
+        let whole = (scaled / scale).trunc() as u128;
+        let fraction = (scaled - whole as f64 * scale).round() as u128;
+        let mut text = whole.to_string();
+        if kind.eq_ignore_ascii_case("n") {
             let mut grouped = String::new();
             for (i, c) in text.chars().enumerate() {
-                if i > 0 && (text.len() - i) % 3 == 0 {
+                if i > 0 && (text.len() - i).is_multiple_of(3) {
                     grouped.push(',');
                 }
                 grouped.push(c);
             }
-            let sign = if number < 0 { "-" } else { "" };
-            match digits {
-                0 => format!("{sign}{grouped}"),
-                d => format!("{sign}{grouped}.{}", "0".repeat(d)),
-            }
+            text = grouped;
         }
+        let sign = if number < 0.0 && scaled != 0.0 { "-" } else { "" };
+        return match places {
+            0 => format!("{sign}{text}"),
+            d => format!("{sign}{text}.{fraction:0>d$}"),
+        };
+    }
+    let Some(number) = value.as_i64() else {
+        return to_text(value);
+    };
+    let digits = precision.unwrap_or(0);
+    match kind {
         "D" | "d" => {
             let sign = if number < 0 { "-" } else { "" };
             format!("{sign}{:0>digits$}", number.unsigned_abs())
