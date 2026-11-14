@@ -21,22 +21,41 @@ def send(connection, bodies, partition_id="0", **properties):  # noqa: F811
             producer.send_batch(batch)
 
 
-def collect(connection, seconds=3, **options):  # noqa: F811
-    """What a receiver gets in `seconds`, and the errors it reports."""
+def collect(connection, seconds=3, received=None, until_error=False, stop=None, **options):  # noqa: F811
+    """What a receiver gets in `seconds`, and the errors it reports. Sets the
+    `received` event, if given, once the first event arrives; with
+    `until_error`, stops early at the first error, and early when `stop` is set."""
     events, errors = [], []
+    failed = threading.Event()
+
+    def on_error(_, error):
+        errors.append(error)
+        failed.set()
+
+    def on_event(_, event):
+        if event is not None:
+            events.append(event)
+            if received is not None:
+                received.set()
+
     client = EventHubConsumerClient.from_connection_string(
         connection, consumer_group=options.pop("consumer_group", "$Default"), eventhub_name="telemetry", retry_total=0
     )
     thread = threading.Thread(
         target=lambda: client.receive(
-            on_event=lambda c, e: e is not None and events.append(e),
-            on_error=lambda c, error: errors.append(error),
+            on_event=on_event,
+            on_error=on_error,
             **options,
         ),
         daemon=True,
     )
     thread.start()
-    time.sleep(seconds)
+    if until_error:
+        failed.wait(seconds)
+    elif stop is not None:
+        stop.wait(seconds)
+    else:
+        time.sleep(seconds)
     client.close()
     thread.join(5)
     return events, errors
@@ -74,17 +93,24 @@ def test_epochs(connection):  # noqa: F811
     results = {}
 
     def hold(name, **options):
-        results[name] = collect(connection, partition_id="0", starting_position="-1", seconds=4, **options)
+        options.setdefault("seconds", 4)
+        results[name] = collect(connection, partition_id="0", starting_position="-1", **options)
 
-    owner = threading.Thread(target=hold, args=("owner",), kwargs={"owner_level": 5})
+    # The owner must hold the partition before the others try: wait until it
+    # has received, not for a fixed time.
+    holding, done = threading.Event(), threading.Event()
+    owner = threading.Thread(target=hold, args=("owner",), kwargs={"owner_level": 5, "seconds": 25, "received": holding, "stop": done})
     owner.start()
-    time.sleep(1.5)
-    lower = threading.Thread(target=hold, args=("lower",), kwargs={"owner_level": 1})
-    plain = threading.Thread(target=hold, args=("plain",))
+    assert holding.wait(10), "the owner received nothing"
+    # The refusals can take a while to surface on a slow machine.
+    lower = threading.Thread(target=hold, args=("lower",), kwargs={"owner_level": 1, "seconds": 15, "until_error": True})
+    plain = threading.Thread(target=hold, args=("plain",), kwargs={"seconds": 15, "until_error": True})
     lower.start()
     plain.start()
-    for thread in (owner, lower, plain):
-        thread.join(15)
+    for thread in (lower, plain):
+        thread.join(30)
+    done.set()
+    owner.join(10)
     assert [e.body_as_str() for e in results["owner"][0]] == ["e"]
     assert results["lower"][1], "a lower epoch is refused"
     assert results["plain"][1], "a receiver without an epoch is refused while one is held"
