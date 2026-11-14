@@ -207,7 +207,7 @@ fn check_name_availability(ctx: &ArmContext<'_>, body: &Value) -> Result<Value, 
     if !is_valid_vault_name(name) {
         return Ok(json!({
             "nameAvailable": false,
-            "reason": "Invalid",
+            "reason": "AccountNameInvalid",
             "message": invalid_name_message(name),
         }));
     }

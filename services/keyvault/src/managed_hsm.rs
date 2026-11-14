@@ -194,7 +194,7 @@ fn check_name_availability(ctx: &ArmContext<'_>, body: &Value) -> Result<Value, 
         .and_then(Value::as_str)
         .ok_or_else(|| invalid("The request content was invalid: the required property 'name' is missing."))?;
     if !is_valid_name(name) {
-        return Ok(json!({"nameAvailable": false, "reason": "Invalid", "message": format!("The managed HSM name '{name}' is invalid.")}));
+        return Ok(json!({"nameAvailable": false, "reason": "AccountNameInvalid", "message": format!("The managed HSM name '{name}' is invalid.")}));
     }
     let taken = ctx.engine.state::<KeyVaultState>().lock().hsm_names.contains(&name.to_ascii_lowercase());
     Ok(if taken {
