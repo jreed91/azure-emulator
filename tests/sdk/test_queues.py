@@ -68,3 +68,15 @@ def test_sas_and_keys(storage, group, account):
     forged = QueueServiceClient(account.queue_url, credential={"account_name": account.name, "account_key": "A" * 86 + "=="})
     with pytest.raises(ClientAuthenticationError):
         forged.create_queue("nope")
+
+
+def test_access_policies(account):
+    from azure.storage.queue import AccessPolicy
+
+    queue = QueueClient(account.queue_url, "guarded", credential=account.key)
+    queue.create_queue()
+    expiry = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)
+    queue.set_queue_access_policy({"senders": AccessPolicy(permission="a", expiry=expiry)})
+    assert list(queue.get_queue_access_policy()) == ["senders"]
+    queue.set_queue_access_policy({})
+    assert queue.get_queue_access_policy() == {}
