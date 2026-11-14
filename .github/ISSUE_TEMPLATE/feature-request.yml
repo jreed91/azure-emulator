@@ -1,0 +1,51 @@
+name: Feature request
+description: >-
+  Ask for a change to the emulator itself, such as how you install, start, configure, run or use it,
+  or a capability beyond matching Azure that would help you build and test.
+labels: ["needs-triage", "feature-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This form is for the emulator itself. If an Azure API is missing from the emulator or answers differently from Azure, use "Behavior differs from Azure" instead.
+
+        Remove secrets, keys, connection strings, tokens, subscription and tenant ids, and personal data from what you paste.
+
+        If someone has already asked for this, add a 👍 reaction to that issue instead.
+  - type: checkboxes
+    id: checked
+    attributes:
+      label: Before you file
+      options:
+        - label: I searched open and recently closed issues and found no request for this.
+          required: true
+        - label: I checked that the latest release or `main` doesn't already do this.
+          required: true
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: >-
+        The problem behind the request and why it matters to you. What are you building or testing, and
+        what gets in the way today? Describe the problem rather than a solution, so the best way to address
+        it can be found.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: What would help
+      description: How you imagine a better experience with the emulator, and how this change would help you get there.
+    validations:
+      required: true
+  - type: textarea
+    id: other
+    attributes:
+      label: Other information
+      description: How you work around it today, alternatives you considered, or links to related issues.
+  - type: textarea
+    id: version
+    attributes:
+      label: Emulator version
+      description: The release tag, the container image tag, or the commit you built from.
+      render: text

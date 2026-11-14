@@ -1,0 +1,76 @@
+name: Behavior differs from Azure
+description: >-
+  The emulator doesn't support an Azure API yet, or answers differently from Azure, such as a
+  different response, status or error, or an expected side effect is missing.
+labels: ["needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please don't report security vulnerabilities here: see SECURITY.md.
+
+        Remove secrets, keys, connection strings, tokens, subscription and tenant ids, and personal data from what you paste.
+
+        If someone has already reported this, add a 👍 reaction to that issue instead. A pull request adding a `known_gap` test that asserts Azure's behaviour is also welcome (see CONTRIBUTING.md).
+  - type: checkboxes
+    id: checked
+    attributes:
+      label: Before you file
+      options:
+        - label: I searched open and recently closed issues and found no report of this.
+          required: true
+        - label: I checked that this still happens with the latest release or `main`.
+          required: true
+        - label: I checked the README's "Known gaps" and `azure-emulator coverage --operations`.
+          required: true
+  - type: input
+    id: service
+    attributes:
+      label: Service or resource type
+      description: For example Microsoft.Storage/storageAccounts, the Blob data plane, Key Vault secrets, Service Bus messaging.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What the emulator returned
+      description: The request you sent and the status, error code and message or body you got back, or what it didn't do. Include any emulator log output around the request.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What Azure returns
+      description: What Azure returns or does for the same request, and how you know (for example, you ran it against a subscription, or the REST API reference or specification says so; link it).
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: >-
+        Ideally a script or test that shows it from a freshly started emulator, including any resources it
+        creates first. Say which client you used (Azure SDK for Python, JavaScript or another language,
+        Azure CLI, Terraform azurerm, Bicep or ARM template) and its version, the `api-version` if you know
+        it, how you pointed it at the emulator, and any option you started the emulator with
+        (for example `--enforce-rbac`, `--persist`, `--config`).
+    validations:
+      required: true
+  - type: textarea
+    id: version
+    attributes:
+      label: Emulator version
+      description: The release tag (for example v1.2.3), the container image tag, or the commit you built from.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact and workaround
+      description: How this affects your work, and any workaround you use for now. This helps prioritize.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else that helps, such as more logs, or whether this worked in an earlier version.
