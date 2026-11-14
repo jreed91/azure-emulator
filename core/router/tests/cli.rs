@@ -63,6 +63,9 @@ fn coverage_summarises_and_lists_operations() {
     assert!(text(&refused.stderr).contains("coverage takes only --operations"));
 }
 
+/// Arguments, environment, and what the error says.
+type Refusal = (&'static [&'static str], &'static [(&'static str, &'static str)], &'static str);
+
 #[test]
 fn help_and_refusals() {
     let help = run(&["--help"], &[]);
@@ -70,7 +73,7 @@ fn help_and_refusals() {
     assert!(text(&help.stdout).contains("USAGE:"));
     assert!(text(&run(&["-h"], &[]).stdout).contains("--enforce-rbac"));
 
-    let cases: [(&[&str], &[(&str, &str)], &str); 7] = [
+    let cases: [Refusal; 7] = [
         (&["--frobnicate"], &[], "unknown option '--frobnicate'"),
         (&["--port"], &[], "--port needs a value"),
         (&["--port", "eighty"], &[], "--port is not a port"),
