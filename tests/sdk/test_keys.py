@@ -17,6 +17,7 @@ def keys(vault, credential):
     return KeyClient(vault.properties.vault_uri, credential)
 
 
+@pytest.mark.live
 def test_rsa_key_lifecycle(keys, credential):
     key = keys.create_rsa_key("app-key", size=2048, tags={"use": "tests"})
     assert key.key_type == KeyType.rsa
@@ -50,6 +51,7 @@ def test_rsa_key_lifecycle(keys, credential):
     assert CryptographyClient(key, credential).decrypt(EncryptionAlgorithm.rsa_oaep_256, sealed.ciphertext).plaintext == b"remote"
 
 
+@pytest.mark.live
 def test_ec_keys(keys, credential):
     for curve, algorithm, hash_function in [
         (KeyCurveName.p_256, SignatureAlgorithm.es256, hashlib.sha256),

@@ -11,6 +11,7 @@ def test_vault_uri(emulator, vault):
     assert vault.properties.vault_uri == f"https://{vault.name}.vault.azure.localhost:{emulator.port}/"
 
 
+@pytest.mark.live
 def test_secret_lifecycle(credential, vault):
     secrets = SecretClient(vault.properties.vault_uri, credential)
     first = secrets.set_secret("api-key", "v1", content_type="text/plain")

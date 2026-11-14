@@ -7,6 +7,13 @@ resources, so they are independent of each other and of their order.
 
 The emulator binary is ``$AZURE_EMULATOR_BIN``, or ``target/debug/azure-emulator``
 in the repository; build it first with ``cargo build -p azure-emulator``.
+
+With ``AZURE_EMULATOR_LIVE=1`` the suite runs against a real Azure subscription
+instead (``AZURE_SUBSCRIPTION_ID``, ``AZURE_TENANT_ID``, and optionally
+``AZURE_LOCATION``), signed in with ``DefaultAzureCredential``. Only tests marked
+``@pytest.mark.live`` run then: the ones whose assertions hold on Azure as
+written, so that a failure is a difference between the emulator and Azure. See
+``.github/workflows/live.yml`` for the roles the signed-in principal needs.
 """
 
 import contextlib
@@ -22,8 +29,13 @@ import uuid
 import pytest
 from azure.identity import ClientSecretCredential
 
-SUBSCRIPTION = "00000000-0000-0000-0000-000000000000"
-TENANT = "11111111-1111-1111-1111-111111111111"
+LIVE = os.environ.get("AZURE_EMULATOR_LIVE", "") not in ("", "0")
+SUBSCRIPTION = os.environ["AZURE_SUBSCRIPTION_ID"] if LIVE else "00000000-0000-0000-0000-000000000000"
+TENANT = os.environ["AZURE_TENANT_ID"] if LIVE else "11111111-1111-1111-1111-111111111111"
+LOCATION = os.environ.get("AZURE_LOCATION", "eastus") if LIVE else "eastus"
+# Resource groups made by a live run carry this tag, so that CI can delete any
+# a cancelled run left behind.
+LIVE_TAG = "azure-emulator-live"
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
 # Data planes live on per-resource hostnames under *.localhost. Not every
@@ -43,12 +55,16 @@ socket.getaddrinfo = _resolve_localhost
 def pytest_collection_modifyitems(items):
     """Run each `known_gap` test as a strict xfail: the suite stays green while
     the emulator differs from Azure, and fails once it matches, so the marker is
-    removed and the fidelity score goes up."""
+    removed and the fidelity score goes up. In a live run, skip every test not
+    marked `live`. (One hook does both: a second definition would replace this one.)"""
+    skip = pytest.mark.skip(reason="emulator only; not marked live")
     for item in items:
         gap = item.get_closest_marker("known_gap")
         if gap is not None:
             reason = gap.kwargs.get("reason") or (gap.args[0] if gap.args else "known gap")
             item.add_marker(pytest.mark.xfail(reason=f"known gap: {reason}", strict=True))
+        if LIVE and "live" not in item.keywords:
+            item.add_marker(skip)
 
 
 def _free_port():
@@ -120,8 +136,24 @@ def run_emulator(home, amqps_port=None, extra_args=(), port=None, amqp_port=None
         log.close()
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "live: also runs against a real Azure subscription (AZURE_EMULATOR_LIVE=1)")
+
+
+class LiveAzure:
+    """Stands in for `Emulator` when the suite runs against Azure: management
+    clients take their default endpoints."""
+
+    tenant = TENANT
+    subscription = SUBSCRIPTION
+    arm = {}
+
+
 @pytest.fixture(scope="session")
 def emulator(tmp_path_factory):
+    if LIVE:
+        yield LiveAzure()
+        return
     home = tmp_path_factory.mktemp("emulator-home")
     with run_emulator(home) as running:
         # The SDKs read these when their first client is built.
@@ -135,6 +167,10 @@ def emulator(tmp_path_factory):
 
 @pytest.fixture(scope="session")
 def credential(emulator):
+    if LIVE:
+        from azure.identity import DefaultAzureCredential
+
+        return DefaultAzureCredential(exclude_managed_identity_credential=True)
     # Any client id and secret are accepted.
     return ClientSecretCredential(
         TENANT, "sdk-tests", "any-secret", authority=emulator.base, disable_instance_discovery=True
@@ -213,6 +249,12 @@ def msi(emulator, credential):
 def group(resources):
     """A fresh resource group, deleted (with everything in it) afterwards."""
     name = unique("rg-")
+    if LIVE:
+        # Not waited for: deleting a group on Azure takes minutes.
+        resources.resource_groups.create_or_update(name, {"location": LOCATION, "tags": {LIVE_TAG: os.environ.get("GITHUB_RUN_ID", "local")}})
+        yield name
+        resources.resource_groups.begin_delete(name)
+        return
     resources.resource_groups.create_or_update(name, {"location": "eastus"})
     yield name
     if resources.resource_groups.check_existence(name):
@@ -234,7 +276,7 @@ def account(storage, group):
     """A StorageV2 account in a fresh group, with its blob endpoint and first key."""
     name = unique("st")
     created = storage.storage_accounts.begin_create(
-        group, name, {"location": "eastus", "kind": "StorageV2", "sku": {"name": "Standard_LRS"}}
+        group, name, {"location": LOCATION, "kind": "StorageV2", "sku": {"name": "Standard_LRS"}}
     ).result()
     key = storage.storage_accounts.list_keys(group, name)["keys"][0]["value"]
     return StorageAccount(name, created.primary_endpoints.blob, key, created.primary_endpoints.queue, created.primary_endpoints.table, created.primary_endpoints.file)
@@ -244,6 +286,15 @@ def account(storage, group):
 def vault(keyvault, group):
     """A Key Vault vault in a fresh group."""
     name = unique("kv-")
+    if LIVE:
+        # Data-plane access through the signed-in principal's role assignments.
+        properties = {
+            "tenantId": TENANT,
+            "sku": {"family": "A", "name": "standard"},
+            "enableRbacAuthorization": True,
+            "softDeleteRetentionInDays": 7,
+        }
+        return keyvault.vaults.begin_create_or_update(group, name, {"location": LOCATION, "properties": properties}).result()
     return keyvault.vaults.begin_create_or_update(
         group,
         name,

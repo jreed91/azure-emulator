@@ -70,6 +70,13 @@ and destroys a Terraform configuration with the `azurerm` provider (see
 [Terraform](#terraform)); all three run in CI. The Azure CLI has not been tried
 yet.
 
+The Python tests marked `live` also run, weekly and on demand, against a real
+Azure subscription (`.github/workflows/live.yml`), so that a difference between
+the emulator and Azure shows up as a failing test. Run them yourself with
+`AZURE_EMULATOR_LIVE=1`, `AZURE_SUBSCRIPTION_ID` and `AZURE_TENANT_ID` set and
+`az login` done: `python -m pytest -m live` in `tests/sdk`. They create billable
+resources in that subscription.
+
 ### Not implemented, and why
 
 `azure-emulator coverage --operations` lists every operation still answering

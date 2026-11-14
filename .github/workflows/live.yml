@@ -1,0 +1,75 @@
+name: Live Azure
+
+# Runs the SDK tests marked `live` (tests/sdk) against a real Azure subscription,
+# so that a test that passes on the emulator and fails here shows where the
+# emulator differs from Azure.
+#
+# Setup, once:
+#   1. An Entra app registration (or user-assigned identity) with a federated
+#      credential for this repository: issuer https://token.actions.githubusercontent.com,
+#      subject repo:<owner>/<repo>:environment:azure-live.
+#   2. Role assignments for it on the test subscription: Contributor, Storage
+#      Blob Data Contributor, Storage Queue Data Contributor, Storage Table
+#      Data Contributor and Key Vault Administrator. The data roles are on the
+#      subscription so that accounts and vaults the tests create are usable at
+#      once, without waiting for new assignments to propagate.
+#   3. A GitHub environment named `azure-live` (it fixes the federated
+#      subject, and can limit which branches may run this), and repository
+#      variables AZURE_CLIENT_ID, AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID,
+#      optionally AZURE_LOCATION. They are identifiers, not secrets: sign-in
+#      is by OIDC, with no client secret stored. They are repository variables
+#      rather than the environment's because the job's `if` is evaluated
+#      before the environment's variables are loaded.
+#
+# Until AZURE_CLIENT_ID is set the job is skipped. It does not run on pull
+# requests: those from forks get no OIDC token, and every run creates billable
+# resources.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: live-azure
+  cancel-in-progress: false
+
+jobs:
+  sdk:
+    name: Azure SDK for Python (live)
+    runs-on: ubuntu-latest
+    environment: azure-live
+    if: vars.AZURE_CLIENT_ID != ''
+    timeout-minutes: 45
+    env:
+      AZURE_EMULATOR_LIVE: "1"
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_LOCATION: ${{ vars.AZURE_LOCATION || 'eastus' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: tests/sdk/requirements.txt
+      - run: pip install -r tests/sdk/requirements.txt
+      - run: python -m pytest -m live -n 4
+        working-directory: tests/sdk
+      # Tests delete their groups without waiting; this catches any a failed
+      # or cancelled run left behind.
+      - name: Delete this run's resource groups
+        if: always()
+        run: |
+          az group list --tag "azure-emulator-live=${{ github.run_id }}" --query "[?properties.provisioningState!='Deleting'].name" -o tsv |
+            xargs -r -n1 az group delete --yes --no-wait --name
