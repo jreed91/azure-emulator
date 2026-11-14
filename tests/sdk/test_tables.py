@@ -23,6 +23,7 @@ def key_credential(account):
     return AzureNamedKeyCredential(account.name, account.key)
 
 
+@pytest.mark.live
 @pytest.mark.parametrize("auth", ["shared-key", "entra"])
 def test_tables(credential, account, auth):
     service = TableServiceClient(account.table_url, credential=key_credential(account) if auth == "shared-key" else credential)

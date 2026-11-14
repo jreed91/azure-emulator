@@ -38,6 +38,7 @@ def test_account(storage, emulator, group, account):
     assert regenerated[1]["value"] == keys[1]["value"]
 
 
+@pytest.mark.live
 @pytest.mark.parametrize("auth", ["entra", "shared-key"])
 def test_blob_round_trip(credential, account, auth):
     service = BlobServiceClient(account.blob_url, credential=credential if auth == "entra" else account.key)
@@ -69,6 +70,7 @@ def test_blob_round_trip(credential, account, auth):
     assert "data" not in [c.name for c in service.list_containers()]
 
 
+@pytest.mark.live
 def test_wrong_account_key_is_refused(account):
     with pytest.raises(HttpResponseError) as refused:
         BlobServiceClient(account.blob_url, credential="A" * 88).create_container("nope")
@@ -291,6 +293,7 @@ def test_object_replication(storage, credential, group):
     assert replica.download_blob().readall() == b"replicated"
 
 
+@pytest.mark.live
 def test_block_uploads(account):
     # Small limits make the SDK upload in blocks, as it does for large blobs.
     service = BlobServiceClient(account.blob_url, credential=account.key, max_single_put_size=1024, max_block_size=1024)
@@ -312,6 +315,7 @@ def test_block_uploads(account):
     assert parallel.download_blob().readall() == data * 4
 
 
+@pytest.mark.live
 def test_staged_blocks(account):
     from azure.storage.blob import BlobBlock, BlockState
 
@@ -343,6 +347,7 @@ def test_staged_blocks(account):
     assert error.value.error_code == "InvalidBlobOrBlock"
 
 
+@pytest.mark.live
 def test_blob_metadata_and_headers(account):
     container = BlobServiceClient(account.blob_url, credential=account.key).create_container("props")
     blob = container.get_blob_client("page.html")
