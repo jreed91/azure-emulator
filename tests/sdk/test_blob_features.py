@@ -212,3 +212,23 @@ def test_undelete_brings_back_snapshots(account):
     assert listed[1].remaining_retention_days == 3
     blob.undelete_blob()
     assert [b.snapshot is not None for b in container.list_blobs(include=["snapshots"])] == [True, False]
+
+
+def test_get_blob_metadata_over_rest(account):
+    """Get Blob Metadata, which the SDKs fold into Get Blob Properties."""
+    import requests
+    from azure.storage.blob import generate_blob_sas
+
+    service = BlobServiceClient(account.blob_url, credential=account.key)
+    container = service.get_container_client(unique("meta"))
+    container.create_container()
+    blob = container.get_blob_client("tagged.txt")
+    blob.upload_blob(b"x", metadata={"owner": "ops", "tier": "gold"})
+    sas = generate_blob_sas(account.name, container.container_name, "tagged.txt", account_key=account.key, permission=BlobSasPermissions(read=True), expiry=datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1))
+    import os
+
+    for method in ("GET", "HEAD"):
+        response = requests.request(method, f"{blob.url}?comp=metadata&{sas}", headers={"x-ms-version": "2023-11-03"}, verify=os.environ["REQUESTS_CA_BUNDLE"])
+        assert response.status_code == 200
+        assert (response.headers["x-ms-meta-owner"], response.headers["x-ms-meta-tier"]) == ("ops", "gold")
+        assert response.content == b""

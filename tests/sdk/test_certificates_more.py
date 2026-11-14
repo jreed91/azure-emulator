@@ -148,3 +148,22 @@ def test_refused_imports(certificates):
     assert "no private key" in refused(certificate_only)
     dsa_like = b"-----BEGIN PRIVATE KEY-----\nMAA=\n-----END PRIVATE KEY-----\n" + cert.public_bytes(serialization.Encoding.PEM)
     assert "not an RSA or EC key" in refused(dsa_like, policy=pem_policy)
+
+
+def test_policy_update_and_pending_operations(certificates):
+    from azure.core.exceptions import ResourceNotFoundError
+
+    certificates.begin_create_certificate("site", CertificatePolicy.get_default()).result()
+    current = certificates.get_certificate_policy("site")
+    policy = CertificatePolicy(issuer_name=current.issuer_name, subject=current.subject, validity_in_months=6, content_type=CertificateContentType.pem)
+    updated = certificates.update_certificate_policy("site", policy)
+    assert (updated.validity_in_months, updated.content_type) == (6, CertificateContentType.pem)
+    assert certificates.get_certificate_policy("site").validity_in_months == 6
+    # The next version follows the new policy.
+    certificates.begin_create_certificate("site", certificates.get_certificate_policy("site")).result()
+    assert certificates.get_certificate("site").policy.content_type == CertificateContentType.pem
+
+    # A finished operation stays readable; a certificate never created has none.
+    assert certificates.get_certificate_operation("site").status == "completed"
+    with pytest.raises(ResourceNotFoundError):
+        certificates.get_certificate_operation("missing")

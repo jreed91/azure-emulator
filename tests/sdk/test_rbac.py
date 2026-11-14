@@ -20,6 +20,10 @@ ROLES = {
     "Key Vault Crypto Officer": "14b46e9e-c2b7-41b4-b07b-48a6ebf60603",
     "Key Vault Crypto User": "12338af0-0e69-4776-bea7-57ae8d297424",
     "Key Vault Certificates Officer": "a4417e6f-fecd-4de8-b567-7b0420556985",
+    "Storage Queue Data Contributor": "974c5e8b-45b9-4653-ba55-5f855dd0fb88",
+    "Storage Queue Data Reader": "19e7f393-937e-4f77-808e-94535e297925",
+    "Storage File Data Privileged Contributor": "69566ab7-960f-475b-8e7c-b3118f30c6bd",
+    "Storage File Data Privileged Reader": "b8eda974-7b85-4f76-af95-65846b26df6d",
 }
 
 
@@ -125,6 +129,66 @@ def test_table_data_roles(enforced):
     assert [e["RowKey"] for e in reader.get_table_client("orders").list_entities()] == ["1"]
     with pytest.raises(HttpResponseError):
         reader.get_table_client("orders").create_entity({"PartitionKey": "p", "RowKey": "2"})
+
+
+def test_queue_data_roles(enforced):
+    from azure.storage.queue import QueueServiceClient
+
+    storage = enforced.client("azure.mgmt.storage", "StorageManagementClient")
+    account = storage.storage_accounts.begin_create(
+        enforced.group, unique("st"), {"location": "eastus", "kind": "StorageV2", "sku": {"name": "Standard_LRS"}}
+    ).result()
+    url = account.primary_endpoints.queue
+    # Creating a queue is a management action: the Owner may, but has no data actions.
+    admin = QueueServiceClient(url, credential=enforced.admin)
+    admin.create_queue("jobs")
+    with pytest.raises(HttpResponseError) as refused:
+        admin.get_queue_client("jobs").send_message("work")
+    assert refused.value.error_code == "AuthorizationPermissionMismatch"
+
+    worker = QueueServiceClient(url, credential=enforced.worker)
+    with pytest.raises(HttpResponseError):
+        worker.get_queue_client("jobs").peek_messages()
+    enforced.grant("Storage Queue Data Contributor", f"{account.id}/queueServices/default/queues/jobs")
+    worker.get_queue_client("jobs").send_message("work")
+
+    reader_app = "queue-reader"
+    enforced.grant("Storage Queue Data Reader", account.id, principal=reader_app)
+    reader = QueueServiceClient(
+        url, credential=ClientSecretCredential(TENANT, reader_app, "secret", authority=enforced.emulator.base, disable_instance_discovery=True)
+    )
+    assert [m.content for m in reader.get_queue_client("jobs").peek_messages()] == ["work"]
+    with pytest.raises(HttpResponseError):
+        reader.get_queue_client("jobs").send_message("more")
+
+
+def test_file_data_roles(enforced):
+    from azure.storage.fileshare import ShareServiceClient
+
+    storage = enforced.client("azure.mgmt.storage", "StorageManagementClient")
+    account = storage.storage_accounts.begin_create(
+        enforced.group, unique("st"), {"location": "eastus", "kind": "StorageV2", "sku": {"name": "Standard_LRS"}}
+    ).result()
+    storage.file_shares.create(enforced.group, account.name, "docs", {})
+    url = account.primary_endpoints.file
+    # Entra ID on Azure Files needs the backup intent.
+    worker = ShareServiceClient(url, credential=enforced.worker, token_intent="backup")
+    with pytest.raises(HttpResponseError) as refused:
+        worker.get_share_client("docs").get_file_client("a.txt").upload_file(b"hello")
+    assert refused.value.error_code == "AuthorizationPermissionMismatch"
+    enforced.grant("Storage File Data Privileged Contributor", f"{account.id}/fileServices/default/fileshares/docs")
+    worker.get_share_client("docs").get_file_client("a.txt").upload_file(b"hello")
+
+    reader_app = "file-reader"
+    enforced.grant("Storage File Data Privileged Reader", account.id, principal=reader_app)
+    reader = ShareServiceClient(
+        url,
+        credential=ClientSecretCredential(TENANT, reader_app, "secret", authority=enforced.emulator.base, disable_instance_discovery=True),
+        token_intent="backup",
+    )
+    assert reader.get_share_client("docs").get_file_client("a.txt").download_file().readall() == b"hello"
+    with pytest.raises(HttpResponseError):
+        reader.get_share_client("docs").get_file_client("b.txt").upload_file(b"nope")
 
 
 def test_key_vault_with_role_based_access(enforced):
