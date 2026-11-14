@@ -232,6 +232,16 @@ fn options_throughput(body: &Value) -> Option<i64> {
         .or_else(|| body.pointer("/properties/options/autoscaleSettings/maxThroughput").and_then(Value::as_i64))
 }
 
+/// The `options` a database or container reports: its own throughput, as the
+/// service reports it on a read, when it has dedicated throughput (whether
+/// set here or by replacing its offer on the data plane).
+fn options_json(throughput: Option<i64>) -> Value {
+    match throughput {
+        Some(throughput) => json!({"throughput": throughput}),
+        None => json!({}),
+    }
+}
+
 pub(crate) struct SqlDatabases;
 
 impl ResourceTypeHandler for SqlDatabases {
@@ -262,6 +272,7 @@ impl ResourceTypeHandler for SqlDatabases {
         let _ = with_account(ctx, &resource.id, |a| {
             if let Some(database) = a.databases.get(&resource.name) {
                 resource.properties["resource"] = database.json();
+                resource.properties["options"] = options_json(database.throughput);
             }
             Ok(())
         });
@@ -341,6 +352,7 @@ impl ResourceTypeHandler for SqlContainers {
             if let Some(db) = a.databases.get(&database) {
                 if let Some(container) = db.containers.get(&resource.name) {
                     resource.properties["resource"] = container.json(&db.system.rid);
+                    resource.properties["options"] = options_json(container.throughput);
                 }
             }
             Ok(())
