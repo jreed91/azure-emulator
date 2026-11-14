@@ -197,6 +197,12 @@ impl Parser {
         }
     }
 
+    /// Whether `(SELECT` comes next: a subquery as a function's argument.
+    fn subquery_follows(&self) -> bool {
+        matches!(self.tokens.get(self.at), Some(Token::Op("(")))
+            && matches!(self.tokens.get(self.at + 1), Some(Token::Ident(w)) if w.eq_ignore_ascii_case("select"))
+    }
+
     fn eat_op(&mut self, op: &str) -> bool {
         let found = matches!(self.peek(), Some(Token::Op(o)) if *o == op);
         if found {
@@ -497,6 +503,13 @@ impl Parser {
                         let query = self.query()?;
                         self.expect_op(")")?;
                         return Ok(Expr::Call("exists".into(), vec![Expr::Exists(Box::new(query))]));
+                    }
+                    // `ARRAY(SELECT ...)`: every value of a subquery, as an array.
+                    "array" if self.subquery_follows() => {
+                        self.expect_op("(")?;
+                        let query = self.query()?;
+                        self.expect_op(")")?;
+                        return Ok(Expr::Call("array".into(), vec![Expr::Exists(Box::new(query))]));
                     }
                     _ => {}
                 }
@@ -980,6 +993,10 @@ fn eval(expr: &Expr, scope: &Scope<'_>, group: Option<&[Scope<'_>]>) -> Result<V
         Expr::Call(name, args) if name == "exists" => {
             let Some(Expr::Exists(query)) = args.first() else { return Ok(None) };
             Some(json!(!subquery(query, scope)?.is_empty()))
+        }
+        Expr::Call(name, args) if name == "array" && matches!(args.first(), Some(Expr::Exists(_))) => {
+            let Some(Expr::Exists(query)) = args.first() else { return Ok(None) };
+            Some(Value::Array(subquery(query, scope)?))
         }
         Expr::Exists(query) => {
             // A scalar subquery: its single value.
