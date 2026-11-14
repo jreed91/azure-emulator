@@ -490,8 +490,7 @@ fn serve(engine: &Engine, account: &str, parts: &http::request::Parts, body: &st
             Ok(reply(StatusCode::NO_CONTENT))
         }),
         Op::GetAcl => with_queue(engine, account, &queue, |q| {
-            let body = q.acl.clone().unwrap_or_else(|| "<SignedIdentifiers />".into());
-            let body = body.trim_start_matches("<?xml version=\"1.0\" encoding=\"utf-8\"?>").to_string();
+            let body = q.acl.as_deref().map(crate::files::without_declaration).unwrap_or("<SignedIdentifiers />").to_string();
             Ok(xml_reply(StatusCode::OK, body))
         }),
         Op::SetAcl => with_queue(engine, account, &queue, |q| {

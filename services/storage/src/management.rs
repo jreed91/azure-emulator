@@ -4,7 +4,7 @@
 //!
 //! Blob containers are one store seen from both planes: a container created here
 //! is usable on the Blob data plane and vice versa. Queues, tables and file shares
-//! have no data plane yet, so they exist on Resource Manager only.
+//! created here are created on their data planes too.
 //!
 //! Not checked against Azure: the default service properties, and the code and
 //! wording of validation refusals.
@@ -212,6 +212,11 @@ impl ResourceTypeHandler for Queues {
         if let Some(queue) = state.accounts.get_mut(&account).and_then(|a| a.queues.get_mut(&resource.name)) {
             resource.properties["approximateMessageCount"] = json!(queue.count());
         }
+    }
+
+    /// The specification answers a queue delete with 204 only.
+    fn delete_status(&self) -> http::StatusCode {
+        http::StatusCode::NO_CONTENT
     }
 
     fn deleted(&self, ctx: &ArmContext<'_>, resource: &Resource) {

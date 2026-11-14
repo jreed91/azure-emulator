@@ -172,6 +172,16 @@ fn xml_escape(input: &str) -> String {
     input.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
+/// XML without its leading `<?xml ...?>` declaration, whatever its quoting,
+/// so it can be sent under one of our own.
+pub(crate) fn without_declaration(xml: &str) -> &str {
+    let xml = xml.trim_start();
+    match xml.strip_prefix("<?xml").and_then(|rest| rest.find("?>").map(|end| &rest[end + 2..])) {
+        Some(rest) => rest.trim_start(),
+        None => xml,
+    }
+}
+
 fn http_date(time: SystemTime) -> String {
     DateTime::<Utc>::from(time).format("%a, %d %b %Y %H:%M:%S GMT").to_string()
 }
@@ -672,7 +682,7 @@ impl FileRequest<'_> {
                 Ok(reply(StatusCode::OK, vec![("etag".into(), etag)]))
             }
             None => {
-                let mut r = xml_reply(share.acl.clone().map(|x| x.trim_start_matches("<?xml version=\"1.0\" encoding=\"utf-8\"?>").to_string()).unwrap_or_else(|| "<SignedIdentifiers />".into()));
+                let mut r = xml_reply(share.acl.as_deref().map(without_declaration).unwrap_or("<SignedIdentifiers />").to_string());
                 r.headers.push(("etag".into(), share.etag.clone()));
                 Ok(r)
             }
@@ -854,7 +864,9 @@ impl FileRequest<'_> {
                 headers.push(("content-type".into(), "application/octet-stream".into()));
             }
             let len = item.data.len();
-            let (status, data) = match if len == 0 { None } else { self.range(len)? } {
+            // A range on an empty file is unsatisfiable (416), as in Azure;
+            // the SDKs take that answer to mean the file is empty.
+            let (status, data) = match self.range(len)? {
                 Some((start, end)) => {
                     headers.push(("content-range".into(), format!("bytes {start}-{end}/{len}")));
                     if let Some(md5) = item.headers.get("content-md5") {
@@ -1013,6 +1025,13 @@ fn arm_removed(engine: &Engine, account: &str, share: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn declarations_are_dropped_whatever_their_quotes() {
+        assert_eq!(without_declaration("<?xml version='1.0' encoding='utf-8'?>\n<A/>"), "<A/>");
+        assert_eq!(without_declaration("<?xml version=\"1.0\"?><A/>"), "<A/>");
+        assert_eq!(without_declaration("<A/>"), "<A/>");
+    }
 
     #[test]
     fn ranges_merge_and_split() {
