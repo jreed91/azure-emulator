@@ -209,6 +209,21 @@ struct Stored {
     status: Status,
     /// For a dead-lettered message: the entity it came from.
     dead_letter_source: Option<String>,
+    /// Whether the message has been deferred. It stays deferred while a
+    /// receiver holds it by sequence number, and goes back to being deferred
+    /// when abandoned or when that lock expires.
+    deferred: bool,
+}
+
+impl Stored {
+    /// Where an unsettled message goes when its lock is released.
+    fn released(&self) -> Status {
+        if self.deferred {
+            Status::Deferred
+        } else {
+            Status::Available
+        }
+    }
 }
 
 #[derive(Default)]
@@ -403,6 +418,7 @@ pub(crate) fn send(engine: &Engine, entity: &Entity, mut message: AmqpMessage) -
             delivery_count: 0,
             status: Status::Available,
             dead_letter_source: None,
+            deferred: false,
         };
         broker.store(&target.key, stored);
     }
@@ -490,6 +506,7 @@ fn dead_letter(broker: &mut BrokerState, key: &str, mut stored: Stored, reason: 
     set_application_property(&mut stored.message, "DeadLetterReason", SimpleValue::String(reason.into()));
     set_application_property(&mut stored.message, "DeadLetterErrorDescription", SimpleValue::String(description.into()));
     stored.status = Status::Available;
+    stored.deferred = false;
     stored.dead_letter_source = Some(key.to_string());
     stored.available_at = SystemTime::now();
     stored.expires = None;
@@ -508,7 +525,7 @@ fn sweep(broker: &mut BrokerState, entity: &Entity, now: SystemTime) {
         for (sequence, stored) in queue.messages.iter_mut() {
             if let Status::Locked { until, .. } = stored.status {
                 if now >= until {
-                    stored.status = Status::Available;
+                    stored.status = stored.released();
                     stored.delivery_count += 1;
                     if stored.delivery_count >= max && !entity.dead_letter {
                         exhausted.push(*sequence);
@@ -650,7 +667,7 @@ pub(crate) fn settle(engine: &Engine, entity: &Entity, sequence: i64, token: uui
         Settlement::Complete => {}
         Settlement::Abandon { failed, properties } => {
             apply(&mut stored, properties);
-            stored.status = Status::Available;
+            stored.status = stored.released();
             if failed {
                 stored.delivery_count += 1;
             }
@@ -663,6 +680,7 @@ pub(crate) fn settle(engine: &Engine, entity: &Entity, sequence: i64, token: uui
         Settlement::Defer { properties } => {
             apply(&mut stored, properties);
             stored.status = Status::Deferred;
+            stored.deferred = true;
             broker.store(&entity.key, stored);
         }
         Settlement::DeadLetter { reason, description, properties } => {
