@@ -588,6 +588,49 @@ impl ArmRegistry {
         None
     }
 
+    /// The modeled operation `method path` addresses, with its provider's
+    /// namespace, whether or not it is
+    /// implemented: the one whose template matches with the most literal
+    /// segments. Used to record which operations a test run reached.
+    pub fn spec_operation(&self, method: &str, path: &str) -> Option<(&'static str, &'static str)> {
+        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let mut best: Option<(usize, (&'static str, &'static str))> = None;
+        let all = self.scaffolds.iter().flat_map(|provider| {
+            provider
+                .types
+                .iter()
+                .flat_map(|kind| kind.operations.iter())
+                .chain(provider.provider_operations.iter())
+                .map(move |operation| (provider.namespace, operation))
+        });
+        for (namespace, operation) in all {
+            if !operation.method.eq_ignore_ascii_case(method) {
+                continue;
+            }
+            let template: Vec<&str> = operation.path.split('/').filter(|s| !s.is_empty()).collect();
+            let (template, segments) = match template.split_first() {
+                Some((&"{scope}", rest)) if segments.len() > rest.len() => (rest, &segments[segments.len() - rest.len()..]),
+                _ => (&template[..], &segments[..]),
+            };
+            if template.len() != segments.len() {
+                continue;
+            }
+            let mut literals = 0;
+            let matched = template.iter().zip(segments).all(|(expected, actual)| {
+                if expected.starts_with('{') && expected.ends_with('}') {
+                    true
+                } else {
+                    literals += 1;
+                    expected.eq_ignore_ascii_case(actual)
+                }
+            });
+            if matched && best.is_none_or(|(most, _)| literals > most) {
+                best = Some((literals, (namespace, operation.id)));
+            }
+        }
+        best.map(|(_, id)| id)
+    }
+
     /// Canonical namespace → its registered canonical type names (without namespace).
     fn namespaces(&self) -> BTreeMap<String, Vec<String>> {
         let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -728,6 +771,12 @@ pub async fn handle(
         Ok(response) => response,
         Err(error) => error,
     };
+    if crate::trace::enabled() {
+        let path = percent_decode(parts.uri.path(), false);
+        if let Some((namespace, id)) = registry.spec_operation(parts.method.as_str(), &path) {
+            crate::trace::record("arm", &format!("{namespace}/{id}"), response.status());
+        }
+    }
     let id = request_id();
     for name in ["x-ms-request-id", "x-ms-correlation-request-id"] {
         if let Ok(value) = HeaderValue::from_str(&id) {

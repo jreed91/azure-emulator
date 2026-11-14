@@ -10,6 +10,7 @@ pub mod error;
 pub mod http_util;
 pub mod identity;
 pub mod schema;
+pub mod trace;
 
 pub use config::Config;
 pub use engine::Engine;
