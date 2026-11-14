@@ -412,7 +412,8 @@ pub(crate) fn send(engine: &Engine, entity: &Entity, mut message: AmqpMessage) -
         let stored = Stored {
             message,
             sequence,
-            enqueued: now,
+            // A scheduled message is enqueued when its time comes.
+            enqueued: available_at.max(now),
             available_at,
             expires: ttl.and_then(|ttl| available_at.checked_add(ttl)),
             delivery_count: 0,
@@ -788,7 +789,13 @@ pub(crate) fn cancel_scheduled(engine: &Engine, entity: &Entity, sequences: &[i6
     let now = SystemTime::now();
     let broker = engine.state::<BrokerState>();
     let mut broker = broker.lock();
-    if let Some(queue) = broker.queues.get_mut(&entity.key) {
+    // A message scheduled on a topic was copied to its subscriptions when it
+    // was scheduled, under the topic's sequence number: cancel every copy.
+    let subscriptions = format!("{}/subscriptions/", entity.key);
+    for (key, queue) in broker.queues.iter_mut() {
+        if *key != entity.key && !(entity.kind == Kind::Topic && key.starts_with(&subscriptions) && !key.ends_with("/$deadletterqueue")) {
+            continue;
+        }
         for sequence in sequences {
             if queue.messages.get(sequence).is_some_and(|m| m.status == Status::Available && m.available_at > now) {
                 queue.messages.remove(sequence);

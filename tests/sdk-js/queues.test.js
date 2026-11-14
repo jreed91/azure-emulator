@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 
-import { QueueServiceClient, StorageSharedKeyCredential } from "@azure/storage-queue";
+import { QueueClient, QueueSASPermissions, QueueServiceClient, StorageSharedKeyCredential } from "@azure/storage-queue";
 
 import { startEmulator } from "./emulator.js";
 
@@ -47,4 +47,82 @@ test("send, receive, update and delete messages", async () => {
   for await (const item of service.listQueues()) names.push(item.name);
   assert.deepEqual(names, ["orders"]);
   await queue.delete();
+});
+
+test("visibility, time to live and clearing", async () => {
+  const queue = service.getQueueClient("timing");
+  await queue.create();
+  await queue.sendMessage("hidden", { visibilityTimeout: 30 });
+  await queue.sendMessage("short", { messageTimeToLive: 1 });
+  await queue.sendMessage("forever", { messageTimeToLive: -1 });
+  const peeked = await queue.peekMessages({ numberOfMessages: 32 });
+  assert.deepEqual(peeked.peekedMessageItems.map((m) => m.messageText), ["short", "forever"], "an invisible message is not peeked");
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  const { receivedMessageItems } = await queue.receiveMessages({ numberOfMessages: 32 });
+  assert.deepEqual(receivedMessageItems.map((m) => m.messageText), ["forever"], "an expired message is gone");
+  assert.equal(receivedMessageItems[0].expiresOn.getUTCFullYear(), 9999, "-1 never expires");
+  assert.equal(receivedMessageItems[0].dequeueCount, 1);
+  await queue.clearMessages();
+  assert.equal((await queue.getProperties()).approximateMessagesCount, 0);
+  await queue.delete();
+});
+
+test("refusals: existing queues, missing queues and stale pop receipts", async () => {
+  const queue = service.getQueueClient("strict");
+  await queue.create({ metadata: { a: "1" } });
+  await queue.create({ metadata: { a: "1" } }); // the same metadata: no conflict
+  await assert.rejects(queue.create({ metadata: { a: "2" } }), (e) => e.statusCode === 409 && e.code === "QueueAlreadyExists");
+  await assert.rejects(service.getQueueClient("missing").getProperties(), (e) => e.statusCode === 404 && e.code === "QueueNotFound");
+  await assert.rejects(service.getQueueClient("Bad_Name").create(), (e) => e.statusCode === 400);
+
+  await queue.sendMessage("m");
+  const { receivedMessageItems: [message] } = await queue.receiveMessages({ visibilityTimeout: 30 });
+  const updated = await queue.updateMessage(message.messageId, message.popReceipt, "m2", 30);
+  await assert.rejects(queue.deleteMessage(message.messageId, message.popReceipt), (e) => e.statusCode === 400 && e.code === "PopReceiptMismatch");
+  await queue.deleteMessage(message.messageId, updated.popReceipt);
+  await assert.rejects(queue.deleteMessage(message.messageId, updated.popReceipt), (e) => e.statusCode === 404 && e.code === "MessageNotFound");
+  await queue.delete();
+});
+
+test("metadata, listing with a prefix, access policies and SAS", async () => {
+  for (const name of ["list-a", "list-b", "other"]) await service.getQueueClient(name).create({ metadata: { name } });
+  const listed = [];
+  for await (const item of service.listQueues({ prefix: "list-", includeMetadata: true })) listed.push([item.name, item.metadata?.name]);
+  assert.deepEqual(listed, [["list-a", "list-a"], ["list-b", "list-b"]]);
+
+  const queue = service.getQueueClient("list-a");
+  await queue.setMetadata({ owner: "team" });
+  assert.deepEqual((await queue.getProperties()).metadata, { owner: "team" });
+
+  const expiresOn = new Date(Date.now() + 3600_000);
+  await queue.setAccessPolicy([{ id: "readers", accessPolicy: { permissions: "rp", expiresOn } }]);
+  const policy = await queue.getAccessPolicy();
+  assert.deepEqual(policy.signedIdentifiers.map((s) => [s.id, s.accessPolicy.permissions]), [["readers", "rp"]]);
+
+  await queue.sendMessage("signed");
+  // Read (r) peeks; process (p) receives and deletes; add (a) sends.
+  const reader = new QueueClient(await queue.generateSasUrl({ permissions: QueueSASPermissions.parse("r"), expiresOn }));
+  assert.deepEqual((await reader.peekMessages()).peekedMessageItems.map((m) => m.messageText), ["signed"]);
+  await assert.rejects(reader.sendMessage("nope"), (e) => e.statusCode === 403);
+  await assert.rejects(reader.receiveMessages(), (e) => e.statusCode === 403);
+  const processor = new QueueClient(await queue.generateSasUrl({ permissions: QueueSASPermissions.parse("p"), expiresOn }));
+  await assert.rejects(processor.peekMessages(), (e) => e.statusCode === 403);
+
+  for (const name of ["list-a", "list-b", "other"]) await service.getQueueClient(name).delete();
+});
+
+test("service properties", async () => {
+  const cors = [{ allowedOrigins: "https://example.com", allowedMethods: "GET,PUT", allowedHeaders: "*", exposedHeaders: "*", maxAgeInSeconds: 60 }];
+  await service.setProperties({ cors });
+  const properties = await service.getProperties();
+  assert.equal(properties.cors[0].allowedOrigins, "https://example.com");
+  assert.equal(properties.cors[0].maxAgeInSeconds, 60);
+  // A set replaces only what it names: the CORS rules outlive a metrics change.
+  await service.setProperties({ hourMetrics: { version: "1.0", enabled: true, includeAPIs: true, retentionPolicy: { enabled: true, days: 7 } } });
+  const again = await service.getProperties();
+  assert.equal(again.hourMetrics.enabled, true);
+  assert.equal(again.hourMetrics.retentionPolicy.days, 7);
+  assert.equal(again.cors.length, 1);
+  await service.setProperties({ cors: [] });
+  assert.equal((await service.getProperties()).cors.length, 0);
 });

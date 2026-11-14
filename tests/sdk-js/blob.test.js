@@ -110,3 +110,19 @@ test("append and page blobs", async () => {
   const data = await disk.downloadToBuffer();
   assert.deepEqual([data[0], data[512]], [0, 1]);
 });
+
+test("blob service properties are kept, and a set replaces only what it names", async () => {
+  const before = await service.getProperties();
+  assert.equal(before.deleteRetentionPolicy.enabled, false);
+  assert.equal(before.staticWebsite.enabled, false);
+  await service.setProperties({ deleteRetentionPolicy: { enabled: true, days: 5 } });
+  await service.setProperties({
+    cors: [{ allowedOrigins: "https://app.example", allowedMethods: "GET", allowedHeaders: "*", exposedHeaders: "*", maxAgeInSeconds: 30 }],
+  });
+  const after = await service.getProperties();
+  assert.equal(after.deleteRetentionPolicy.enabled, true);
+  assert.equal(after.deleteRetentionPolicy.days, 5);
+  assert.equal(after.cors[0].allowedOrigins, "https://app.example");
+  assert.equal(after.blobAnalyticsLogging.version, "1.0");
+  await service.setProperties({ cors: [], deleteRetentionPolicy: { enabled: false } });
+});

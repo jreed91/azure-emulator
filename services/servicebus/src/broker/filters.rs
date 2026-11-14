@@ -61,6 +61,23 @@ fn simple_text(value: &SimpleValue) -> Option<String> {
     })
 }
 
+/// A numeric application property's value.
+fn number(value: &SimpleValue) -> Option<f64> {
+    Some(match value {
+        SimpleValue::Ubyte(n) => f64::from(*n),
+        SimpleValue::Ushort(n) => f64::from(*n),
+        SimpleValue::Uint(n) => f64::from(*n),
+        SimpleValue::Ulong(n) => *n as f64,
+        SimpleValue::Byte(n) => f64::from(*n),
+        SimpleValue::Short(n) => f64::from(*n),
+        SimpleValue::Int(n) => f64::from(*n),
+        SimpleValue::Long(n) => *n as f64,
+        SimpleValue::Float(n) => f64::from(n.into_inner()),
+        SimpleValue::Double(n) => n.into_inner(),
+        _ => return None,
+    })
+}
+
 fn json_text(value: &Json) -> Option<String> {
     match value {
         Json::String(text) => Some(text.clone()),
@@ -92,8 +109,15 @@ fn correlation(filter: &Json, message: &AmqpMessage) -> bool {
     }
     let application = message.application_properties.as_ref();
     for (name, expected) in filter.get("properties").and_then(Json::as_object).into_iter().flatten() {
-        let actual = application.and_then(|a| a.0.get(name)).and_then(simple_text);
-        if actual.is_none() || actual != json_text(expected) {
+        let Some(actual) = application.and_then(|a| a.0.get(name)) else {
+            return false;
+        };
+        let equal = match (number(actual), expected.as_f64()) {
+            // Numbers compare by value, whatever their AMQP width or kind.
+            (Some(actual), Some(expected)) => actual == expected,
+            _ => simple_text(actual).is_some_and(|text| Some(text) == json_text(expected)),
+        };
+        if !equal {
             return false;
         }
     }
