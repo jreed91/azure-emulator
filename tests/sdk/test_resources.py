@@ -1,8 +1,10 @@
 """Resource Manager itself: resource groups and their lifecycle."""
 
+import pytest
 from conftest import unique
 
 
+@pytest.mark.live
 def test_resource_group_lifecycle(resources):
     name = unique("rg-")
     group = resources.resource_groups.create_or_update(name, {"location": "eastus", "tags": {"by": "sdk-tests"}})
