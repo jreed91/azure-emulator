@@ -7,6 +7,8 @@ mod support;
 mod arm;
 #[path = "all/authorization.rs"]
 mod authorization;
+#[path = "all/deployment_validation.rs"]
+mod deployment_validation;
 #[path = "all/deployments.rs"]
 mod deployments;
 #[path = "all/entra.rs"]
