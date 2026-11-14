@@ -3,7 +3,8 @@ name: Release
 # Publishes the container image to GitHub Container Registry:
 #   ghcr.io/<owner>/<repo>:edge and :sha-<commit>   on every push to main
 #   ghcr.io/<owner>/<repo>:<version> and :latest     on a v* tag
-# and, on a v* tag, a GitHub release with prebuilt binaries.
+# and, on a v* tag, a GitHub release with prebuilt binaries and the fidelity
+# scores (tests/fidelity) measured on that commit.
 
 on:
   push:
@@ -107,15 +108,68 @@ jobs:
           name: binary-${{ matrix.target }}
           path: azure-emulator-${{ matrix.target }}.tar.gz
 
+  fidelity:
+    name: Fidelity scores
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: tests/sdk/requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tests/sdk-js/package-lock.json
+      - run: cargo build -p azure-emulator
+      - run: pip install -r tests/sdk/requirements.txt
+      - run: npm ci
+        working-directory: tests/sdk-js
+      # Failing tests lower the scores; they do not stop the release.
+      - run: tests/fidelity/run.sh fidelity
+      - run: |
+          {
+            echo "## Fidelity scores"
+            echo
+            echo "How many of each service's fidelity tests this release passes, measured on commit ${GITHUB_SHA::7} with the fidelity tests in that commit (\`tests/sdk\` and \`tests/sdk-js\`). A score can drop between releases without the emulator getting worse, when new tests find gaps that were already there. \`fidelity-checks.jsonl\` lists every test and its verdict; see [Fidelity scores](https://github.com/${{ github.repository }}#fidelity-scores) in the README."
+            echo
+            tail -n +3 fidelity/scores.md
+            echo
+            echo "<details><summary>Control-plane operation coverage (<code>azure-emulator coverage</code>)</summary>"
+            echo
+            echo '```'
+            target/debug/azure-emulator coverage
+            echo '```'
+            echo
+            echo "</details>"
+          } > fidelity/notes.md
+          cp fidelity/checks.jsonl fidelity/fidelity-checks.jsonl
+          cat fidelity/notes.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fidelity
+          path: |
+            fidelity/notes.md
+            fidelity/fidelity-checks.jsonl
+
   release:
     name: GitHub release
-    needs: binaries
+    needs: [binaries, fidelity]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           pattern: binary-*
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: fidelity
+      # The scores go above the generated list of changes.
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${{ github.ref_name }}" --repo "${{ github.repository }}" --generate-notes azure-emulator-*.tar.gz
+        run: gh release create "${{ github.ref_name }}" --repo "${{ github.repository }}" --generate-notes --notes-file notes.md azure-emulator-*.tar.gz fidelity-checks.jsonl

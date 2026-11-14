@@ -3,6 +3,7 @@ some operations locally with the `cryptography` package, so these tests also
 check that the emulator's keys, ciphertexts and signatures interoperate with an
 independent implementation."""
 
+import datetime
 import hashlib
 
 import pytest
@@ -155,3 +156,13 @@ def test_rotation_policy(keys):
     assert (stored.expires_in, stored.lifetime_actions[0].action) == ("P1Y", KeyRotationPolicyAction.rotate)
     with pytest.raises(ResourceNotFoundError):
         keys.get_key_rotation_policy("missing")
+
+
+@pytest.mark.known_gap("a key's expiry (exp) is stored but not enforced")
+def test_an_expired_key_cannot_sign(keys, credential):
+    expired = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
+    key = keys.create_rsa_key("expired-key", size=2048, expires_on=expired)
+    # Given only the id, the client sends the signing request to the vault.
+    crypto = CryptographyClient(key.id, credential)
+    with pytest.raises(HttpResponseError):
+        crypto.sign(SignatureAlgorithm.rs256, hashlib.sha256(b"document").digest())

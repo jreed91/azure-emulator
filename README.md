@@ -12,6 +12,12 @@ for anything not implemented yet.
 for development and tests: do not use it for production workloads, and do not
 rely on it as a security boundary.
 
+To see how closely each service matches Azure, check the
+[fidelity scores](#fidelity-scores) published with each release on the
+[releases page](https://github.com/jreed91/azure-emulator/releases). To check
+whether your own project is expected to work, see
+[Checking whether your project works with Azure Emulator](#checking-whether-your-project-works-with-azure-emulator).
+
 ## What works today
 
 | Area | Implemented |
@@ -138,6 +144,69 @@ yet.
 - State is kept across restarts only with `--persist`, and then without the
   messages and events in flight in Service Bus and Event Hubs (see
   [Keeping state across restarts](#keeping-state-across-restarts)).
+
+## Fidelity scores
+
+How closely the emulator matches Azure is its *fidelity*. Where the emulator
+implements an operation, it aims for the same results as Azure for valid calls
+and the same errors for invalid ones; where it does not, it answers `501`, and
+anything that calls it fails straight away.
+
+A *fidelity test* drives a workflow through an official Azure SDK and asserts
+how Azure behaves: the result, the state it leaves, and for invalid calls, the
+error. The fidelity tests are the Python and JavaScript SDK suites,
+`tests/sdk/` and `tests/sdk-js/`; `tests/fidelity/services.json` says which
+service each test file counts towards. They are written from Azure's
+documentation, REST specifications and SDK behaviour, and have not all been
+replayed against a live subscription, so a passing test is good evidence, not
+proof, that Azure behaves the same way.
+
+A *fidelity score* is, for each service, the number of its fidelity tests the
+emulator passes out of the total, such as 40 of 50. Every release (`v*` tag)
+publishes the scores at the top of its release notes, measured on the release's
+commit with the tests in that commit, together with `fidelity-checks.jsonl`,
+which lists every test, its service and its verdict.
+
+Tests that pass do not regress: CI runs every one on every pull request. A
+known difference from Azure is published on purpose as a failing test, marked
+`@pytest.mark.known_gap("why")` in Python (or `{ todo: "known gap: why" }` in
+JavaScript). It runs as a strict expected failure, so the suite stays green
+while the gap is open, and fails once the emulator matches Azure, so the marker
+is removed and the score goes up. Scores can still go down between releases
+when new tests find differences that were already there, so compare a service's
+scores together with its totals.
+
+To reproduce the scores, or to score your own build:
+
+```bash
+cargo build -p azure-emulator
+pip install -r tests/sdk/requirements.txt
+(cd tests/sdk-js && npm ci)
+tests/fidelity/run.sh            # writes target/fidelity/scores.md and checks.jsonl
+```
+
+The score covers what the tests exercise. `azure-emulator coverage` is a
+separate measure: how many of each provider's control-plane operations are
+implemented at all (see [What works today](#what-works-today)).
+
+### Checking whether your project works with Azure Emulator
+
+1. List the Azure services and operations your project calls (SDK clients and
+   methods, Terraform resources, Bicep or ARM resource types).
+2. Check each service's score in the release notes for the release you use,
+   and look its operations up in that release's `fidelity-checks.jsonl`, or in
+   the test files under `tests/sdk/` and `tests/sdk-js/`. Tests that are not
+   `passed` are the known differences.
+3. For control-plane operations, `azure-emulator coverage --operations` says
+   whether each one is implemented or answers `501`. Read
+   [Known gaps](#known-gaps) for the behaviour that is missing on purpose.
+4. For anything no fidelity test covers, run your own tests against the
+   emulator and against Azure, and compare the results.
+
+If the emulator behaves differently from Azure, open an
+[issue](https://github.com/jreed91/azure-emulator/issues) with the request you
+sent, the response you got, and what Azure returns. Better still, add a
+`known_gap` test that asserts Azure's behaviour: it becomes part of the score.
 
 ## Quick start
 
@@ -611,7 +680,8 @@ Each `Emulator` is fully isolated. `core/router/tests/` shows how to drive it.
 ├── tools/scaffold/      # emulator-scaffold: OpenAPI specification → service scaffold
 ├── vendor/fe2o3-amqp/   # the AMQP library, patched (see PATCHED.md)
 ├── tests/sdk/           # checks that run the Azure SDKs for Python against the emulator
-└── tests/sdk-js/        # and the Azure SDKs for JavaScript
+├── tests/sdk-js/        # and the Azure SDKs for JavaScript
+└── tests/fidelity/      # scores both suites per service (see Fidelity scores)
 ```
 
 Each service crate also holds two generated files: `src/scaffold.rs`, the table of

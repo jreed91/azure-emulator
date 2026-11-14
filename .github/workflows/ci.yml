@@ -31,6 +31,8 @@ jobs:
           cache-dependency-path: tests/sdk/requirements.txt
       - run: cargo build -p azure-emulator
       - run: pip install -r tests/sdk/requirements.txt
+      # Every test file counts towards a service's fidelity score.
+      - run: python tests/fidelity/score.py --check
       - run: python -m pytest -n auto
         working-directory: tests/sdk
 
