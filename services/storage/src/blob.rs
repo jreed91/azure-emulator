@@ -17,6 +17,7 @@ use emulator_core::Engine;
 use http::{header, HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
 use md5::{Digest, Md5};
 
+use crate::service_properties::{self, Service};
 use crate::sas::{self, Level, Needed, SasFailure};
 use crate::shared_key;
 use crate::state::{lease_state, Blob, BlobType, Container, CopyInfo, Kind, Lease, LeaseState, Protection, StorageState};
@@ -54,6 +55,10 @@ fn container_not_found() -> BlobError {
         "ContainerNotFound",
         "The specified container does not exist.",
     )
+}
+
+fn account_not_found() -> BlobError {
+    error(StatusCode::NOT_FOUND, "ResourceNotFound", "The specified resource does not exist.")
 }
 
 fn blob_not_found() -> BlobError {
@@ -141,6 +146,8 @@ pub async fn handle(engine: Arc<Engine>, account: String, request: Request<Body>
 #[derive(Clone, Copy)]
 enum Route {
     ListContainers,
+    ServiceProperties,
+    SetServiceProperties,
     CreateContainer,
     ContainerProperties,
     DeleteContainer,
@@ -169,7 +176,12 @@ enum Route {
 impl Route {
     fn of(method: &str, container: &str, blob: &str, restype: Option<&str>, comp: Option<&str>, copy_source: bool) -> Option<Self> {
         if container.is_empty() {
-            return matches!((method, comp), ("GET", Some("list"))).then_some(Self::ListContainers);
+            return match (method, restype, comp) {
+                ("GET", _, Some("list")) => Some(Self::ListContainers),
+                ("GET", Some("service"), Some("properties")) => Some(Self::ServiceProperties),
+                ("PUT", Some("service"), Some("properties")) => Some(Self::SetServiceProperties),
+                _ => None,
+            };
         }
         if blob.is_empty() {
             if restype != Some("container") {
@@ -211,6 +223,8 @@ impl Route {
     fn needed(self) -> Needed {
         let (level, permissions, service_sas_on_container) = match self {
             Self::ListContainers => (Level::Service, "l", false),
+            Self::ServiceProperties => (Level::Service, "r", false),
+            Self::SetServiceProperties => (Level::Service, "w", false),
             Self::CreateContainer => (Level::Container, "cw", false),
             Self::ContainerProperties => (Level::Container, "r", false),
             Self::DeleteContainer => (Level::Container, "d", false),
@@ -369,6 +383,8 @@ fn check_roles(engine: &Engine, account: &str, oid: &str, container: &str, blob:
     };
     let needed: Vec<Permission<'_>> = match route {
         Route::ListContainers | Route::ContainerProperties => vec![Permission::Action(&read)],
+        Route::ServiceProperties => vec![Permission::Action("Microsoft.Storage/storageAccounts/blobServices/read")],
+        Route::SetServiceProperties => vec![Permission::Action("Microsoft.Storage/storageAccounts/blobServices/write")],
         Route::CreateContainer | Route::LeaseContainer => vec![Permission::Action(&write)],
         Route::DeleteContainer => vec![Permission::Action(&delete)],
         Route::ListBlobs | Route::GetBlob | Route::HeadBlob | Route::GetBlockList | Route::GetMetadata | Route::GetPageList => {
@@ -456,6 +472,18 @@ async fn serve(
     };
     match route {
         Route::ListContainers => request.list_containers(),
+        Route::ServiceProperties => {
+            let document = service_properties::read(engine, account, Service::Blob).ok_or_else(account_not_found)?;
+            Ok(xml(StatusCode::OK, document))
+        }
+        Route::SetServiceProperties => {
+            let data = read_body(body).await.map_err(|_| error(StatusCode::PAYLOAD_TOO_LARGE, "RequestBodyTooLarge", "The request body is too large."))?;
+            match service_properties::write(engine, account, Service::Blob, &String::from_utf8_lossy(&data)) {
+                None => Err(account_not_found()),
+                Some(Err(())) => Err(error(StatusCode::BAD_REQUEST, "InvalidXmlDocument", "XML specified is not syntactically valid.")),
+                Some(Ok(())) => Ok(respond(StatusCode::ACCEPTED, Vec::new(), Body::empty())),
+            }
+        }
         Route::CreateContainer => request.create_container(&container),
         Route::ContainerProperties => request.container_properties(&container),
         Route::DeleteContainer => request.delete_container(&container),

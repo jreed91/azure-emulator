@@ -27,6 +27,7 @@ use http::{header, HeaderMap, HeaderValue, Method, Request, StatusCode};
 use md5::{Digest, Md5};
 use serde_json::json;
 
+use crate::service_properties::{self, Service};
 use crate::sas;
 use crate::shared_key;
 use crate::state::StorageState;
@@ -538,8 +539,16 @@ fn serve(engine: &Engine, account: &str, parts: &http::request::Parts, body: Byt
     use Op::*;
     match op {
         ListShares => request.list_shares(),
-        ServiceProperties => Ok(xml_reply("<StorageServiceProperties><HourMetrics><Version>1.0</Version><Enabled>false</Enabled><RetentionPolicy><Enabled>false</Enabled></RetentionPolicy></HourMetrics><MinuteMetrics><Version>1.0</Version><Enabled>false</Enabled><RetentionPolicy><Enabled>false</Enabled></RetentionPolicy></MinuteMetrics><Cors /></StorageServiceProperties>".into())),
-        SetServiceProperties => Ok(reply(StatusCode::ACCEPTED, Vec::new())),
+        ServiceProperties => {
+            let document = service_properties::read(engine, account, Service::File)
+                .ok_or_else(|| fail(StatusCode::NOT_FOUND, "ResourceNotFound", "The specified resource does not exist."))?;
+            Ok(xml_reply(without_declaration(&document).to_string()))
+        }
+        SetServiceProperties => match service_properties::write(engine, account, Service::File, &String::from_utf8_lossy(&body)) {
+            None => Err(fail(StatusCode::NOT_FOUND, "ResourceNotFound", "The specified resource does not exist.")),
+            Some(Err(())) => Err(fail(StatusCode::BAD_REQUEST, "InvalidXmlDocument", "XML specified is not syntactically valid.")),
+            Some(Ok(())) => Ok(reply(StatusCode::ACCEPTED, Vec::new())),
+        },
         CreateShare => request.create_share(),
         ShareProperties => request.share_properties(),
         DeleteShare => request.delete_share(),

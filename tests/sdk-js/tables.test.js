@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 
-import { AzureNamedKeyCredential, TableClient, TableServiceClient, odata } from "@azure/data-tables";
+import { AzureNamedKeyCredential, AzureSASCredential, TableClient, TableServiceClient, generateTableSas, odata } from "@azure/data-tables";
 
 import { startEmulator } from "./emulator.js";
 
@@ -57,4 +57,70 @@ test("tables, entities, queries and transactions", async () => {
 
   await service.deleteTable("Products");
   await assert.rejects(table.getEntity("fruit", "apple"), (e) => e.statusCode === 404);
+});
+
+function tableClient(name) {
+  return new TableClient(endpoint, name, credential, { allowInsecureConnection: true });
+}
+
+test("select, top and paging", async () => {
+  const table = tableClient("Pages");
+  await table.createTable();
+  for (let i = 0; i < 7; i++) await table.createEntity({ partitionKey: "p", rowKey: `r${i}`, n: i, extra: "x" });
+  const selected = [];
+  for await (const e of table.listEntities({ queryOptions: { select: ["n"] } })) selected.push(Object.keys(e).filter((k) => !["etag", "timestamp", "partitionKey", "rowKey"].includes(k)));
+  assert.ok(selected.every((keys) => keys.length === 1 && keys[0] === "n"), JSON.stringify(selected));
+
+  const pages = [];
+  for await (const page of table.listEntities().byPage({ maxPageSize: 3 })) pages.push(page.map((e) => e.n));
+  assert.deepEqual(pages, [[0, 1, 2], [3, 4, 5], [6]]);
+  await table.deleteTable();
+});
+
+test("replace drops properties, and a failed transaction changes nothing", async () => {
+  const table = tableClient("Atomic");
+  await table.createTable();
+  await table.createEntity({ partitionKey: "p", rowKey: "a", keep: 1, drop: 2 });
+  await table.upsertEntity({ partitionKey: "p", rowKey: "a", keep: 3 }, "Replace");
+  const replaced = await table.getEntity("p", "a");
+  assert.equal(replaced.keep, 3);
+  assert.equal(replaced.drop, undefined);
+
+  await assert.rejects(
+    table.submitTransaction([
+      ["create", { partitionKey: "p", rowKey: "b" }],
+      ["create", { partitionKey: "p", rowKey: "a" }],
+    ]),
+    (e) => e.statusCode === 409,
+  );
+  await assert.rejects(table.getEntity("p", "b"), (e) => e.statusCode === 404);
+  await assert.rejects(table.createEntity({ partitionKey: "p", rowKey: "has/slash" }), (e) => e.statusCode === 400);
+  await table.deleteTable();
+});
+
+test("table SAS and access policies", async () => {
+  const table = tableClient("Signed");
+  await table.createTable();
+  await table.createEntity({ partitionKey: "p", rowKey: "a", v: 1 });
+  const expiresOn = new Date(Date.now() + 3600_000);
+  await table.setAccessPolicy([{ id: "readers", accessPolicy: { permission: "r", expiry: expiresOn } }]);
+  const [policy] = await table.getAccessPolicy();
+  assert.equal(policy.id, "readers");
+  assert.equal(policy.accessPolicy.permission, "r");
+
+  const sas = generateTableSas("Signed", credential, { permissions: { query: true }, expiresOn });
+  const reader = new TableClient(endpoint, "Signed", new AzureSASCredential(sas), { allowInsecureConnection: true });
+  assert.equal((await reader.getEntity("p", "a")).v, 1);
+  await assert.rejects(reader.createEntity({ partitionKey: "p", rowKey: "b" }), (e) => e.statusCode === 403);
+  await table.deleteTable();
+});
+
+test("table service properties", async () => {
+  const service = new TableServiceClient(endpoint, credential, { allowInsecureConnection: true });
+  const cors = [{ allowedOrigins: "*", allowedMethods: "GET", allowedHeaders: "*", exposedHeaders: "*", maxAgeInSeconds: 5 }];
+  await service.setProperties({ cors });
+  const properties = await service.getProperties();
+  assert.equal(properties.cors[0].maxAgeInSeconds, 5);
+  assert.equal(properties.logging.version, "1.0", "the logging settings are kept");
+  await service.setProperties({ cors: [] });
 });

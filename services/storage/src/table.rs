@@ -25,6 +25,7 @@ use emulator_core::Engine;
 use http::{header, HeaderMap, HeaderValue, Request, StatusCode};
 use serde_json::{json, Map, Value};
 
+use crate::service_properties::{self, Service};
 use crate::sas;
 use crate::shared_key;
 use crate::state::StorageState;
@@ -1208,13 +1209,21 @@ fn serve(
     let level = metadata_level(&parts.headers);
     let base = endpoint(engine, account);
     match op {
-        Op::ServiceProperties => Ok(Reply {
-            status: StatusCode::OK,
-            headers: vec![],
-            body: None,
-            raw: Some(("application/xml".into(), "<?xml version=\"1.0\" encoding=\"utf-8\"?><StorageServiceProperties><Logging><Version>1.0</Version><Read>false</Read><Write>false</Write><Delete>false</Delete><RetentionPolicy><Enabled>false</Enabled></RetentionPolicy></Logging><HourMetrics><Version>1.0</Version><Enabled>false</Enabled><RetentionPolicy><Enabled>false</Enabled></RetentionPolicy></HourMetrics><MinuteMetrics><Version>1.0</Version><Enabled>false</Enabled><RetentionPolicy><Enabled>false</Enabled></RetentionPolicy></MinuteMetrics><Cors /></StorageServiceProperties>".into())),
-        }),
-        Op::SetServiceProperties => Ok(reply(StatusCode::ACCEPTED)),
+        Op::ServiceProperties => {
+            let document = service_properties::read(engine, account, Service::Table)
+                .ok_or_else(|| fail(StatusCode::NOT_FOUND, "ResourceNotFound", "The specified resource does not exist."))?;
+            Ok(Reply {
+                status: StatusCode::OK,
+                headers: vec![],
+                body: None,
+                raw: Some(("application/xml".into(), document)),
+            })
+        }
+        Op::SetServiceProperties => match service_properties::write(engine, account, Service::Table, &String::from_utf8_lossy(body)) {
+            None => Err(fail(StatusCode::NOT_FOUND, "ResourceNotFound", "The specified resource does not exist.")),
+            Some(Err(())) => Err(bad("InvalidXmlDocument", "XML specified is not syntactically valid.")),
+            Some(Ok(())) => Ok(reply(StatusCode::ACCEPTED)),
+        },
         Op::QueryTables => {
             let filter = query.get("$filter").map(|f| parse_filter(f)).transpose().map_err(|e| bad("InvalidInput", e))?;
             let top = query.get("$top").and_then(|t| t.parse::<usize>().ok()).unwrap_or(MAX_PAGE).clamp(1, MAX_PAGE);

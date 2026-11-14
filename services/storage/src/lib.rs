@@ -10,6 +10,7 @@ mod management;
 mod protection;
 mod replication;
 mod sas;
+mod service_properties;
 pub mod scaffold;
 mod shared_key;
 mod state;
@@ -132,6 +133,7 @@ impl ResourceTypeHandler for StorageAccounts {
                     queues: Default::default(),
                     tables: Default::default(),
                     shares: Default::default(),
+                    service_properties: Default::default(),
                 },
             );
         }

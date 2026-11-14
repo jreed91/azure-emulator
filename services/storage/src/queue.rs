@@ -23,6 +23,7 @@ use http::{header, HeaderMap, HeaderValue, Method, Request, StatusCode};
 use serde_json::json;
 
 use crate::sas;
+use crate::service_properties::{self, Service};
 use crate::shared_key;
 use crate::state::StorageState;
 
@@ -116,6 +117,10 @@ struct Reply {
 
 fn reply(status: StatusCode) -> Reply {
     Reply { status, headers: Vec::new(), body: None }
+}
+
+fn no_account() -> Failure {
+    fail(StatusCode::NOT_FOUND, "ResourceNotFound", "The specified resource does not exist.")
 }
 
 fn xml_reply(status: StatusCode, body: String) -> Reply {
@@ -449,11 +454,15 @@ fn serve(engine: &Engine, account: &str, parts: &http::request::Parts, body: &st
                 ),
             ))
         }
-        Op::ServiceProperties => Ok(xml_reply(
-            StatusCode::OK,
-            "<StorageServiceProperties><Logging><Version>1.0</Version><Read>false</Read><Write>false</Write><Delete>false</Delete><RetentionPolicy><Enabled>false</Enabled></RetentionPolicy></Logging><HourMetrics><Version>1.0</Version><Enabled>false</Enabled><RetentionPolicy><Enabled>false</Enabled></RetentionPolicy></HourMetrics><MinuteMetrics><Version>1.0</Version><Enabled>false</Enabled><RetentionPolicy><Enabled>false</Enabled></RetentionPolicy></MinuteMetrics><Cors /></StorageServiceProperties>".into(),
-        )),
-        Op::SetServiceProperties => Ok(reply(StatusCode::ACCEPTED)),
+        Op::ServiceProperties => {
+            let document = service_properties::read(engine, account, Service::Queue).ok_or_else(no_account)?;
+            Ok(xml_reply(StatusCode::OK, crate::files::without_declaration(&document).to_string()))
+        }
+        Op::SetServiceProperties => match service_properties::write(engine, account, Service::Queue, body) {
+            None => Err(no_account()),
+            Some(Err(())) => Err(fail(StatusCode::BAD_REQUEST, "InvalidXmlDocument", "XML specified is not syntactically valid.")),
+            Some(Ok(())) => Ok(reply(StatusCode::ACCEPTED)),
+        },
         Op::CreateQueue => {
             if !valid_name(&queue) {
                 return Err(fail(StatusCode::BAD_REQUEST, "InvalidResourceName", "The specifed resource name contains invalid characters."));

@@ -200,3 +200,85 @@ test("a queue can forward into a topic", async () => {
   }
   await sender.close();
 });
+
+test("a settled message's lock cannot be renewed", async () => {
+  await queue("locks");
+  const sender = client.createSender("locks");
+  await sender.sendMessages({ body: "once" });
+  const receiver = client.createReceiver("locks");
+  const [message] = await receiver.receiveMessages(1, { maxWaitTimeInMs: 2000 });
+  const lockedUntil = await receiver.renewMessageLock(message);
+  assert.ok(lockedUntil instanceof Date);
+  await receiver.completeMessage(message);
+  await assert.rejects(receiver.renewMessageLock(message), (e) => e.code === "MessageLockLost");
+  await receiver.close();
+  await sender.close();
+});
+
+test("scheduled messages on a topic, cancelled and delivered", async () => {
+  await emulator.arm("PUT", `${namespace}/topics/later`, {});
+  await emulator.arm("PUT", `${namespace}/topics/later/subscriptions/all`, {});
+  const sender = client.createSender("later");
+  const soon = new Date(Date.now() + 1000);
+  const [keep, drop] = await sender.scheduleMessages([{ body: "keep" }, { body: "drop" }], soon);
+  assert.ok(drop > keep, "each scheduled message gets its own sequence number");
+  await sender.cancelScheduledMessages(drop);
+  const receiver = client.createReceiver("later", "all", { receiveMode: "receiveAndDelete" });
+  const got = await receiver.receiveMessages(5, { maxWaitTimeInMs: 4000 });
+  assert.deepEqual(got.map((m) => m.body), ["keep"]);
+  assert.ok(got[0].enqueuedTimeUtc >= new Date(soon.getTime() - 50));
+  await receiver.close();
+  await sender.close();
+});
+
+test("peek from a sequence number, and dead-letter a deferred message", async () => {
+  await queue("peeking");
+  const sender = client.createSender("peeking");
+  await sender.sendMessages([{ body: "1" }, { body: "2" }, { body: "3" }]);
+  const receiver = client.createReceiver("peeking");
+  const all = await receiver.peekMessages(10);
+  const from = await receiver.peekMessages(10, { fromSequenceNumber: all[1].sequenceNumber });
+  assert.deepEqual(from.map((m) => m.body), ["2", "3"]);
+
+  const [first] = await receiver.receiveMessages(1, { maxWaitTimeInMs: 2000 });
+  await receiver.deferMessage(first);
+  const [deferred] = await receiver.receiveDeferredMessages(first.sequenceNumber);
+  await receiver.deadLetterMessage(deferred, { deadLetterReason: "late", deadLetterErrorDescription: "too slow" });
+  const dead = client.createReceiver("peeking", { subQueueType: "deadLetter", receiveMode: "receiveAndDelete" });
+  const [letter] = await dead.receiveMessages(1, { maxWaitTimeInMs: 2000 });
+  assert.equal(letter.body, "1");
+  assert.equal(letter.deadLetterReason, "late");
+  assert.equal(letter.deadLetterErrorDescription, "too slow");
+  await assert.rejects(receiver.receiveDeferredMessages(first.sequenceNumber.add(1000)), (e) => e.code === "MessageNotFound");
+  await dead.close();
+  await receiver.close();
+  await sender.close();
+});
+
+test("correlation filters match typed application properties", async () => {
+  await emulator.arm("PUT", `${namespace}/topics/typed`, {});
+  await emulator.arm("PUT", `${namespace}/topics/typed/subscriptions/match`, {});
+  const rules = client.createRuleManager("typed", "match");
+  await rules.deleteRule("$Default");
+  await assert.rejects(rules.deleteRule("missing"), (e) => e.code === "MessagingEntityNotFound");
+  await rules.createRule("typed", {
+    correlationId: "c-1",
+    applicationProperties: { count: 3, urgent: true, ratio: 0.5, region: "eu" },
+  });
+  const sender = client.createSender("typed");
+  const props = { count: 3, urgent: true, ratio: 0.5, region: "eu" };
+  await sender.sendMessages([
+    { body: "match", correlationId: "c-1", applicationProperties: props },
+    { body: "wrong count", correlationId: "c-1", applicationProperties: { ...props, count: 4 } },
+    { body: "wrong flag", correlationId: "c-1", applicationProperties: { ...props, urgent: false } },
+    { body: "no correlation", applicationProperties: props },
+  ]);
+  const receiver = client.createReceiver("typed", "match", { receiveMode: "receiveAndDelete" });
+  const got = await receiver.receiveMessages(5, { maxWaitTimeInMs: 2000 });
+  assert.deepEqual(got.map((m) => m.body), ["match"]);
+  const [listed] = await (async () => { const all = []; for await (const r of rules.listRules()) all.push(r); return all; })();
+  assert.equal(listed.filter.correlationId, "c-1");
+  assert.equal(listed.filter.applicationProperties.count, 3);
+  await receiver.close();
+  await sender.close();
+});

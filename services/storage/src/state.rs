@@ -41,6 +41,9 @@ pub(crate) struct Account {
     /// File shares by name: the Files data plane's, and Resource Manager's.
     #[serde(default)]
     pub shares: BTreeMap<String, crate::files::Share>,
+    /// Each service's properties document, by service, once it has been set.
+    #[serde(default)]
+    pub service_properties: BTreeMap<String, String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
