@@ -24,6 +24,7 @@
   "sdk/test_keyvault_more.py": "Key Vault",
   "sdk/test_keys.py": "Key Vault",
   "sdk/test_certificates.py": "Key Vault",
+  "sdk/test_certificates_more.py": "Key Vault",
   "sdk/test_servicebus.py": "Service Bus",
   "sdk/test_servicebus_management.py": "Service Bus",
   "sdk/test_servicebus_more.py": "Service Bus",
