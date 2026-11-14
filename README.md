@@ -189,6 +189,21 @@ The score covers what the tests exercise. `azure-emulator coverage` is a
 separate measure: how many of each provider's control-plane operations are
 implemented at all (see [What works today](#what-works-today)).
 
+Every implemented control-plane operation is also exercised by at least one
+Python, JavaScript or Terraform test, and CI checks this. Run with
+`AZURE_EMULATOR_TRACE=<file>`, the emulator appends the operation each
+Resource Manager request reached to the file. `tests/operations/check.py`
+compares the suites' traces with `azure-emulator coverage --operations` and
+fails on an implemented operation no test reached:
+
+```bash
+export AZURE_EMULATOR_TRACE=$PWD/target/python.trace
+(cd tests/sdk && python -m pytest -n auto)
+export AZURE_EMULATOR_TRACE=$PWD/target/js.trace
+(cd tests/sdk-js && npm test)
+python tests/operations/check.py target/python.trace target/js.trace
+```
+
 ### Checking whether your project works with Azure Emulator
 
 1. List the Azure services and operations your project calls (SDK clients and
