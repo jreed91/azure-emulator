@@ -13,6 +13,10 @@ mod deployment_validation;
 mod deployments;
 #[path = "all/entra.rs"]
 mod entra;
+#[path = "all/schema_resources.rs"]
+mod schema_resources;
+#[path = "all/provision.rs"]
+mod provision;
 #[path = "all/scaffold.rs"]
 mod scaffold;
 #[path = "all/keyvault.rs"]
