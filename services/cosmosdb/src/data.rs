@@ -152,7 +152,10 @@ pub async fn handle(engine: Arc<Engine>, host: String, request: Request<Body>) -
         (segments[segments.len() - 2].clone(), segments.join("/"))
     };
     let raw_link = if segments.len() % 2 == 1 { raw_segments[..raw_segments.len() - 1].join("/") } else { raw_segments.join("/") };
-    let access = match authorize(&engine, &account, &parts.method, &parts.headers, &resource_type, &[link, raw_link]) {
+    // A request addressed by resource ids (`offers/<rid>`) is signed with the
+    // last id alone, lower-cased; one addressed by names, with the whole link.
+    let id_only = if segments.len().is_multiple_of(2) { segments.last().cloned().unwrap_or_default() } else { String::new() };
+    let access = match authorize(&engine, &account, &parts.method, &parts.headers, &resource_type, &[link, raw_link, id_only]) {
         Ok(access) => access,
         Err(failure) => return finish(Err(failure), 0, 0.0),
     };
@@ -215,7 +218,10 @@ fn authorize(
                 .to_ascii_lowercase();
             let keys = engine.state::<CosmosState>().lock().accounts.get(account).map(|a| a.keys.clone()).unwrap_or_default();
             let expected = base64::engine::general_purpose::STANDARD.decode(&signature).unwrap_or_default();
-            for link in links {
+            // A resource id is signed in lower case, as the REST
+            // authorization scheme says; names keep their case.
+            let lowered: Vec<String> = links.iter().map(|l| l.to_ascii_lowercase()).filter(|l| !links.contains(l)).collect();
+            for link in links.iter().chain(&lowered) {
                 let text = format!("{}\n{}\n{}\n{}\n\n", method.as_str().to_ascii_lowercase(), resource_type.to_ascii_lowercase(), link, date);
                 for (index, key) in keys.iter().enumerate() {
                     let Ok(key) = base64::engine::general_purpose::STANDARD.decode(key) else { continue };
