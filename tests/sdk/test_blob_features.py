@@ -5,7 +5,7 @@ import datetime
 import pytest
 from azure.core import MatchConditions
 from azure.core.exceptions import HttpResponseError, ResourceExistsError, ResourceModifiedError, ResourceNotFoundError
-from azure.storage.blob import BlobSasPermissions, BlobServiceClient, generate_blob_sas
+from azure.storage.blob import BlobSasPermissions, BlobServiceClient, RetentionPolicy, generate_blob_sas
 
 from conftest import unique
 
@@ -167,3 +167,20 @@ def test_conditional_headers(container):
     with pytest.raises(HttpResponseError) as refused:
         container.get_blob_client("c2.txt").start_copy_from_url(blob.url, source_etag='"0x0"', source_match_condition=MatchConditions.IfNotModified)
     assert refused.value.status_code == 412
+
+
+@pytest.mark.known_gap("blob soft delete is not implemented")
+def test_soft_deleted_blobs_can_be_listed_and_undeleted(account):
+    service = BlobServiceClient(account.blob_url, credential=account.key)
+    service.set_service_properties(delete_retention_policy=RetentionPolicy(enabled=True, days=7))
+    container = service.get_container_client("soft-delete")
+    container.create_container()
+    blob = container.get_blob_client("kept.txt")
+    blob.upload_blob(b"kept")
+    blob.delete_blob()
+
+    assert [b.name for b in container.list_blobs()] == []
+    deleted = [b for b in container.list_blobs(include=["deleted"]) if b.name == "kept.txt"]
+    assert len(deleted) == 1 and deleted[0].deleted
+    blob.undelete_blob()
+    assert blob.download_blob().readall() == b"kept"
