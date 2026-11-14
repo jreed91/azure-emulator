@@ -320,12 +320,31 @@ fn resolve_definition(template: &Value, definition: &Value) -> Value {
     current
 }
 
+/// Parses every template string under `value`, naming the first that is not a
+/// valid expression by its JSON path.
+fn check_syntax(value: &Value, path: &str) -> Result<(), ArmError> {
+    match value {
+        Value::String(text) => super::expr::parse_string(text).map(|_| ()).map_err(|error| {
+            invalid(format!(
+                "Deployment template validation failed: 'The template language expression at '{}' is not valid: {error}'.",
+                path.trim_start_matches('.')
+            ))
+        }),
+        Value::Array(items) => items.iter().enumerate().try_for_each(|(i, item)| check_syntax(item, &format!("{path}[{i}]"))),
+        Value::Object(members) => members.iter().try_for_each(|(key, member)| check_syntax(member, &format!("{path}.{key}"))),
+        _ => Ok(()),
+    }
+}
+
 /// Validates the template and parameters and expands the resources.
 pub fn prepare<'a>(request: Request<'a>) -> Result<Prepared<'a>, ArmError> {
     let template = request.template;
     if !template.is_object() {
         return Err(invalid("Deployment template validation failed: the template must be a JSON object."));
     }
+    // Every expression is parsed before anything runs, wherever it appears: a
+    // syntax error in an output fails validation rather than the deployment.
+    check_syntax(&template, "")?;
     let mut functions = HashMap::new();
     for namespace in template.get("functions").and_then(Value::as_array).into_iter().flatten() {
         let prefix = namespace.get("namespace").and_then(Value::as_str).unwrap_or_default();
