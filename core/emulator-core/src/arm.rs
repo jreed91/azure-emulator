@@ -386,9 +386,15 @@ impl ResourceTypeHandler for ScaffoldStub {
     }
 }
 
+/// Reads a Key Vault secret's value for a template deployment parameter:
+/// `(vault name, secret name, version)`, `None` if there is no such enabled
+/// secret. Key Vault registers it; the template engine cannot see its store.
+pub type SecretResolver = Arc<dyn Fn(&Engine, &str, &str, Option<&str>) -> Option<String> + Send + Sync>;
+
 /// The resource types and provider actions mounted on this emulator.
 #[derive(Default)]
 pub struct ArmRegistry {
+    secret_resolver: Option<SecretResolver>,
     types: HashMap<String, Arc<dyn ResourceTypeHandler>>,
     actions: HashMap<String, ProviderAction>,
     scaffolds: Vec<&'static ScaffoldedProvider>,
@@ -518,6 +524,11 @@ impl ArmRegistry {
     /// Implements the modeled operation `operation_id` with `handler`. The path it
     /// answers on is the one the provider's scaffold gives that operation, so the
     /// scaffold must be registered too. It takes precedence over generic routing.
+    /// Lets template deployments resolve Key Vault references in parameters.
+    pub fn register_secret_resolver(&mut self, resolver: SecretResolver) {
+        self.secret_resolver = Some(resolver);
+    }
+
     pub fn register_operation(&mut self, operation_id: &'static str, handler: OperationHandler) {
         self.operations.insert(operation_id, handler);
     }

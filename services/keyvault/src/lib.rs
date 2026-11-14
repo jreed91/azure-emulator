@@ -76,6 +76,12 @@ pub fn register(registry: &mut ArmRegistry) {
         "Microsoft.KeyVault/checkNameAvailability",
         Arc::new(check_name_availability),
     );
+    // Template deployments read secrets for parameters that reference them.
+    registry.register_secret_resolver(Arc::new(|engine, vault, name, version| {
+        let state = engine.state::<KeyVaultState>();
+        let state = state.lock();
+        state.vaults.get(&vault.to_ascii_lowercase())?.secret_value(name, version)
+    }));
     management::register(registry);
     managed_hsm::register(registry);
     keys::register(registry);

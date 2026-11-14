@@ -153,6 +153,11 @@ impl Dispatch for ArmRequest<'_> {
         })
     }
 
+    fn secret(&self, vault: &str, name: &str, version: Option<&str>) -> Option<String> {
+        let resolver = self.registry.secret_resolver.as_ref()?;
+        resolver(self.engine, vault, name, version)
+    }
+
     fn api_version_for(&self, resource_type: &str) -> Option<String> {
         let versions = self.registry.api_versions.get(&resource_type.to_ascii_lowercase())?;
         versions.iter().filter(|v| !v.contains("preview")).max().or(versions.iter().max()).map(|v| v.to_string())

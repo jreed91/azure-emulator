@@ -108,8 +108,8 @@ yet.
   change feed answer `501`. Entra ID tokens are accepted without checking
   data-plane role assignments.
 - Template deployments run to completion before the first response; there is
-  no `Running` state and `cancel` always answers `409`. A `templateLink`,
-  `parametersLink` or Key Vault reference in parameters answers `501`, as do
+  no `Running` state and `cancel` always answers `409`. A `templateLink` or
+  `parametersLink` answers `501`, as do
   management-group and tenant scopes and the `managementGroup()` and
   `providers()` functions. Expressions are evaluated when a resource is
   deployed, so a mistake inside a resource's `properties` fails the deployment
@@ -536,6 +536,11 @@ print(result.properties.outputs)
 The engine sends each resource through the same Resource Manager routing as a
 client request. Anything the emulator implements can be deployed, and a type it
 does not implement fails the deployment with that resource's own error.
+Parameters may reference Key Vault secrets (`{"reference": {"keyVault": {"id":
+...}, "secretName": ..., "secretVersion": ...}}`), as parameter files and
+Bicep's `getSecret()` do; as in Azure, the vault must have
+`enabledForTemplateDeployment`, or the deployment is refused with
+`KeyVaultParameterReferenceSecretRetrieveFailed`.
 `environment().suffixes` name the emulator's hostnames, so templates that build
 endpoint URLs from them reach the emulator.
 

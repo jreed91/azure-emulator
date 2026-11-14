@@ -28,6 +28,8 @@ pub trait Dispatch {
     /// An `api-version` the emulator serves `resource_type` on, for requests the
     /// template does not give one for (deleting in complete mode).
     fn api_version_for(&self, resource_type: &str) -> Option<String>;
+    /// A Key Vault secret's value, for a parameter that references it.
+    fn secret(&self, vault: &str, name: &str, version: Option<&str>) -> Option<String>;
 }
 
 /// The settings of one deployment.
@@ -398,11 +400,7 @@ fn bind_parameters(ctx: &Ctx<'_>, provided: &Map<String, Value>) -> Result<(), A
         let given = provided.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v);
         let value = match given {
             Some(entry) if entry.get("value").is_some() => entry["value"].clone(),
-            Some(entry) if entry.get("reference").is_some() => {
-                return Err(ArmError::not_implemented(format_args!(
-                    "Key Vault references in deployment parameters (parameter '{name}')"
-                )))
-            }
+            Some(entry) if entry.get("reference").is_some() => key_vault_reference(ctx, name, &entry["reference"])?,
             Some(_) => {
                 return Err(ArmError::bad_request(
                     "InvalidRequestContent",
@@ -423,6 +421,48 @@ fn bind_parameters(ctx: &Ctx<'_>, provided: &Map<String, Value>) -> Result<(), A
         ctx.parameters.borrow_mut().insert(name.clone(), value);
     }
     Ok(())
+}
+
+/// A parameter's value from a Key Vault secret:
+/// `{"keyVault": {"id": ...}, "secretName": ..., "secretVersion": ...}`. As in
+/// Azure, the vault must exist and allow template deployment
+/// (`enabledForTemplateDeployment`).
+fn key_vault_reference(ctx: &Ctx<'_>, parameter: &str, reference: &Value) -> Result<Value, ArmError> {
+    // Unverified against Azure: the messages; the code is the one Azure documents.
+    let failed = |message: String| ArmError::bad_request("KeyVaultParameterReferenceSecretRetrieveFailed", message);
+    let vault_id = reference
+        .pointer("/keyVault/id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid(format!("The Key Vault reference of parameter '{parameter}' has no 'keyVault.id'.")))?;
+    let secret = reference
+        .get("secretName")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid(format!("The Key Vault reference of parameter '{parameter}' has no 'secretName'.")))?;
+    let version = reference.get("secretVersion").and_then(Value::as_str).filter(|v| !v.is_empty());
+    let segments: Vec<&str> = vault_id.trim_end_matches('/').split('/').collect();
+    let is_vault = segments.len() == 9 && segments[6].eq_ignore_ascii_case("Microsoft.KeyVault") && segments[7].eq_ignore_ascii_case("vaults");
+    if !is_vault {
+        return Err(invalid(format!("'{vault_id}' in parameter '{parameter}' is not the id of a Key Vault.")));
+    }
+    let vault_name = segments[8];
+    let api_version = ctx.dispatch.api_version_for("Microsoft.KeyVault/vaults").unwrap_or_else(|| "2023-07-01".into());
+    let vault = ctx
+        .dispatch
+        .call(Method::GET, vault_id, &api_version, &Value::Null)
+        .map_err(|_| failed(format!("The specified KeyVault '{vault_id}' could not be found. Please see https://aka.ms/arm-keyvault for usage details.")))?
+        .1;
+    if vault.pointer("/properties/enabledForTemplateDeployment") != Some(&Value::Bool(true)) {
+        return Err(failed(format!(
+            "The key vault '{vault_id}' is not enabled for template deployment ('enabledForTemplateDeployment'); the value of parameter '{parameter}' cannot be retrieved. Please see https://aka.ms/arm-keyvault for usage details."
+        )));
+    }
+    let value = ctx.dispatch.secret(vault_name, secret, version).ok_or_else(|| {
+        failed(format!(
+            "The secret '{secret}'{} could not be retrieved from Key Vault '{vault_id}' for parameter '{parameter}'. Please see https://aka.ms/arm-keyvault for usage details.",
+            version.map(|v| format!(" (version '{v}')")).unwrap_or_default()
+        ))
+    })?;
+    Ok(Value::String(value))
 }
 
 fn check_parameter(name: &str, definition: &Value, value: &Value) -> Result<(), ArmError> {
