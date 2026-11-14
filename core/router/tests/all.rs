@@ -21,3 +21,5 @@ mod servicebus;
 mod spec_examples;
 #[path = "all/storage.rs"]
 mod storage;
+#[path = "all/template_functions.rs"]
+mod template_functions;
