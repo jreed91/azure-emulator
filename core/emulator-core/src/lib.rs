@@ -9,6 +9,7 @@ pub mod engine;
 pub mod error;
 pub mod http_util;
 pub mod identity;
+pub mod lenient_json;
 pub mod schema;
 pub mod trace;
 

@@ -67,8 +67,8 @@ operation with its status.
 `tests/sdk/` and `tests/sdk-js/` exercise the emulator through the official
 Azure SDKs for Python and JavaScript, and `tests/terraform/` applies, re-plans
 and destroys a Terraform configuration with the `azurerm` provider (see
-[Terraform](#terraform)); all three run in CI. The Azure CLI has not been tried
-yet.
+[Terraform](#terraform)), and `tests/cli/run.sh` drives every service through
+the Azure CLI; all four run in CI.
 
 ### Not implemented, and why
 
@@ -606,6 +606,27 @@ Vault with a secret and a key, Service Bus namespace and queue, and Event Hubs
 namespace and hub. It applies them, checks that a second plan finds nothing to
 change, and destroys them. The provider waits about two minutes after creating
 a Key Vault and 20 seconds after a resource group, as it does on Azure.
+
+### Azure CLI
+
+Register the emulator as a cloud, turn off instance discovery (it would ask
+`login.microsoftonline.com` about the emulator's authority), and sign in with
+any service principal name and secret:
+
+```bash
+export REQUESTS_CA_BUNDLE=~/.azure-emulator/ca.pem   # the CA the emulator prints at startup
+az cloud register -n AzureEmulator --endpoint-resource-manager https://localhost:10443/
+az cloud set -n AzureEmulator
+az config set core.instance_discovery=false
+az login --service-principal -u my-app -p any-secret --tenant 11111111-1111-1111-1111-111111111111
+az group create -n demo -l eastus
+```
+
+Data-plane commands (`az storage blob ...`, `az keyvault secret ...`) go to
+per-resource hostnames under `azure.localhost`, which must resolve to
+`127.0.0.1`; add them to your hosts file if your resolver does not.
+`tests/cli/run.sh` is the smoke test CI runs, and lists the commands known to
+work.
 
 ### Template deployments
 

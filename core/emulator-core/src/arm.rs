@@ -850,7 +850,7 @@ async fn serve(
     let body: Value = if bytes.iter().all(u8::is_ascii_whitespace) {
         Value::Null
     } else {
-        serde_json::from_slice(&bytes).map_err(|_| {
+        serde_json::from_slice(&bytes).or_else(|_| crate::lenient_json::parse(&bytes)).map_err(|_| {
             ArmError::bad_request(
                 "InvalidRequestContent",
                 "The request content was invalid and could not be deserialized.",
