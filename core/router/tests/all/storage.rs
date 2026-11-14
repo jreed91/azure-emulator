@@ -186,7 +186,7 @@ async fn blob_round_trip_with_a_bearer_token() {
     assert_eq!(reply.header("x-ms-error-code"), "ContainerNotFound");
 
     // Unimplemented operations say so.
-    let reply = client.send(Method::GET, host, "/?restype=service&comp=properties", &auth, "").await;
+    let reply = client.send(Method::GET, host, "/?restype=service&comp=stats", &auth, "").await;
     assert_eq!(reply.status, StatusCode::NOT_IMPLEMENTED);
 }
 
