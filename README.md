@@ -229,7 +229,13 @@ docker run -p 10443:10443 -p 5672:5672 -p 5671:5671 azure-emulator
 ```
 
 Pushes to `main` publish `ghcr.io/<owner>/azure-emulator:edge` (and a
-`sha-<commit>` tag); `v*` tags publish versioned images and release binaries.
+`sha-<commit>` tag). Every commit to `main` that passes CI is also released by
+[semantic-release](https://semantic-release.gitbook.io): it is tagged `v<version>`
+and gets a GitHub release with binaries, fidelity scores, and the
+`<version>`, `<major>.<minor>` and `latest` images. The version follows the
+commit messages since the last release: a `BREAKING CHANGE:` footer or a
+`type!:` subject bumps the major version, a `feat:` subject the minor version,
+and any other commit the patch version (see `.releaserc.json`).
 The image listens on all interfaces and keeps its generated CA in `/data`. In
 Compose, with resources created at startup from a file:
 
