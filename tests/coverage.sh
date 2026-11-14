@@ -3,7 +3,7 @@
 # the Python and JavaScript SDK suites run against an instrumented binary.
 #
 #   tests/coverage.sh            per-file summary
-#   tests/coverage.sh --html     also an HTML report in target/llvm-cov/html
+#   tests/coverage.sh --html     also an HTML report in target/coverage/llvm-cov/html
 #
 # Needs cargo-llvm-cov (`cargo install cargo-llvm-cov`, and
 # `rustup component add llvm-tools-preview`), the Python SDK suite's
@@ -15,10 +15,13 @@ repo="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo"
 python="${PYTHON:-python3}"
 
+# A target directory of its own: instrumented code never mixes with the
+# normal build, which would otherwise write coverage data wherever it runs.
+export CARGO_TARGET_DIR="$repo/target/coverage"
 eval "$(cargo llvm-cov show-env --sh)"
 cargo llvm-cov clean --workspace
 cargo build -p azure-emulator
-export AZURE_EMULATOR_BIN="$repo/target/debug/azure-emulator"
+export AZURE_EMULATOR_BIN="$CARGO_TARGET_DIR/debug/azure-emulator"
 cargo test --workspace -q
 (cd tests/sdk && "$python" -m pytest -q -n auto -p no:cacheprovider)
 (cd tests/sdk-js && npm test --silent)

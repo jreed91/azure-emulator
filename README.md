@@ -714,6 +714,7 @@ cd tests/sdk-js && npm ci && npm test
 
 `tests/coverage.sh` runs all three (the Rust tests, and both SDK suites against
 an instrumented emulator) and reports line coverage per file; `--html` also
-writes a browsable report to `target/llvm-cov/html`. It needs
+writes a browsable report to `target/coverage/llvm-cov/html`. It builds in
+`target/coverage`, apart from the normal build. It needs
 [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) and the Python
 suite's requirements (`PYTHON` picks the interpreter).
