@@ -534,6 +534,9 @@ impl Keys<'_> {
 
     fn purge(&self, name: &str) -> Result<(), ArmError> {
         self.with_vault(|vault| {
+            if vault.purge_protection && vault.deleted_keys.contains_key(&name.to_ascii_lowercase()) {
+                return Err(crate::secrets::purge_protected());
+            }
             vault.deleted_keys.remove(&name.to_ascii_lowercase()).map(|_| ()).ok_or_else(|| deleted_not_found(name))
         })
     }
@@ -562,6 +565,18 @@ impl Keys<'_> {
         }
         if !found.ops.iter().any(|op| op == operation) {
             return Err(forbidden(format!("Operation {operation} is not permitted on this key.")));
+        }
+        // Azure refuses the protecting operations outside a key's validity
+        // window, and still lets an expired key decrypt, unwrap and verify.
+        if matches!(operation, "encrypt" | "wrapKey" | "sign") {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+            let at = |member: &str| found.attributes.get(member).and_then(Value::as_i64);
+            if at("exp").is_some_and(|exp| exp <= now) {
+                return Err(forbidden(format!("Operation {operation} is not allowed on an expired key.")));
+            }
+            if at("nbf").is_some_and(|nbf| nbf > now) {
+                return Err(forbidden(format!("Operation {operation} is not allowed on a key that is not yet valid.")));
+            }
         }
         let material = found.material.as_ref().ok_or_else(|| ArmError::not_implemented("operations on symmetric keys"))?;
         let alg = self.body.get("alg").and_then(Value::as_str).ok_or_else(|| bad("The parameter 'alg' is required."))?;

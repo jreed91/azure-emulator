@@ -857,7 +857,13 @@ impl CertificateRequest<'_> {
     }
 
     fn purge(&self, name: &str) -> Result<(), ArmError> {
-        self.with_vault(|vault| vault.deleted_certificates.remove(&name.to_ascii_lowercase()).map(|_| ()).ok_or_else(|| deleted_not_found(name)))
+        self.with_vault(|vault| {
+            let lower = name.to_ascii_lowercase();
+            if vault.purge_protection && vault.deleted_certificates.contains_key(&lower) {
+                return Err(crate::secrets::purge_protected());
+            }
+            vault.deleted_certificates.remove(&lower).map(|_| ()).ok_or_else(|| deleted_not_found(name))
+        })
     }
 
     fn recover(&self, name: &str) -> Result<Value, ArmError> {

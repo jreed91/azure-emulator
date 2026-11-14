@@ -113,6 +113,22 @@ pub(crate) fn set(stored: &mut BTreeMap<String, String>, service: Service, body:
     Ok(())
 }
 
+/// The blob delete retention policy's days, if the policy is enabled.
+pub(crate) fn delete_retention_days(stored: &BTreeMap<String, String>) -> Option<u64> {
+    let document = get(stored, Service::Blob);
+    let (_, policy) = elements(&document)?.into_iter().find(|(name, _)| name == "DeleteRetentionPolicy")?;
+    let inner = |tag: &str| {
+        let start = policy.find(&format!("<{tag}>"))? + tag.len() + 2;
+        let end = policy[start..].find(&format!("</{tag}>"))? + start;
+        Some(policy[start..end].trim().to_string())
+    };
+    if !inner("Enabled")?.eq_ignore_ascii_case("true") {
+        return None;
+    }
+    // Azure requires Days with an enabled policy; 7 is the portal's default.
+    Some(inner("Days").and_then(|d| d.parse().ok()).unwrap_or(7))
+}
+
 /// The account's current properties document for `service`, or `None` if the
 /// account does not exist.
 pub(crate) fn read(engine: &Engine, account: &str, service: Service) -> Option<String> {

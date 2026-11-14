@@ -169,7 +169,6 @@ def test_conditional_headers(container):
     assert refused.value.status_code == 412
 
 
-@pytest.mark.known_gap("blob soft delete is not implemented")
 def test_soft_deleted_blobs_can_be_listed_and_undeleted(account):
     service = BlobServiceClient(account.blob_url, credential=account.key)
     service.set_service_properties(delete_retention_policy=RetentionPolicy(enabled=True, days=7))
@@ -184,3 +183,32 @@ def test_soft_deleted_blobs_can_be_listed_and_undeleted(account):
     assert len(deleted) == 1 and deleted[0].deleted
     blob.undelete_blob()
     assert blob.download_blob().readall() == b"kept"
+
+
+def test_without_retention_a_delete_is_permanent(account):
+    service = BlobServiceClient(account.blob_url, credential=account.key)
+    container = service.get_container_client("hard-delete")
+    container.create_container()
+    blob = container.get_blob_client("gone.txt")
+    blob.upload_blob(b"gone")
+    blob.delete_blob()
+    assert [b.name for b in container.list_blobs(include=["deleted"])] == []
+    with pytest.raises(ResourceNotFoundError):
+        blob.undelete_blob()
+
+
+def test_undelete_brings_back_snapshots(account):
+    service = BlobServiceClient(account.blob_url, credential=account.key)
+    service.set_service_properties(delete_retention_policy=RetentionPolicy(enabled=True, days=3))
+    container = service.get_container_client("soft-snapshots")
+    container.create_container()
+    blob = container.get_blob_client("photo.jpg")
+    blob.upload_blob(b"v1")
+    blob.create_snapshot()
+    blob.delete_blob(delete_snapshots="include")
+
+    listed = list(container.list_blobs(include=["deleted", "snapshots"]))
+    assert [(b.snapshot is not None, b.deleted) for b in listed] == [(True, True), (False, True)]
+    assert listed[1].remaining_retention_days == 3
+    blob.undelete_blob()
+    assert [b.snapshot is not None for b in container.list_blobs(include=["snapshots"])] == [True, False]

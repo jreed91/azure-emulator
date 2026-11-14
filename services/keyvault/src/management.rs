@@ -85,8 +85,13 @@ fn purge_deleted(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Reply 
     let key = name.to_ascii_lowercase();
     let state = ctx.engine.state::<KeyVaultState>();
     let mut state = state.lock();
-    if !state.deleted.get(&key).is_some_and(|d| in_location(d, request.param("location"))) {
-        return Err(deleted_not_found(name));
+    let deleted = state.deleted.get(&key).filter(|d| in_location(d, request.param("location"))).ok_or_else(|| deleted_not_found(name))?;
+    if deleted.resource.properties.get("enablePurgeProtection").and_then(Value::as_bool) == Some(true) {
+        // Unverified against Azure: the status and code.
+        return Err(ArmError::conflict(
+            "MethodNotAllowed",
+            format!("Operation 'PurgeDeletedVault' is not allowed because purge protection is enabled for vault '{name}'. Key Vault service will automatically purge it after the retention period has passed."),
+        ));
     }
     // The vault's contents are dropped with it, and the name becomes free.
     state.deleted.remove(&key);

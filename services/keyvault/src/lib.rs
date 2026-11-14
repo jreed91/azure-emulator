@@ -11,8 +11,8 @@
 //! Keys are created and read through Resource Manager, in vaults and managed
 //! HSMs, and used through the vault's keys data plane, with real key material.
 //!
-//! Not implemented yet: certificates, and the managed HSM data plane. Purge
-//! protection is stored but does not block a purge.
+//! Purge protection blocks purging the vault and its deleted secrets, keys and
+//! certificates. Not implemented yet: the managed HSM data plane.
 
 mod cert_crypto;
 mod certificates;
@@ -149,7 +149,7 @@ impl ResourceTypeHandler for Vaults {
                 (true, true) => {
                     // Recovery brings back the vault's settings and its contents.
                     let deleted = state.deleted.remove(&key).expect("checked above");
-                    state.vaults.insert(key, deleted.data);
+                    state.vaults.insert(key.clone(), deleted.data);
                     recovered = Some(deleted.resource.properties);
                 }
                 (true, false) => {
@@ -159,11 +159,23 @@ impl ResourceTypeHandler for Vaults {
                     ));
                 }
                 (false, _) => {
-                    state.vaults.insert(key, Vault::default());
+                    state.vaults.insert(key.clone(), Vault::default());
                 }
             }
         }
 
+        // Enabling purge protection is irreversible.
+        let was_protected = request
+            .existing
+            .and_then(|r| r.properties.get("enablePurgeProtection"))
+            .and_then(Value::as_bool)
+            == Some(true);
+        if was_protected && requested.and_then(|p| p.get("enablePurgeProtection")).and_then(Value::as_bool) == Some(false) {
+            return Err(ArmError::bad_request(
+                "BadRequest",
+                "The property \"enablePurgeProtection\" cannot be set to false. Enabling the purge protection for a vault is an irreversible action.",
+            ));
+        }
         let mut properties = match recovered {
             Some(properties) => properties,
             None => Value::Object(requested.cloned().unwrap_or_default()),
@@ -171,6 +183,13 @@ impl ResourceTypeHandler for Vaults {
         // `createMode` is an instruction, not a setting: it is never stored.
         if let Some(members) = properties.as_object_mut() {
             members.remove("createMode");
+        }
+        if was_protected {
+            properties["enablePurgeProtection"] = json!(true);
+        }
+        let protected = properties.get("enablePurgeProtection").and_then(Value::as_bool) == Some(true);
+        if let Some(vault) = state.vaults.get_mut(&key) {
+            vault.purge_protection = protected;
         }
         properties["vaultUri"] = json!(ctx.engine.config().vault_uri(&name.to_ascii_lowercase()));
         properties["provisioningState"] = json!("Succeeded");
