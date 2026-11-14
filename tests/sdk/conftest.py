@@ -52,6 +52,17 @@ def _resolve_localhost(host, *args, **kwargs):
 socket.getaddrinfo = _resolve_localhost
 
 
+def pytest_collection_modifyitems(items):
+    """Run each `known_gap` test as a strict xfail: the suite stays green while
+    the emulator differs from Azure, and fails once it matches, so the marker is
+    removed and the fidelity score goes up."""
+    for item in items:
+        gap = item.get_closest_marker("known_gap")
+        if gap is not None:
+            reason = gap.kwargs.get("reason") or (gap.args[0] if gap.args else "known gap")
+            item.add_marker(pytest.mark.xfail(reason=f"known gap: {reason}", strict=True))
+
+
 def _free_port():
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))

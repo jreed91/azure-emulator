@@ -1,8 +1,10 @@
 """Key Vault: vaults on Resource Manager and the secrets data plane."""
 
 import pytest
-from azure.core.exceptions import ResourceNotFoundError
+from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
 from azure.keyvault.secrets import SecretClient
+
+from conftest import TENANT, unique
 
 
 def test_vault_uri(emulator, vault):
@@ -86,3 +88,26 @@ def test_keys_through_resource_manager(keyvault, group, vault):
     assert len(list(keyvault.keys.list_versions(group, vault.name, "signing"))) == 1
     version = created.key_uri_with_version.rsplit("/", 1)[1]
     assert keyvault.keys.get_version(group, vault.name, "signing", version).kty == "EC"
+
+
+@pytest.mark.known_gap("purge protection is stored but does not block a purge")
+def test_purge_protection_blocks_a_purge(keyvault, group):
+    name = unique("kv-")
+    keyvault.vaults.begin_create_or_update(
+        group,
+        name,
+        {
+            "location": "eastus",
+            "properties": {
+                "tenantId": TENANT,
+                "sku": {"family": "A", "name": "standard"},
+                "accessPolicies": [],
+                "enableSoftDelete": True,
+                "enablePurgeProtection": True,
+            },
+        },
+    ).result()
+    keyvault.vaults.delete(group, name)
+    with pytest.raises(HttpResponseError):
+        keyvault.vaults.begin_purge_deleted(name, "eastus").result()
+    assert name in [v.name for v in keyvault.vaults.list_deleted()]

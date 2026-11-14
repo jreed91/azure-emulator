@@ -1,0 +1,61 @@
+name: Semantic release
+
+# Releases every commit to main once CI has passed on it. The version comes
+# from the commit messages since the last release (.releaserc.json):
+#   BREAKING CHANGE: in a body, or type!: in a subject    major
+#   feat: ...                                              minor
+#   anything else                                          patch
+# semantic-release tags the commit and creates the GitHub release; release.yml
+# then adds the binaries, the versioned image and the fidelity scores. (A tag
+# pushed with GITHUB_TOKEN starts no workflow, so it is called directly.)
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: semantic-release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Version and tag
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # Skips the release (no tag output) if main has moved past this commit;
+      # the run for the newer commit releases it.
+      - id: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx --yes -p semantic-release@25.0.9 -p @semantic-release/exec@7.1.0 semantic-release
+
+  publish:
+    name: Publish
+    needs: version
+    if: needs.version.outputs.tag != ''
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.version.outputs.tag }}
+    permissions:
+      contents: write
+      packages: write
+    secrets: inherit
