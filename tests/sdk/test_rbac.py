@@ -12,6 +12,8 @@ from conftest import SUBSCRIPTION, TENANT, run_emulator, unique
 
 ROLES = {
     "Storage Blob Data Contributor": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
+    "Storage Table Data Reader": "76199698-9eea-4c19-bc75-cec21354c6b6",
+    "Storage Table Data Contributor": "0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3",
     "Key Vault Secrets Officer": "b86a8fe4-44ce-4948-aee5-eccb2c155cd7",
     "Key Vault Secrets User": "4633458b-17de-408a-b874-0445c86b69e6",
     "Azure Service Bus Data Sender": "69a216fc-b8fb-44d8-bc22-1f3c2cd27a39",
@@ -93,6 +95,36 @@ def test_blob_data_roles(enforced):
     # Only in the container the role is on.
     with pytest.raises(HttpResponseError):
         worker.get_blob_client("theirs", "a.txt").upload_blob(b"x")
+
+
+def test_table_data_roles(enforced):
+    from azure.data.tables import TableServiceClient
+
+    storage = enforced.client("azure.mgmt.storage", "StorageManagementClient")
+    account = storage.storage_accounts.begin_create(
+        enforced.group, unique("st"), {"location": "eastus", "kind": "StorageV2", "sku": {"name": "Standard_LRS"}}
+    ).result()
+    url = account.primary_endpoints.table
+    # Creating a table is a management action: the Owner may, but has no data actions.
+    admin = TableServiceClient(url, credential=enforced.admin)
+    admin.create_table("orders")
+    with pytest.raises(HttpResponseError):
+        admin.get_table_client("orders").create_entity({"PartitionKey": "p", "RowKey": "1"})
+
+    worker = TableServiceClient(url, credential=enforced.worker)
+    with pytest.raises(HttpResponseError):
+        list(worker.get_table_client("orders").list_entities())
+    enforced.grant("Storage Table Data Contributor", f"{account.id}/tableServices/default/tables/orders")
+    worker.get_table_client("orders").create_entity({"PartitionKey": "p", "RowKey": "1"})
+
+    reader_app = "table-reader"
+    enforced.grant("Storage Table Data Reader", account.id, principal=reader_app)
+    reader = TableServiceClient(
+        url, credential=ClientSecretCredential(TENANT, reader_app, "secret", authority=enforced.emulator.base, disable_instance_discovery=True)
+    )
+    assert [e["RowKey"] for e in reader.get_table_client("orders").list_entities()] == ["1"]
+    with pytest.raises(HttpResponseError):
+        reader.get_table_client("orders").create_entity({"PartitionKey": "p", "RowKey": "2"})
 
 
 def test_key_vault_with_role_based_access(enforced):
