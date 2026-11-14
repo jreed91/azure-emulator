@@ -24,9 +24,32 @@ use super::rules;
 use super::store::{self, AmqpMessage, Entity, Settlement};
 
 fn reply(request: &AmqpMessage, status: i32, description: &str, body: Value) -> AmqpMessage {
+    let condition = match status {
+        400 => Some("com.microsoft:argument-error"),
+        404 => Some("amqp:not-found"),
+        409 => Some("com.microsoft:entity-already-exists"),
+        410 => Some("com.microsoft:message-lock-lost"),
+        501 => Some("amqp:not-implemented"),
+        _ => None,
+    };
+    respond(request, status, condition, description, body)
+}
+
+/// A failure with an error condition other than the one its status implies.
+fn fail(request: &AmqpMessage, status: i32, condition: &str, description: &str) -> AmqpMessage {
+    respond(request, status, Some(condition), description, Value::Null)
+}
+
+/// A management response. A failure names its error condition, as the
+/// service does: the SDKs map it to their error types (a lost lock, a
+/// message not found).
+fn respond(request: &AmqpMessage, status: i32, condition: Option<&str>, description: &str, body: Value) -> AmqpMessage {
     let mut application = OrderedMap::new();
     application.insert("statusCode".to_string(), SimpleValue::Int(status));
     application.insert("statusDescription".to_string(), SimpleValue::String(description.to_string()));
+    if let Some(condition) = condition {
+        application.insert("errorCondition".to_string(), SimpleValue::Symbol(condition.into()));
+    }
     Message {
         header: None,
         delivery_annotations: None,
@@ -192,7 +215,12 @@ pub(crate) fn handle(engine: &Engine, entity: &Entity, request: &AmqpMessage) ->
             if rules::remove(engine, entity, &name) {
                 reply(request, 200, "OK", Value::Null)
             } else {
-                reply(request, 404, &format!("The rule '{name}' was not found."), Value::Null)
+                reply(
+                    request,
+                    404,
+                    &format!("The messaging entity '{}/Rules/{name}' could not be found.", entity.path),
+                    Value::Null,
+                )
             }
         }
         "com.microsoft:enumerate-rules" => {
@@ -287,7 +315,7 @@ pub(crate) fn handle(engine: &Engine, entity: &Entity, request: &AmqpMessage) ->
                     body.insert(Value::String("messages".into()), Value::List(encoded));
                     reply(request, 200, "OK", Value::Map(body))
                 }
-                Err(refusal) => reply(request, 410, &refusal.description, Value::Null),
+                Err(refusal) => fail(request, 410, refusal.condition, &refusal.description),
             }
         }
         other => reply(
@@ -307,11 +335,11 @@ fn as_uuid(value: &Value) -> Option<uuid::Uuid> {
 }
 
 fn session_lock_lost(request: &AmqpMessage) -> AmqpMessage {
-    reply(
+    fail(
         request,
         410,
+        "com.microsoft:session-lock-lost",
         "The session lock has expired on the MessageSession. Accept a new MessageSession.",
-        Value::Null,
     )
 }
 
