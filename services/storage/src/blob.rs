@@ -171,6 +171,7 @@ enum Route {
     Seal,
     PutPage,
     GetPageList,
+    Undelete,
 }
 
 impl Route {
@@ -215,6 +216,7 @@ impl Route {
             ("PUT", Some("seal")) => Some(Self::Seal),
             ("PUT", Some("page")) => Some(Self::PutPage),
             ("GET", Some("pagelist")) => Some(Self::GetPageList),
+            ("PUT", Some("undelete")) => Some(Self::Undelete),
             _ => None,
         }
     }
@@ -236,7 +238,7 @@ impl Route {
             Self::LeaseBlob => (Level::Object, "wd", false),
             Self::LeaseContainer => (Level::Container, "wd", false),
             Self::Snapshot | Self::CopyBlob => (Level::Object, "cw", false),
-            Self::AbortCopy | Self::Seal | Self::PutPage => (Level::Object, "w", false),
+            Self::AbortCopy | Self::Seal | Self::PutPage | Self::Undelete => (Level::Object, "w", false),
             Self::AppendBlock => (Level::Object, "aw", false),
             Self::GetPageList => (Level::Object, "r", false),
         };
@@ -404,7 +406,8 @@ fn check_roles(engine: &Engine, account: &str, oid: &str, container: &str, blob:
         | Route::Snapshot
         | Route::AppendBlock
         | Route::Seal
-        | Route::PutPage => {
+        | Route::PutPage
+        | Route::Undelete => {
             vec![Permission::Data(&blob_write)]
         }
         Route::DeleteBlob => vec![Permission::Data(&blob_delete)],
@@ -513,6 +516,7 @@ async fn serve(
         Route::SetProperties => request.set_properties(&container, &blob),
         Route::Seal => request.seal(&container, &blob),
         Route::GetPageList => request.page_ranges(&container, &blob),
+        Route::Undelete => request.undelete_blob(&container, &blob),
         Route::LeaseBlob => request.lease_blob(&container, &blob),
         Route::LeaseContainer => request.lease_container(&container),
         Route::Snapshot => request.snapshot_blob(&container, &blob),
@@ -1301,9 +1305,8 @@ impl BlobRequest<'_> {
                 found.snapshots.remove(blob);
                 return Ok(respond(StatusCode::ACCEPTED, Vec::new(), Body::empty()));
             }
-            Some("include") => {
-                found.snapshots.remove(blob);
-            }
+            // Kept with the blob below when it is soft-deleted.
+            Some("include") => {}
             None if has_snapshots => {
                 return Err(error(
                     StatusCode::CONFLICT,
@@ -1320,12 +1323,59 @@ impl BlobRequest<'_> {
                 ))
             }
         }
-        found.blobs.remove(blob);
+        let removed = found.blobs.remove(blob).expect("checked above");
+        let now = SystemTime::now();
+        found.expire_deleted(now);
+        let retention = crate::service_properties::delete_retention_days(&account.service_properties);
+        let found = account.containers.get_mut(container).expect("checked above");
+        let permanent = match retention {
+            // With the retention policy on, the blob and its remaining
+            // snapshots are kept, soft-deleted, for the policy's days.
+            Some(days) => {
+                let snapshots = found.snapshots.remove(blob).unwrap_or_default();
+                found.deleted.insert(
+                    blob.to_string(),
+                    crate::state::DeletedBlob {
+                        blob: removed,
+                        snapshots,
+                        deleted_time: now,
+                        retention_days: days,
+                    },
+                );
+                "false"
+            }
+            None => {
+                found.snapshots.remove(blob);
+                "true"
+            }
+        };
         Ok(respond(
             StatusCode::ACCEPTED,
-            vec![(name("x-ms-delete-type-permanent"), "true".into())],
+            vec![(name("x-ms-delete-type-permanent"), permanent.into())],
             Body::empty(),
         ))
+    }
+
+    /// Undelete Blob: restores a soft-deleted blob and its snapshots. A blob
+    /// that exists already keeps its content and gets the snapshots back.
+    fn undelete_blob(&self, container: &str, blob: &str) -> Result<Response, BlobError> {
+        let handle = self.engine.state::<StorageState>();
+        let mut state = handle.lock();
+        let account = state.accounts.get_mut(self.account).expect("account checked");
+        let found = account.containers.get_mut(container).ok_or_else(container_not_found)?;
+        found.expire_deleted(SystemTime::now());
+        match found.deleted.remove(blob) {
+            Some(deleted) => {
+                found.blobs.entry(blob.to_string()).or_insert(deleted.blob);
+                found.snapshots.entry(blob.to_string()).or_default().extend(deleted.snapshots);
+                if found.snapshots.get(blob).is_some_and(std::collections::BTreeMap::is_empty) {
+                    found.snapshots.remove(blob);
+                }
+            }
+            None if found.blobs.contains_key(blob) => {}
+            None => return Err(blob_not_found()),
+        }
+        Ok(respond(StatusCode::OK, Vec::new(), Body::empty()))
     }
 
     fn list_blobs(&self, container: &str) -> Result<Response, BlobError> {
@@ -1334,7 +1384,7 @@ impl BlobRequest<'_> {
         let delimiter = param("delimiter");
         let marker = param("marker");
         let included = |what: &str| param("include").is_some_and(|i| i.split(',').any(|p| p == what));
-        let (with_metadata, with_snapshots) = (included("metadata"), included("snapshots"));
+        let (with_metadata, with_snapshots, with_deleted) = (included("metadata"), included("snapshots"), included("deleted"));
         let max_results = match param("maxresults").map(str::parse::<usize>) {
             None => 5000,
             Some(Ok(n)) if (1..=5000).contains(&n) => n,
@@ -1348,22 +1398,30 @@ impl BlobRequest<'_> {
         };
 
         let handle = self.engine.state::<StorageState>();
-        let state = handle.lock();
-        let found = state.accounts[self.account]
+        let mut state = handle.lock();
+        let now = SystemTime::now();
+        let found = state
+            .accounts
+            .get_mut(self.account)
+            .expect("account checked")
             .containers
-            .get(container)
+            .get_mut(container)
             .ok_or_else(container_not_found)?;
+        found.expire_deleted(now);
+        let found = &*found;
 
-        // One entry per blob, or per distinct prefix up to the delimiter, in name order.
-        let mut entries: Vec<(String, Option<&Blob>)> = Vec::new();
-        for (blob_name, blob) in found.blobs.range(prefix.to_string()..) {
-            if !blob_name.starts_with(prefix) {
-                break;
-            }
+        // One entry per blob name, or per distinct prefix up to the delimiter,
+        // in name order. Soft-deleted blobs are listed only when asked for.
+        let mut names: std::collections::BTreeSet<&String> = found.blobs.keys().collect();
+        if with_deleted {
+            names.extend(found.deleted.keys());
+        }
+        let mut entries: Vec<(String, bool)> = Vec::new();
+        for blob_name in names.into_iter().filter(|n| n.starts_with(prefix)) {
             let rest = &blob_name[prefix.len()..];
             let entry = match delimiter.and_then(|d| rest.find(d).map(|at| at + d.len())) {
-                Some(end) => (format!("{prefix}{}", &rest[..end]), None),
-                None => (blob_name.clone(), Some(blob)),
+                Some(end) => (format!("{prefix}{}", &rest[..end]), false),
+                None => (blob_name.clone(), true),
             };
             if entries.last().map(|(last, _)| last) != Some(&entry.0) {
                 entries.push(entry);
@@ -1391,15 +1449,27 @@ impl BlobRequest<'_> {
             out.push_str(&format!("<MaxResults>{requested}</MaxResults>"));
         }
         out.push_str("<Blobs>");
-        let write_blob = |out: &mut String, entry: &str, blob: &Blob, snapshot: Option<&str>| {
+        let write_blob = |out: &mut String, entry: &str, blob: &Blob, snapshot: Option<&str>, deleted: Option<&crate::state::DeletedBlob>| {
             let (status, state, duration) = lease_properties(blob.lease.as_ref());
             let duration = duration.map(|d| format!("<LeaseDuration>{d}</LeaseDuration>")).unwrap_or_default();
             out.push_str(&format!("<Blob><Name>{}</Name>", xml_escape(entry)));
+            if deleted.is_some() {
+                out.push_str("<Deleted>true</Deleted>");
+            }
             if let Some(snapshot) = snapshot {
                 out.push_str(&format!("<Snapshot>{snapshot}</Snapshot>"));
             }
+            let deletion = deleted
+                .map(|d| {
+                    format!(
+                        "<DeletedTime>{}</DeletedTime><RemainingRetentionDays>{}</RemainingRetentionDays>",
+                        http_date(d.deleted_time),
+                        d.remaining_days(now)
+                    )
+                })
+                .unwrap_or_default();
             out.push_str(&format!(
-                "<Properties><Creation-Time>{}</Creation-Time><Last-Modified>{}</Last-Modified><Etag>{}</Etag><Content-Length>{}</Content-Length><Content-Type>{}</Content-Type><Content-MD5>{}</Content-MD5><BlobType>{}</BlobType>{}<LeaseStatus>{status}</LeaseStatus><LeaseState>{state}</LeaseState>{duration}<ServerEncrypted>true</ServerEncrypted></Properties>",
+                "<Properties><Creation-Time>{}</Creation-Time><Last-Modified>{}</Last-Modified><Etag>{}</Etag><Content-Length>{}</Content-Length><Content-Type>{}</Content-Type><Content-MD5>{}</Content-MD5><BlobType>{}</BlobType>{}<LeaseStatus>{status}</LeaseStatus><LeaseState>{state}</LeaseState>{duration}<ServerEncrypted>true</ServerEncrypted>{deletion}</Properties>",
                 http_date(blob.created),
                 http_date(blob.last_modified),
                 xml_escape(blob.etag.trim_matches('"')),
@@ -1422,18 +1492,28 @@ impl BlobRequest<'_> {
             }
             out.push_str("</Blob>");
         };
-        for (entry, blob) in page {
-            let Some(blob) = blob else {
+        for (entry, is_blob) in page {
+            if !is_blob {
                 out.push_str(&format!("<BlobPrefix><Name>{}</Name></BlobPrefix>", xml_escape(entry)));
                 continue;
-            };
-            // Snapshots come before the blob they were taken of, oldest first.
+            }
+            let deleted = found.deleted.get(entry).filter(|_| with_deleted);
+            // Snapshots come before the blob they were taken of, oldest first;
+            // a soft-deleted blob's after the live ones.
             if with_snapshots {
                 for (stamp, snapshot) in found.snapshots.get(entry).into_iter().flatten() {
-                    write_blob(&mut out, entry, snapshot, Some(stamp));
+                    write_blob(&mut out, entry, snapshot, Some(stamp), None);
+                }
+                for (stamp, snapshot) in deleted.into_iter().flat_map(|d| &d.snapshots) {
+                    write_blob(&mut out, entry, snapshot, Some(stamp), deleted);
                 }
             }
-            write_blob(&mut out, entry, blob, None);
+            if let Some(deleted) = deleted {
+                write_blob(&mut out, entry, &deleted.blob, None, Some(deleted));
+            }
+            if let Some(blob) = found.blobs.get(entry) {
+                write_blob(&mut out, entry, blob, None, None);
+            }
         }
         out.push_str("</Blobs>");
         match next_marker {

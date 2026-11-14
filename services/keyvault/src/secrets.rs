@@ -38,6 +38,10 @@ pub(crate) struct Vault {
     /// The vault's certificate contacts, as Set Certificate Contacts gave them.
     #[serde(default)]
     pub(crate) certificate_contacts: Option<Value>,
+    /// Whether the vault has purge protection: its deleted secrets, keys and
+    /// certificates are then purged only by Azure, at the end of retention.
+    #[serde(default)]
+    pub(crate) purge_protection: bool,
     /// Certificate issuers by lowercased name.
     #[serde(default)]
     pub(crate) certificate_issuers: BTreeMap<String, Value>,
@@ -82,6 +86,15 @@ pub(crate) struct SecretSummary {
     pub tags: Option<Value>,
     /// `enabled`, `created`, `updated` and, when set, `nbf` and `exp`.
     pub attributes: Value,
+}
+
+/// Azure's refusal to purge from a vault with purge protection.
+pub(crate) fn purge_protected() -> ArmError {
+    ArmError::new(
+        http::StatusCode::FORBIDDEN,
+        "Forbidden",
+        "Operation \"purge\" is not allowed because purge protection is enabled for this vault. Key Vault service will automatically purge it after the retention period has passed.",
+    )
 }
 
 impl Vault {
@@ -434,6 +447,9 @@ impl SecretRequest<'_> {
 
     fn purge(&self, name: &str) -> Result<(), ArmError> {
         self.with_vault(|vault| {
+            if vault.purge_protection && vault.deleted.contains_key(&name.to_ascii_lowercase()) {
+                return Err(purge_protected());
+            }
             vault
                 .deleted
                 .remove(&name.to_ascii_lowercase())

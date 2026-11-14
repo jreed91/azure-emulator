@@ -69,6 +69,39 @@ pub(crate) struct Container {
     pub uncommitted: BTreeMap<String, Vec<(String, Bytes)>>,
     /// Snapshots by blob name, then by snapshot time (`x-ms-snapshot`), oldest first.
     pub snapshots: BTreeMap<String, BTreeMap<String, Blob>>,
+    /// Blobs deleted while the account's blob delete retention policy was on,
+    /// by name, until they are undeleted or their retention ends.
+    #[serde(default)]
+    pub deleted: BTreeMap<String, DeletedBlob>,
+}
+
+/// A soft-deleted blob, with the snapshots it had.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct DeletedBlob {
+    pub blob: Blob,
+    pub snapshots: BTreeMap<String, Blob>,
+    pub deleted_time: SystemTime,
+    /// The retention policy's days when it was deleted.
+    pub retention_days: u64,
+}
+
+impl DeletedBlob {
+    /// When its retention ends and it is gone for good.
+    pub(crate) fn expires(&self) -> SystemTime {
+        self.deleted_time + std::time::Duration::from_secs(self.retention_days * 86_400)
+    }
+
+    /// Whole days of retention left, as List Blobs reports them.
+    pub(crate) fn remaining_days(&self, now: SystemTime) -> u64 {
+        self.expires().duration_since(now).map_or(0, |left| left.as_secs().div_ceil(86_400))
+    }
+}
+
+impl Container {
+    /// Drops the soft-deleted blobs whose retention has ended.
+    pub(crate) fn expire_deleted(&mut self, now: SystemTime) {
+        self.deleted.retain(|_, d| d.expires() > now);
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -162,6 +195,7 @@ impl Container {
             blobs: BTreeMap::new(),
             uncommitted: BTreeMap::new(),
             snapshots: BTreeMap::new(),
+            deleted: BTreeMap::new(),
         }
     }
 

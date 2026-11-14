@@ -158,11 +158,28 @@ def test_rotation_policy(keys):
         keys.get_key_rotation_policy("missing")
 
 
-@pytest.mark.known_gap("a key's expiry (exp) is stored but not enforced")
 def test_an_expired_key_cannot_sign(keys, credential):
     expired = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
     key = keys.create_rsa_key("expired-key", size=2048, expires_on=expired)
     # Given only the id, the client sends the signing request to the vault.
+    crypto = CryptographyClient(key.id, credential)
+    with pytest.raises(HttpResponseError):
+        crypto.sign(SignatureAlgorithm.rs256, hashlib.sha256(b"document").digest())
+
+
+def test_an_expired_key_can_still_decrypt(keys, credential):
+    key = keys.create_rsa_key("expiring-key", size=2048)
+    crypto = CryptographyClient(key.id, credential)
+    sealed = crypto.encrypt(EncryptionAlgorithm.rsa_oaep, b"secret")
+    expired = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
+    keys.update_key_properties("expiring-key", expires_on=expired)
+    # Decrypting needs the private key, so it is the vault that decrypts.
+    assert crypto.decrypt(EncryptionAlgorithm.rsa_oaep, sealed.ciphertext).plaintext == b"secret"
+
+
+def test_a_key_not_yet_valid_cannot_sign(keys, credential):
+    later = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
+    key = keys.create_rsa_key("future-key", size=2048, not_before=later)
     crypto = CryptographyClient(key.id, credential)
     with pytest.raises(HttpResponseError):
         crypto.sign(SignatureAlgorithm.rs256, hashlib.sha256(b"document").digest())

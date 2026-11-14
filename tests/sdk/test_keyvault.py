@@ -89,7 +89,6 @@ def test_keys_through_resource_manager(keyvault, group, vault):
     assert keyvault.keys.get_version(group, vault.name, "signing", version).kty == "EC"
 
 
-@pytest.mark.known_gap("purge protection is stored but does not block a purge")
 def test_purge_protection_blocks_a_purge(keyvault, group):
     name = unique("kv-")
     keyvault.vaults.begin_create_or_update(
@@ -110,3 +109,42 @@ def test_purge_protection_blocks_a_purge(keyvault, group):
     with pytest.raises(HttpResponseError):
         keyvault.vaults.begin_purge_deleted(name, "eastus").result()
     assert name in [v.name for v in keyvault.vaults.list_deleted()]
+
+
+def protected_vault(keyvault, group):
+    name = unique("kv-")
+    properties = {
+        "tenantId": TENANT,
+        "sku": {"family": "A", "name": "standard"},
+        "accessPolicies": [],
+        "enableSoftDelete": True,
+        "enablePurgeProtection": True,
+    }
+    return keyvault.vaults.begin_create_or_update(group, name, {"location": "eastus", "properties": properties}).result()
+
+
+def test_purge_protection_cannot_be_turned_off(keyvault, group):
+    vault = protected_vault(keyvault, group)
+    properties = {
+        "tenantId": TENANT,
+        "sku": {"family": "A", "name": "standard"},
+        "accessPolicies": [],
+        "enablePurgeProtection": False,
+    }
+    with pytest.raises(HttpResponseError) as refused:
+        keyvault.vaults.begin_create_or_update(group, vault.name, {"location": "eastus", "properties": properties}).result()
+    assert refused.value.status_code == 400
+    assert keyvault.vaults.get(group, vault.name).properties.enable_purge_protection is True
+
+
+def test_purge_protection_blocks_purging_a_secret(keyvault, group, credential):
+    vault = protected_vault(keyvault, group)
+    secrets = SecretClient(vault.properties.vault_uri, credential)
+    secrets.set_secret("kept", "value")
+    secrets.begin_delete_secret("kept").wait()
+    with pytest.raises(HttpResponseError) as refused:
+        secrets.purge_deleted_secret("kept")
+    assert refused.value.status_code == 403
+    # Still there to recover.
+    secrets.begin_recover_deleted_secret("kept").result()
+    assert secrets.get_secret("kept").value == "value"
