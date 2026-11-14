@@ -431,3 +431,80 @@ async fn bicep_role_assignment_on_a_resource() {
     let again = deploy(&client, "roles", "main", template("roles"), json!({})).await;
     assert_eq!(outputs(&again)["assignmentId"], out["assignmentId"]);
 }
+
+async fn vault_with_secret(client: &Client, group: &str, name: &str, enabled_for_templates: bool) -> String {
+    let vault = format!("{SUB}/resourceGroups/{group}/providers/Microsoft.KeyVault/vaults/{name}");
+    let body = json!({"location": "eastus", "properties": {
+        "tenantId": client.config().tenant_id,
+        "sku": {"family": "A", "name": "standard"},
+        "enabledForTemplateDeployment": enabled_for_templates,
+    }});
+    let reply = client.arm(Method::PUT, &format!("{vault}?api-version=2023-07-01"), Some(body)).await;
+    assert!(reply.status.is_success(), "{}", reply.text());
+    let reply = client
+        .arm(Method::PUT, &format!("{vault}/secrets/source?api-version=2023-07-01"), Some(json!({"properties": {"value": "from-the-vault"}})))
+        .await;
+    assert!(reply.status.is_success(), "{}", reply.text());
+    vault
+}
+
+#[tokio::test]
+async fn key_vault_references_in_parameters() {
+    let client = Client::new();
+    client.create_group("kvref").await;
+    vault_with_secret(&client, "kvref", "kvref-vault", true).await;
+
+    // Bicep's getSecret(): a module parameter that references the vault.
+    let deployment = deploy(&client, "kvref", "main", template("keyvault-reference"), json!({"vaultName": {"value": "kvref-vault"}})).await;
+    assert_eq!(deployment["properties"]["provisioningState"], "Succeeded", "{deployment}");
+    let token = client.token("https://vault.azure.localhost:10443/.default").await;
+    let reply = client
+        .send(
+            Method::GET,
+            "kvref-vault.vault.azure.localhost:10443",
+            "/secrets/copied?api-version=7.4",
+            &[("authorization", &format!("Bearer {token}"))],
+            "",
+        )
+        .await;
+    assert_eq!(reply.json()["value"], "from-the-vault", "{}", reply.text());
+
+    // A reference given directly, pinned to a version.
+    let versions = client
+        .send(
+            Method::GET,
+            "kvref-vault.vault.azure.localhost:10443",
+            "/secrets/source/versions?api-version=7.4",
+            &[("authorization", &format!("Bearer {token}"))],
+            "",
+        )
+        .await
+        .json();
+    let version = versions["value"][0]["id"].as_str().unwrap().rsplit('/').next().unwrap().to_string();
+    let template = json!({
+        "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+        "contentVersion": "1.0.0.0",
+        "parameters": {"secret": {"type": "securestring"}},
+        "resources": [],
+        "outputs": {"length": {"type": "int", "value": "[length(parameters('secret'))]"}},
+    });
+    let reference = |vault: &str, secret: &str| {
+        json!({"secret": {"reference": {
+            "keyVault": {"id": format!("{SUB}/resourceGroups/kvref/providers/Microsoft.KeyVault/vaults/{vault}")},
+            "secretName": secret,
+            "secretVersion": version,
+        }}})
+    };
+    let deployment = deploy(&client, "kvref", "direct", template.clone(), reference("kvref-vault", "source")).await;
+    assert_eq!(outputs(&deployment)["length"]["value"], 14);
+    assert_eq!(deployment["properties"]["parameters"]["secret"], json!({"type": "SecureString"}));
+
+    // A vault that does not allow template deployment, and a missing secret.
+    vault_with_secret(&client, "kvref", "closed-vault", false).await;
+    for (vault, secret) in [("closed-vault", "source"), ("kvref-vault", "missing")] {
+        let body = json!({"properties": {"mode": "Incremental", "template": template, "parameters": reference(vault, secret)}});
+        let reply = client.arm(Method::PUT, &format!("{}?{API}", deployment_path("kvref", "refused")), Some(body)).await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{}", reply.text());
+        assert_eq!(reply.error_code(), "KeyVaultParameterReferenceSecretRetrieveFailed");
+    }
+}

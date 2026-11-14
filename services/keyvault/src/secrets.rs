@@ -151,6 +151,16 @@ impl Vault {
         })
     }
 
+    /// The value of an enabled secret: the current version, or `version`.
+    pub(crate) fn secret_value(&self, name: &str, version: Option<&str>) -> Option<String> {
+        let secret = self.secrets.get(&name.to_ascii_lowercase())?;
+        let found = match version {
+            None => secret.versions.last(),
+            Some(wanted) => secret.versions.iter().find(|v| v.version == wanted),
+        }?;
+        found.enabled.then(|| found.value.clone())
+    }
+
     pub(crate) fn summary(&self, name: &str) -> Option<SecretSummary> {
         Self::summarize(self.secrets.get(&name.to_ascii_lowercase())?)
     }
