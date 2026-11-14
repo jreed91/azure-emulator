@@ -21,15 +21,23 @@ def send(connection, bodies, partition_id="0", **properties):  # noqa: F811
             producer.send_batch(batch)
 
 
-def collect(connection, seconds=3, **options):  # noqa: F811
-    """What a receiver gets in `seconds`, and the errors it reports."""
+def collect(connection, seconds=3, received=None, **options):  # noqa: F811
+    """What a receiver gets in `seconds`, and the errors it reports. Sets the
+    `received` event, if given, once the first event arrives."""
     events, errors = [], []
+
+    def on_event(_, event):
+        if event is not None:
+            events.append(event)
+            if received is not None:
+                received.set()
+
     client = EventHubConsumerClient.from_connection_string(
         connection, consumer_group=options.pop("consumer_group", "$Default"), eventhub_name="telemetry", retry_total=0
     )
     thread = threading.Thread(
         target=lambda: client.receive(
-            on_event=lambda c, e: e is not None and events.append(e),
+            on_event=on_event,
             on_error=lambda c, error: errors.append(error),
             **options,
         ),
@@ -74,11 +82,15 @@ def test_epochs(connection):  # noqa: F811
     results = {}
 
     def hold(name, **options):
-        results[name] = collect(connection, partition_id="0", starting_position="-1", seconds=4, **options)
+        options.setdefault("seconds", 4)
+        results[name] = collect(connection, partition_id="0", starting_position="-1", **options)
 
-    owner = threading.Thread(target=hold, args=("owner",), kwargs={"owner_level": 5})
+    # The owner must hold the partition before the others try: wait until it
+    # has received, not for a fixed time.
+    holding = threading.Event()
+    owner = threading.Thread(target=hold, args=("owner",), kwargs={"owner_level": 5, "seconds": 12, "received": holding})
     owner.start()
-    time.sleep(1.5)
+    assert holding.wait(10), "the owner received nothing"
     lower = threading.Thread(target=hold, args=("lower",), kwargs={"owner_level": 1})
     plain = threading.Thread(target=hold, args=("plain",))
     lower.start()
