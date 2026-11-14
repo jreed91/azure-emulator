@@ -24,4 +24,9 @@ USER emulator
 ENV AZURE_EMULATOR_BIND=0.0.0.0 \
     AZURE_EMULATOR_HOME=/data
 EXPOSE 10443 5672 5671
+# `azure-emulator health` asks the running emulator for GET /__admin/health,
+# reading the port and scheme from the same AZURE_EMULATOR_* variables (set
+# them with -e, not as arguments, for the check to follow them).
+HEALTHCHECK --interval=10s --timeout=6s --start-period=5s --retries=3 \
+    CMD ["azure-emulator", "health"]
 ENTRYPOINT ["azure-emulator"]

@@ -231,9 +231,13 @@ cargo run -p azure-emulator
 
 The emulator serves HTTPS on `127.0.0.1:10443` and prints its endpoints. Options:
 `--port`, `--bind`, `--host`, `--dns-suffix`, `--amqp-port`, `--http`,
-`--config`, `--persist`, `--state-file`, `--enforce-rbac`, `--rbac-owner`; each also has an
+`--config`, `--persist`, `--state-file`, `--enforce-rbac`, `--rbac-owner`,
+`--idle-timeout` (exit after that many seconds without an HTTP request or an
+open AMQP connection); each also has an
 `AZURE_EMULATOR_*` environment variable. Run with
-`--help` for details. (Pick ports Node's `fetch` allows if you change them:
+`--help` for details, or `--version`. `GET /__admin/health` answers 200 on any
+host without a token once the emulator is ready; `azure-emulator health` asks
+it (the Docker image uses that as its `HEALTHCHECK`). (Pick ports Node's `fetch` allows if you change them:
 it refuses some, such as `10080`.)
 
 ### Docker

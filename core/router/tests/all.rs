@@ -3,6 +3,8 @@
 #[path = "all/support.rs"]
 mod support;
 
+#[path = "all/admin.rs"]
+mod admin;
 #[path = "all/arm.rs"]
 mod arm;
 #[path = "all/authorization.rs"]

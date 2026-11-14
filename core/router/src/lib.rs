@@ -9,8 +9,15 @@
 //! let emulator = azure_emulator::Emulator::new(azure_emulator::Config::default());
 //! let _service = emulator.router(); // a `tower::Service` to drive in-process
 //! ```
+//!
+//! The router answers `GET /__admin/health` on any host, and turns a panic in
+//! a handler into a 500 answer (see [`catch_panic`]) so one bad request never
+//! takes the connection, or the emulator, down with it.
 
+use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use std::task::Poll;
 
 use axum::body::Body;
 use axum::extract::State;
@@ -23,6 +30,17 @@ use http::Request;
 
 pub use emulator_core::Config;
 
+/// The emulator's version: `AZURE_EMULATOR_VERSION` at build time when set
+/// (release builds stamp the tag), else the crate version.
+pub const VERSION: &str = match option_env!("AZURE_EMULATOR_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
+/// The readiness endpoint, answered on every host without authentication.
+pub const HEALTH_PATH: &str = "/__admin/health";
+
+pub mod idle;
 pub mod persist;
 pub mod provision;
 pub mod tls;
@@ -67,11 +85,59 @@ impl Emulator {
 
     /// The HTTP service for this instance.
     pub fn router(&self) -> Router {
-        Router::new().fallback(dispatch).with_state(self.clone())
+        Router::new().fallback(guarded_dispatch).with_state(self.clone())
     }
 }
 
-async fn dispatch(State(emulator): State<Emulator>, request: Request<Body>) -> Response {
+async fn guarded_dispatch(State(emulator): State<Emulator>, request: Request<Body>) -> Response {
+    let what = format!("{} {}", request.method(), request.uri().path());
+    catch_panic(&what, dispatch(emulator, request)).await
+}
+
+/// Runs a handler's `future`, turning a panic in it into a 500 answer with an
+/// Azure error envelope. The panic is logged to stderr (with `what`, such as
+/// the method and path); the client sees only a short, fixed message.
+pub async fn catch_panic<F: Future<Output = Response>>(what: &str, future: F) -> Response {
+    let mut future = std::pin::pin!(future);
+    let outcome = std::future::poll_fn(|context| {
+        match std::panic::catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(context))) {
+            Ok(Poll::Ready(response)) => Poll::Ready(Ok(response)),
+            Ok(Poll::Pending) => Poll::Pending,
+            Err(payload) => Poll::Ready(Err(payload)),
+        }
+    })
+    .await;
+    match outcome {
+        Ok(response) => response,
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("(no message)");
+            eprintln!("error: the handler for {what} panicked: {message}; answered 500");
+            let body = serde_json::json!({"error": {
+                "code": "InternalServerError",
+                "message": "The emulator failed while handling this request. Its log has the details.",
+            }});
+            json_response(http::StatusCode::INTERNAL_SERVER_ERROR, &body)
+        }
+    }
+}
+
+fn json_response(status: http::StatusCode, body: &serde_json::Value) -> Response {
+    let mut response = Response::new(Body::from(body.to_string()));
+    *response.status_mut() = status;
+    response
+        .headers_mut()
+        .insert(http::header::CONTENT_TYPE, http::HeaderValue::from_static("application/json; charset=utf-8"));
+    response
+}
+
+async fn dispatch(emulator: Emulator, request: Request<Body>) -> Response {
+    if request.uri().path() == HEALTH_PATH && matches!(*request.method(), http::Method::GET | http::Method::HEAD) {
+        return json_response(http::StatusCode::OK, &serde_json::json!({"status": "ok", "version": VERSION}));
+    }
     let engine = emulator.engine.clone();
     let host = request_host(request.headers(), request.uri());
     let config = engine.config();
