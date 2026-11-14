@@ -709,10 +709,17 @@ No hosts-file entries or certificate setup are needed: the suite resolves
 `*.localhost` itself and trusts the emulator's CA. Set `AZURE_EMULATOR_BIN` to
 test a binary other than `target/debug/azure-emulator`.
 
-A smaller suite drives Service Bus, Event Hubs and Cosmos DB with the Azure
-SDK for JavaScript:
+A smaller suite drives Storage (blobs, queues, tables, files), Service Bus,
+Event Hubs and Cosmos DB with the Azure SDK for JavaScript:
 
 ```bash
 cargo build -p azure-emulator
 cd tests/sdk-js && npm ci && npm test
 ```
+
+`tests/coverage.sh` runs all three (the Rust tests, and both SDK suites against
+an instrumented emulator) and reports line coverage per file; `--html` also
+writes a browsable report to `target/coverage/llvm-cov/html`. It builds in
+`target/coverage`, apart from the normal build. It needs
+[cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) and the Python
+suite's requirements (`PYTHON` picks the interpreter).
