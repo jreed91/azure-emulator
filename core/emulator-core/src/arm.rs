@@ -399,6 +399,8 @@ pub struct ArmRegistry {
     actions: HashMap<String, ProviderAction>,
     scaffolds: Vec<&'static ScaffoldedProvider>,
     /// `operationId` → the handler that implements it directly.
+    /// Directly implemented operations, by `Namespace/OperationId`: operation
+    /// ids repeat across providers (`PrivateEndpointConnections_Get`, ...).
     operations: HashMap<&'static str, OperationHandler>,
     /// Lowercased types served by a [`ScaffoldStub`].
     stubs: HashSet<String>,
@@ -461,6 +463,10 @@ impl ArmRegistry {
         self.scaffolds.push(provider);
     }
 
+    fn has_operation(&self, namespace: &str, id: &str) -> bool {
+        self.operations.contains_key(format!("{namespace}/{id}").as_str())
+    }
+
     /// Every modeled operation and whether the emulator implements it.
     pub fn coverage(&self) -> Vec<OperationCoverage> {
         let mut out = Vec::new();
@@ -474,12 +480,12 @@ impl ArmRegistry {
                     .filter(|_| !self.stubs.contains(&key) && !is_generic);
                 for operation in kind.operations {
                     let generic = is_generic
-                        && !self.operations.contains_key(operation.id)
+                        && !self.has_operation(provider.namespace, operation.id)
                         && !matches!(
                             operation.kind,
                             OperationKind::Action(_) | OperationKind::ProviderAction(_) | OperationKind::Other
                         );
-                    let implemented = self.operations.contains_key(operation.id)
+                    let implemented = self.has_operation(provider.namespace, operation.id)
                         || match (handler, operation.kind) {
                             (None, _) | (_, OperationKind::Other | OperationKind::ProviderAction(_)) => false,
                             (Some(handler), OperationKind::Action(name)) => {
@@ -497,7 +503,7 @@ impl ArmRegistry {
                 }
             }
             for operation in provider.provider_operations {
-                let implemented = self.operations.contains_key(operation.id)
+                let implemented = self.has_operation(provider.namespace, operation.id)
                     || match operation.kind {
                         OperationKind::ProviderAction(name) => self
                             .actions
@@ -529,7 +535,9 @@ impl ArmRegistry {
         self.secret_resolver = Some(resolver);
     }
 
+    /// `operation_id` is qualified by the provider: `Microsoft.Storage/BlobContainers_Lease`.
     pub fn register_operation(&mut self, operation_id: &'static str, handler: OperationHandler) {
+        assert!(operation_id.contains('/'), "{operation_id} must be qualified by its provider namespace");
         self.operations.insert(operation_id, handler);
     }
 
@@ -549,9 +557,10 @@ impl ArmRegistry {
                 .iter()
                 .flat_map(|kind| kind.operations.iter())
                 .chain(provider.provider_operations.iter())
+                .map(move |operation| (provider.namespace, operation))
         });
-        for operation in all {
-            let Some(handler) = self.operations.get(operation.id) else {
+        for (namespace, operation) in all {
+            let Some(handler) = self.operations.get(format!("{namespace}/{}", operation.id).as_str()) else {
                 continue;
             };
             if operation.method != method.as_str() {

@@ -54,10 +54,10 @@ impl Rule {
 }
 
 pub(crate) fn register(registry: &mut ArmRegistry) {
-    registry.register_operation("ObjectReplicationPolicies_List", Arc::new(list));
-    registry.register_operation("ObjectReplicationPolicies_Get", Arc::new(get));
-    registry.register_operation("ObjectReplicationPolicies_CreateOrUpdate", Arc::new(put));
-    registry.register_operation("ObjectReplicationPolicies_Delete", Arc::new(delete));
+    registry.register_operation("Microsoft.Storage/ObjectReplicationPolicies_List", Arc::new(list));
+    registry.register_operation("Microsoft.Storage/ObjectReplicationPolicies_Get", Arc::new(get));
+    registry.register_operation("Microsoft.Storage/ObjectReplicationPolicies_CreateOrUpdate", Arc::new(put));
+    registry.register_operation("Microsoft.Storage/ObjectReplicationPolicies_Delete", Arc::new(delete));
 }
 
 type Reply = Result<(StatusCode, Value), ArmError>;

@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 pub fn register(registry: &mut ArmRegistry) {
     registry.register_type(UserAssignedIdentities);
     registry.register_type(FederatedIdentityCredentials);
-    registry.register_operation("SystemAssignedIdentities_GetByScope", Arc::new(system_assigned_by_scope));
+    registry.register_operation("Microsoft.ManagedIdentity/SystemAssignedIdentities_GetByScope", Arc::new(system_assigned_by_scope));
     registry.register_scaffold(&scaffold::PROVIDER);
 }
 

@@ -22,6 +22,7 @@ Exits 1 if any other implemented operation is not covered.
 import argparse
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -42,6 +43,12 @@ def implemented(binary, listing=None):
             namespace = path.rsplit("/providers/", 1)[1].split("/", 1)[0]
             found[f"{namespace}/{parts[-1].strip('()')}"] = (parts[0], parts[1], path)
     return found
+
+
+def shape(method, path):
+    """Operations with the same method and path, up to parameter names, are
+    one route: a request to it is attributed to either."""
+    return method.upper(), re.sub(r"\{[^}]*\}", "{}", path).lower()
 
 
 def covered(traces):
@@ -74,6 +81,9 @@ def main():
 
     operations = implemented(args.binary, args.operations)
     seen = covered(args.traces)
+    # A route's operations are covered together.
+    reached_shapes = {shape(m, p) for op, (_, m, p) in operations.items() if op in seen}
+    seen |= {op for op, (_, m, p) in operations.items() if shape(m, p) in reached_shapes}
     allowed = allowlist()
     missing = sorted(op for op in operations if op not in seen)
     failing = [op for op in missing if op not in allowed]

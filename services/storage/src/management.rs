@@ -65,13 +65,13 @@ pub(crate) fn register(registry: &mut ArmRegistry) {
     registry.register_type(Policies {
         resource_type: "Microsoft.Storage/storageAccounts/inventoryPolicies",
     });
-    registry.register_operation("PrivateLinkResources_ListByStorageAccount", Arc::new(private_link_resources));
-    registry.register_operation("BlobContainers_List", Arc::new(list_containers));
-    registry.register_operation("BlobContainers_Get", Arc::new(get_container));
-    registry.register_operation("BlobContainers_Create", Arc::new(put_container));
-    registry.register_operation("BlobContainers_Update", Arc::new(patch_container));
-    registry.register_operation("BlobContainers_Delete", Arc::new(delete_container));
-    registry.register_operation("StorageAccounts_GetCustomerInitiatedMigration", Arc::new(get_migration));
+    registry.register_operation("Microsoft.Storage/PrivateLinkResources_ListByStorageAccount", Arc::new(private_link_resources));
+    registry.register_operation("Microsoft.Storage/BlobContainers_List", Arc::new(list_containers));
+    registry.register_operation("Microsoft.Storage/BlobContainers_Get", Arc::new(get_container));
+    registry.register_operation("Microsoft.Storage/BlobContainers_Create", Arc::new(put_container));
+    registry.register_operation("Microsoft.Storage/BlobContainers_Update", Arc::new(patch_container));
+    registry.register_operation("Microsoft.Storage/BlobContainers_Delete", Arc::new(delete_container));
+    registry.register_operation("Microsoft.Storage/StorageAccounts_GetCustomerInitiatedMigration", Arc::new(get_migration));
 }
 
 fn invalid(message: impl Into<String>) -> ArmError {

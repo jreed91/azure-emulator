@@ -332,3 +332,139 @@ def test_post_forms_of_authorization_rule_reads(emulator, servicebus, group, cre
     one = post("/queues/jobs/authorizationRules/reader")
     assert one.status_code == 200 and one.json()["properties"]["rights"] == ["Listen"]
     assert post("/queues/jobs/authorizationRules/nobody").status_code == 404
+
+
+SB_API = "2021-11-01"
+
+
+def namespace_path(emulator, group, name):
+    return f"/subscriptions/{emulator.subscription}/resourceGroups/{group}/providers/Microsoft.ServiceBus/namespaces/{name}"
+
+
+def test_migration_get_and_delete(servicebus, group):
+    standard = create(servicebus, group, STANDARD)
+    premium = create(servicebus, group, PREMIUM)
+    migrations = servicebus.migration_configs
+    with pytest.raises(ResourceNotFoundError):
+        migrations.get(group, standard.name, "$default")
+    migrations.begin_create_and_start_migration(
+        group, standard.name, "$default", {"properties": {"targetNamespace": premium.id, "postMigrationName": unique("old-")}}
+    ).result()
+    got = migrations.get(group, standard.name, "$default")
+    assert (got.name, got.target_namespace) == ("$default", premium.id)
+    # Deleting the configuration abandons the migration, like a revert.
+    migrations.delete(group, standard.name, "$default")
+    with pytest.raises(ResourceNotFoundError):
+        migrations.get(group, standard.name, "$default")
+
+
+def test_topic_and_subscription_listing_and_deletion(servicebus, group):
+    namespace = create(servicebus, group, STANDARD)
+    servicebus.topics.create_or_update(group, namespace.name, "orders", {})
+    servicebus.topics.create_or_update(group, namespace.name, "refunds", {})
+    servicebus.subscriptions.create_or_update(group, namespace.name, "orders", "billing", {})
+    servicebus.subscriptions.create_or_update(group, namespace.name, "orders", "shipping", {})
+    assert [t.name for t in servicebus.topics.list_by_namespace(group, namespace.name)] == ["orders", "refunds"]
+    assert [s.name for s in servicebus.subscriptions.list_by_topic(group, namespace.name, "orders")] == ["billing", "shipping"]
+
+    servicebus.subscriptions.delete(group, namespace.name, "orders", "billing")
+    assert [s.name for s in servicebus.subscriptions.list_by_topic(group, namespace.name, "orders")] == ["shipping"]
+    with pytest.raises(ResourceNotFoundError):
+        servicebus.subscriptions.get(group, namespace.name, "orders", "billing")
+
+    # A topic goes with its subscriptions.
+    servicebus.topics.delete(group, namespace.name, "orders")
+    assert [t.name for t in servicebus.topics.list_by_namespace(group, namespace.name)] == ["refunds"]
+    with pytest.raises(ResourceNotFoundError):
+        servicebus.subscriptions.get(group, namespace.name, "orders", "shipping")
+
+
+def test_reading_one_rule_at_each_level(servicebus, group):
+    namespace = create(servicebus, group, STANDARD)
+    servicebus.queues.create_or_update(group, namespace.name, "jobs", {})
+    servicebus.topics.create_or_update(group, namespace.name, "events", {})
+    sender = {"properties": {"rights": ["Send"]}}
+    servicebus.namespaces.create_or_update_authorization_rule(group, namespace.name, "sender", sender)
+    servicebus.queues.create_or_update_authorization_rule(group, namespace.name, "jobs", "sender", sender)
+    servicebus.topics.create_or_update_authorization_rule(group, namespace.name, "events", "sender", sender)
+    assert servicebus.namespaces.get_authorization_rule(group, namespace.name, "sender").rights == ["Send"]
+    assert servicebus.queues.get_authorization_rule(group, namespace.name, "jobs", "sender").rights == ["Send"]
+    assert servicebus.topics.get_authorization_rule(group, namespace.name, "events", "sender").rights == ["Send"]
+    with pytest.raises(ResourceNotFoundError):
+        servicebus.topics.get_authorization_rule(group, namespace.name, "events", "nobody")
+
+
+def test_post_forms_for_namespace_and_topic_rules(emulator, arm_request, servicebus, group):
+    namespace = create(servicebus, group, STANDARD)
+    servicebus.topics.create_or_update(group, namespace.name, "events", {})
+    servicebus.topics.create_or_update_authorization_rule(group, namespace.name, "events", "reader", {"properties": {"rights": ["Listen"]}})
+    base = namespace_path(emulator, group, namespace.name)
+    root = arm_request("POST", f"{base}/AuthorizationRules/RootManageSharedAccessKey", SB_API, {})
+    assert root.status_code == 200 and sorted(root.json()["properties"]["rights"]) == ["Listen", "Manage", "Send"]
+    topic = arm_request("POST", f"{base}/topics/events/authorizationRules/reader", SB_API, {})
+    assert topic.status_code == 200 and topic.json()["properties"]["rights"] == ["Listen"]
+    assert arm_request("POST", f"{base}/AuthorizationRules/nobody", SB_API, {}).status_code == 404
+
+
+def test_legacy_namespace_name_check(emulator, arm_request, servicebus, group):
+    namespace = create(servicebus, group, STANDARD)
+    path = f"/subscriptions/{emulator.subscription}/providers/Microsoft.ServiceBus/CheckNameSpaceAvailability"
+    free = arm_request("POST", path, "2015-08-01", {"name": unique("sb-")})
+    assert free.status_code == 200 and free.json()["nameAvailable"] is True
+    taken = arm_request("POST", path, "2015-08-01", {"name": namespace.name})
+    assert taken.status_code == 200 and taken.json()["nameAvailable"] is False
+
+
+@pytest.mark.parametrize(
+    "collection, name, body, member",
+    [
+        ("ipfilterrules", "office", {"properties": {"ipMask": "10.1.0.0/16", "action": "Accept", "filterName": "office"}}, "ipMask"),
+        (
+            "virtualnetworkrules",
+            "app-subnet",
+            {"properties": {"virtualNetworkSubnetId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/net/providers/Microsoft.Network/virtualNetworks/vnet/subnets/app"}},
+            "virtualNetworkSubnetId",
+        ),
+    ],
+)
+def test_legacy_ip_filter_and_virtual_network_rules(emulator, arm_request, servicebus, group, collection, name, body, member):
+    namespace = create(servicebus, group, PREMIUM)
+    base = f"{namespace_path(emulator, group, namespace.name)}/{collection}"
+    put = arm_request("PUT", f"{base}/{name}", "2018-01-01-preview", body)
+    assert put.status_code == 200, put.text()
+    got = arm_request("GET", f"{base}/{name}", "2018-01-01-preview")
+    assert got.status_code == 200 and got.json()["properties"][member] == body["properties"][member]
+    listed = arm_request("GET", base, "2018-01-01-preview")
+    assert [r["name"] for r in listed.json()["value"]] == [name]
+    assert arm_request("DELETE", f"{base}/{name}", "2018-01-01-preview").status_code in (200, 204)
+    assert arm_request("GET", f"{base}/{name}", "2018-01-01-preview").status_code == 404
+
+
+def test_a_service_bus_namespace_has_no_event_hubs(emulator, arm_request, servicebus, group):
+    namespace = create(servicebus, group, STANDARD)
+    base = f"{namespace_path(emulator, group, namespace.name)}/eventhubs"
+    listed = arm_request("GET", base, "2018-01-01-preview")
+    assert listed.status_code == 200 and listed.json()["value"] == [], listed.text()
+    # Event hub rules are only in the oldest Service Bus specification.
+    assert arm_request("GET", f"{base}/hub/authorizationRules", "2014-09-01").status_code == 404
+    assert arm_request("GET", f"{base}/hub/authorizationRules/rule", "2014-09-01").status_code == 404
+
+
+def test_private_endpoint_connections_and_perimeters_are_absent(emulator, arm_request, servicebus, group):
+    """Microsoft.Network creates these; without it there are none."""
+    namespace = create(servicebus, group, PREMIUM)
+    with pytest.raises(ResourceNotFoundError):
+        servicebus.private_endpoint_connections.get(group, namespace.name, "connection")
+    with pytest.raises(HttpResponseError) as refused:
+        servicebus.private_endpoint_connections.create_or_update(
+            group, namespace.name, "connection", {"properties": {"privateLinkServiceConnectionState": {"status": "Approved"}}}
+        )
+    assert refused.value.status_code == 404
+    deleted = arm_request("DELETE", f"{namespace_path(emulator, group, namespace.name)}/privateEndpointConnections/connection", SB_API)
+    assert deleted.status_code in (204, 404)
+
+    base = f"{namespace_path(emulator, group, namespace.name)}/networkSecurityPerimeterConfigurations"
+    listed = arm_request("GET", base, "2026-01-01")
+    assert listed.status_code == 200 and listed.json()["value"] == [], listed.text()
+    assert arm_request("GET", f"{base}/association", "2026-01-01").status_code == 404
+    assert arm_request("POST", f"{base}/association/reconcile", "2026-01-01", {}).status_code == 404

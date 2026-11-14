@@ -25,8 +25,12 @@ pub(crate) fn register(registry: &mut ArmRegistry) {
     registry.register_type(MigrationConfigs);
     registry.register_type(NoEventHubs("Microsoft.ServiceBus/namespaces/eventhubs"));
     registry.register_type(NoEventHubs("Microsoft.ServiceBus/namespaces/eventhubs/authorizationRules"));
-    registry.register_operation("Namespaces_ListPostAuthorizationRules", Arc::new(post_list_rules));
-    for id in ["Namespaces_PostAuthorizationRule", "Queues_PostAuthorizationRule", "Topics_PostAuthorizationRule"] {
+    registry.register_operation("Microsoft.ServiceBus/Namespaces_ListPostAuthorizationRules", Arc::new(post_list_rules));
+    for id in [
+        "Microsoft.ServiceBus/Namespaces_PostAuthorizationRule",
+        "Microsoft.ServiceBus/Queues_PostAuthorizationRule",
+        "Microsoft.ServiceBus/Topics_PostAuthorizationRule",
+    ] {
         registry.register_operation(id, Arc::new(post_get_rule));
     }
 }

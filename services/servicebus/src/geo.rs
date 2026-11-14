@@ -30,11 +30,11 @@ pub(crate) fn register(registry: &mut ArmRegistry) {
         resource_type: "Microsoft.ServiceBus/namespaces/virtualnetworkrules",
         required: "virtualNetworkSubnetId",
     });
-    registry.register_operation("DisasterRecoveryConfigs_CheckNameAvailability", Arc::new(check_alias_name));
-    registry.register_operation("DisasterRecoveryConfigs_ListAuthorizationRules", Arc::new(list_alias_rules));
-    registry.register_operation("DisasterRecoveryConfigs_GetAuthorizationRule", Arc::new(get_alias_rule));
-    registry.register_operation("DisasterRecoveryConfigs_ListKeys", Arc::new(alias_rule_keys));
-    registry.register_operation("PrivateLinkResources_Get", Arc::new(private_link_resources));
+    registry.register_operation("Microsoft.ServiceBus/DisasterRecoveryConfigs_CheckNameAvailability", Arc::new(check_alias_name));
+    registry.register_operation("Microsoft.ServiceBus/DisasterRecoveryConfigs_ListAuthorizationRules", Arc::new(list_alias_rules));
+    registry.register_operation("Microsoft.ServiceBus/DisasterRecoveryConfigs_GetAuthorizationRule", Arc::new(get_alias_rule));
+    registry.register_operation("Microsoft.ServiceBus/DisasterRecoveryConfigs_ListKeys", Arc::new(alias_rule_keys));
+    registry.register_operation("Microsoft.ServiceBus/PrivateLinkResources_Get", Arc::new(private_link_resources));
 }
 
 /// The id of the namespace a child resource id belongs to.
