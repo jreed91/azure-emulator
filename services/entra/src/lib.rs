@@ -115,20 +115,24 @@ pub async fn handle(engine: Arc<Engine>, request: Request<Body>) -> Response {
 
     match (&parts.method, &path[1..]) {
         (&Method::GET, [".well-known", "openid-configuration"])
-        | (&Method::GET, ["v2.0", ".well-known", "openid-configuration"]) => json_response(
+        | (&Method::GET, ["v2.0", ".well-known", "openid-configuration"]) => {
+            // The v1 document names the v1 endpoints, as Azure's does.
+            let v2 = if path[1] == "v2.0" { "/v2.0" } else { "" };
+            json_response(
             StatusCode::OK,
             &json!({
                 "issuer": config.issuer(),
-                "authorization_endpoint": format!("{base}/{tenant}/oauth2/v2.0/authorize"),
-                "token_endpoint": format!("{base}/{tenant}/oauth2/v2.0/token"),
-                "jwks_uri": format!("{base}/{tenant}/discovery/v2.0/keys"),
+                "authorization_endpoint": format!("{base}/{tenant}/oauth2{v2}/authorize"),
+                "token_endpoint": format!("{base}/{tenant}/oauth2{v2}/token"),
+                "jwks_uri": format!("{base}/{tenant}/discovery{v2}/keys"),
                 "token_endpoint_auth_methods_supported":
                     ["client_secret_post", "client_secret_basic", "private_key_jwt"],
                 "response_types_supported": ["code"],
                 "subject_types_supported": ["pairwise"],
                 "id_token_signing_alg_values_supported": ["RS256"],
             }),
-        ),
+        )
+        }
         (&Method::GET, ["discovery", "keys"]) | (&Method::GET, ["discovery", "v2.0", "keys"]) => {
             json_response(StatusCode::OK, &auth::jwks())
         }
@@ -244,6 +248,22 @@ fn client_credentials_token(
     json_response(StatusCode::OK, &body)
 }
 
+/// The client and principal ids of the user-assigned identity whose `member`
+/// (or, for an empty `member`, resource id) is `value`.
+fn user_assigned_identity(engine: &Engine, member: &str, value: &str) -> Option<(String, String)> {
+    let state = engine.state::<emulator_core::arm::ArmState>();
+    let state = state.lock();
+    let found = state.resources().find(|r| {
+        r.resource_type.eq_ignore_ascii_case("Microsoft.ManagedIdentity/userAssignedIdentities")
+            && match member {
+                "" => r.id.eq_ignore_ascii_case(value),
+                member => r.properties.get(member).and_then(Value::as_str).is_some_and(|v| v.eq_ignore_ascii_case(value)),
+            }
+    })?;
+    let id = |member: &str| found.properties.get(member).and_then(Value::as_str).map(str::to_string);
+    Some((id("clientId")?, id("principalId")?))
+}
+
 fn managed_identity_token(
     engine: &Engine,
     parts: &http::request::Parts,
@@ -266,11 +286,21 @@ fn managed_identity_token(
     let Some(resource) = query.get("resource").filter(|r| !r.is_empty()) else {
         return bad_request("Required query variable 'resource' is missing");
     };
-    let client_id = query
-        .get("client_id")
-        .map(String::as_str)
-        .unwrap_or(MANAGED_IDENTITY_CLIENT_ID);
-    let token = auth::issue_token(engine.config(), resource, client_id);
+    // IMDS picks a user-assigned identity by its client id, object (principal)
+    // id or resource id; the token names the identity's principal.
+    let wanted = [("client_id", "clientId"), ("object_id", "principalId"), ("msi_res_id", "")]
+        .into_iter()
+        .find_map(|(param, member)| query.get(param).filter(|v| !v.is_empty()).map(|v| (member, v.as_str())));
+    let (client_id, object_id) = match wanted {
+        None => (MANAGED_IDENTITY_CLIENT_ID.to_string(), MANAGED_IDENTITY_CLIENT_ID.to_string()),
+        Some((member, value)) => match user_assigned_identity(engine, member, value) {
+            Some(found) => found,
+            // Unverified against Azure: the body for an identity that is not there.
+            None => return bad_request("Identity not found"),
+        },
+    };
+    let client_id = client_id.as_str();
+    let token = auth::issue_token_for(engine.config(), resource, client_id, &object_id);
     let now = epoch_now();
     let expires_in = TOKEN_LIFETIME_SECS - 1;
     json_response(

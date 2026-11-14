@@ -24,7 +24,7 @@ whether your own project is expected to work, see
 |---|---|
 | Entra ID (login) | OpenID Connect discovery, instance discovery, signing keys, client-credentials tokens (v1 and v2 endpoints), managed-identity (IMDS) tokens |
 | Resource Manager | Bearer-token verification, `api-version` checks, subscriptions, tenants, resource groups (create, get, exists, tag, list, delete with cascade), providers, generic resource listing (with `$filter` on type, name, location, group and tags), cloud metadata document |
-| Role-based access control | All 506 built-in role definitions with Azure's ids and permissions; custom roles; role assignments at subscription, resource group and resource scope (create, get, get by id, delete, list with `atScope()` and `principalId` filters), removed with the scope they are on. Enforcement on requests inside the subscription, deployments' resources included, and on the Blob, Key Vault and Service Bus data planes, when started with `--enforce-rbac`; see [Role-based access control](#role-based-access-control) |
+| Role-based access control | All 506 built-in role definitions with Azure's ids and permissions; custom roles; role assignments at subscription, resource group and resource scope (create, get, get by id, delete, list with `atScope()` and `principalId` filters), removed with the scope they are on. Enforcement on requests inside the subscription, deployments' resources included, and on the Blob, Queue, Table, Files, Key Vault and Service Bus data planes, when started with `--enforce-rbac`; see [Role-based access control](#role-based-access-control) |
 | Template deployments | ARM templates and compiled Bicep at resource-group and subscription scope: create, get, list, delete, `validate`, `whatIf`, `exportTemplate`, deployment operations, `calculateTemplateHash`. Parameters (types, allowed values, bounds, defaults, user-defined types), variables and variable loops, resource, property and output `copy` loops, conditions, child resources, `dependsOn` ordering, nested deployments (Bicep modules, inner and outer scope, other resource groups), `existing` resources, symbolic names (`languageVersion` 2.0), user-defined functions, lambdas, outputs, and complete mode. About 100 template functions plus every `list*` action, with `uniqueString` and `guid` giving the values Azure gives. See [Template deployments](#template-deployments) |
 | `Microsoft.Storage` | Storage accounts with `listKeys`, `regenerateKey` and `checkNameAvailability`; blob, file, queue and table service properties; blob containers and file shares (the same stores as their data planes); encryption scopes; lifecycle-management and inventory policies; local users; `listAccountSas` and `listServiceSas`; container legal holds, immutability policies (lock, extend, `If-Match`) and leases, enforced on the Blob data plane; file share leases; object replication policies, with blobs copied between accounts on write; the data planes' service properties (logging, metrics, CORS, and blob delete retention and static website), kept per account, a set replacing only the elements it names; the Queue data plane (queues, metadata, access policies, and messages with visibility timeouts, pop receipts and time to live; Shared Key, SAS and Entra ID) on `<account>.queue.core.azure.localhost`, sharing its queues with Resource Manager; the Table data plane (tables, entities with typed properties, OData `$filter`, `$select` and `$top` queries with continuation, insert, replace, merge and upsert with `If-Match`, and entity group transactions; Shared Key, Shared Key Lite, SAS and Entra ID) on `<account>.table.core.azure.localhost`, sharing its tables with Resource Manager; the Azure Files data plane (shares with quota, metadata and stats; directories; files created at a size, written and cleared by range, downloaded with ranges, resized, with HTTP headers, metadata and range lists; names case-insensitive; Shared Key, SAS and Entra ID) on `<account>.file.core.azure.localhost`, sharing its shares with Resource Manager |
 | Blob service | Containers: create, delete, properties, list. Block blobs: upload in a single request or in blocks (Put Block, Put Block List with committed, uncommitted and latest blocks, Get Block List), so the SDKs' large and parallel uploads work; download with ranges; properties, metadata, Set Blob Metadata and Set Blob Properties (content type, MD5, cache control, encoding, language, disposition); delete; list with prefix, delimiter and paging. Leases on blobs and containers (acquire, renew, change, release, break; writes to a leased blob need its id); soft delete under the account's delete retention policy (deleted blobs and their snapshots listed with `include=deleted`, restored with Undelete Blob, gone once retention ends); snapshots (create, read, list, delete with `x-ms-delete-snapshots`); Copy Blob, synchronous copy and Put Blob From URL from a blob or snapshot, from another account with a SAS or public access; `If-Match`, `If-None-Match`, `If-Modified-Since` and `If-Unmodified-Since` (304 on reads), and the `x-ms-source-` conditions on copies. Append blobs (Append Block with the max-size and append-position conditions, Seal) and page blobs (Put Page update and clear, Get Page Ranges, resize, sequence numbers and their conditions). Authorization by Entra token, verified Shared Key, or shared access signature (account SAS and container or blob service SAS signed with an account key) |
@@ -67,8 +67,8 @@ operation with its status.
 `tests/sdk/` and `tests/sdk-js/` exercise the emulator through the official
 Azure SDKs for Python and JavaScript, and `tests/terraform/` applies, re-plans
 and destroys a Terraform configuration with the `azurerm` provider (see
-[Terraform](#terraform)); all three run in CI. The Azure CLI has not been tried
-yet.
+[Terraform](#terraform)), and `tests/cli/run.sh` drives every service through
+the Azure CLI; all four run in CI.
 
 ### Not implemented, and why
 
@@ -188,6 +188,21 @@ tests/fidelity/run.sh            # writes target/fidelity/scores.md and checks.j
 The score covers what the tests exercise. `azure-emulator coverage` is a
 separate measure: how many of each provider's control-plane operations are
 implemented at all (see [What works today](#what-works-today)).
+
+Every implemented control-plane operation is also exercised by at least one
+Python, JavaScript or Terraform test, and CI checks this. Run with
+`AZURE_EMULATOR_TRACE=<file>`, the emulator appends the operation each
+Resource Manager request reached to the file. `tests/operations/check.py`
+compares the suites' traces with `azure-emulator coverage --operations` and
+fails on an implemented operation no test reached:
+
+```bash
+export AZURE_EMULATOR_TRACE=$PWD/target/python.trace
+(cd tests/sdk && python -m pytest -n auto)
+export AZURE_EMULATOR_TRACE=$PWD/target/js.trace
+(cd tests/sdk-js && npm test)
+python tests/operations/check.py target/python.trace target/js.trace
+```
 
 ### Checking whether your project works with Azure Emulator
 
@@ -592,6 +607,27 @@ namespace and hub. It applies them, checks that a second plan finds nothing to
 change, and destroys them. The provider waits about two minutes after creating
 a Key Vault and 20 seconds after a resource group, as it does on Azure.
 
+### Azure CLI
+
+Register the emulator as a cloud, turn off instance discovery (it would ask
+`login.microsoftonline.com` about the emulator's authority), and sign in with
+any service principal name and secret:
+
+```bash
+export REQUESTS_CA_BUNDLE=~/.azure-emulator/ca.pem   # the CA the emulator prints at startup
+az cloud register -n AzureEmulator --endpoint-resource-manager https://localhost:10443/
+az cloud set -n AzureEmulator
+az config set core.instance_discovery=false
+az login --service-principal -u my-app -p any-secret --tenant 11111111-1111-1111-1111-111111111111
+az group create -n demo -l eastus
+```
+
+Data-plane commands (`az storage blob ...`, `az keyvault secret ...`) go to
+per-resource hostnames under `azure.localhost`, which must resolve to
+`127.0.0.1`; add them to your hosts file if your resolver does not.
+`tests/cli/run.sh` is the smoke test CI runs, and lists the commands known to
+work.
+
 ### Template deployments
 
 ARM templates, and Bicep compiled with `bicep build`, deploy through the usual
@@ -641,6 +677,9 @@ role assignments, as in Azure.
 | Data plane | Checked against | Refused with |
 |---|---|---|
 | Blob | Data actions (`.../containers/blobs/read`, `write`, `add/action`, `delete`) at the container; creating, deleting and listing containers are control-plane actions (`.../containers/write`, `delete`, `read`), as in Azure | `403 AuthorizationPermissionMismatch` |
+| Queue | Data actions (`.../queues/messages/read`, `add/action` or `write`, `process/action`, `delete`) at the queue; creating, deleting and listing queues are control-plane actions (`.../queues/write`, `delete`, `read`) | `403 AuthorizationPermissionMismatch` |
+| Table | Data actions (`.../tables/entities/read`, `add/action`, `update/action`, `delete`) at the table; creating, deleting and listing tables are control-plane actions | `403 AuthorizationPermissionMismatch` |
+| Files | Data actions (`.../fileshares/files/read`, `write`, `delete`, ...) at the share (the SDKs send Entra requests with `x-ms-file-request-intent: backup`) | `403 AuthorizationPermissionMismatch` |
 | Key Vault secrets and keys | For a vault with `enableRbacAuthorization`, data actions (`.../secrets/getSecret/action`, `setSecret`, `readMetadata`, ...; `.../keys/read`, `create/action`, `encrypt/action`, `sign/action`, `wrap/action`, ...) at the secret or key; otherwise the vault's access policies (`get`, `list`, `set`, `create`, `import`, `encrypt`, `sign`, `wrapKey`, `delete`, `recover`, `purge`, `all`, ...) | `403 Forbidden` (`ForbiddenByRbac` or `AccessDenied`) |
 | Service Bus | `.../messages/send/action` and `receive/action` at the queue, topic or subscription | the link is refused for want of the `Send` or `Listen` claim |
 
@@ -649,7 +688,11 @@ cannot read blobs or secrets until it is given a data role, as in Azure.
 
 A token's principal is its object id: the client id for the emulator's
 client-credentials tokens, and for a managed identity's token, that
-identity's principal id, which is what a role assignment names.
+identity's principal id, which is what a role assignment names. The
+managed-identity endpoint (`/metadata/identity/oauth2/token`) picks a
+user-assigned identity by `client_id`, `object_id` or `msi_res_id`;
+`ManagedIdentityCredential` reaches it with `AZURE_POD_IDENTITY_AUTHORITY_HOST`
+set to the emulator's address.
 
 ```bash
 azure-emulator --enforce-rbac --rbac-owner my-admin-app

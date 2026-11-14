@@ -257,7 +257,7 @@ fn sas_token(account_name: &str, account: &Account, body: &Value, for_account: b
             ("srt", "signedResourceTypes"),
             ("sp", "signedPermission"),
             ("st", "signedStart"),
-            ("se", "signedExpiryTime"),
+            ("se", "signedExpiry"),
             ("sip", "signedIp"),
             ("spr", "signedProtocol"),
         ]
@@ -266,7 +266,7 @@ fn sas_token(account_name: &str, account: &Account, body: &Value, for_account: b
             ("sr", "signedResource"),
             ("sp", "signedPermission"),
             ("st", "signedStart"),
-            ("se", "signedExpiryTime"),
+            ("se", "signedExpiry"),
             ("sip", "signedIp"),
             ("spr", "signedProtocol"),
             ("rscc", "rscc"),
@@ -277,9 +277,9 @@ fn sas_token(account_name: &str, account: &Account, body: &Value, for_account: b
         ]
     };
     let required: &[&str] = if for_account {
-        &["signedServices", "signedResourceTypes", "signedPermission", "signedExpiryTime"]
+        &["signedServices", "signedResourceTypes", "signedPermission", "signedExpiry"]
     } else {
-        &["canonicalizedResource", "signedResource", "signedPermission", "signedExpiryTime"]
+        &["canonicalizedResource", "signedResource", "signedPermission", "signedExpiry"]
     };
     for member in required {
         if text(member).is_empty() {
@@ -289,7 +289,7 @@ fn sas_token(account_name: &str, account: &Account, body: &Value, for_account: b
     if !text("signedIdentifier").is_empty() {
         return Err(ArmError::not_implemented("shared access signatures that name a stored access policy"));
     }
-    for member in ["signedExpiryTime", "signedStart"] {
+    for member in ["signedExpiry", "signedStart"] {
         if !text(member).is_empty() && sas::parse_time(&text(member)).is_none() {
             return Err(missing(member));
         }

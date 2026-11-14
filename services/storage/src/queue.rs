@@ -349,7 +349,12 @@ fn check_roles(engine: &Engine, account: &str, oid: &str, queue: &str, op: Op) -
         return Ok(());
     }
     let (data, action) = op.permission();
-    let needed = if data { vec![Permission::Data(action)] } else { vec![Permission::Action(action)] };
+    let mut needed = if data { vec![Permission::Data(action)] } else { vec![Permission::Action(action)] };
+    // Writing messages also allows adding them, as Storage Queue Data
+    // Contributor (which has write, not add) may send.
+    if let Op::PutMessage = op {
+        needed.push(Permission::Data("Microsoft.Storage/storageAccounts/queueServices/queues/messages/write"));
+    }
     let account_id = account_resource_id(engine, account).unwrap_or_default();
     let scope = if queue.is_empty() { account_id } else { format!("{account_id}/queueServices/default/queues/{queue}") };
     if data_access(engine, oid, &needed, &scope) {

@@ -25,14 +25,14 @@ use crate::StorageState;
 type Reply = Result<(StatusCode, Value), ArmError>;
 
 pub(crate) fn register(registry: &mut ArmRegistry) {
-    registry.register_operation("BlobContainers_CreateOrUpdateImmutabilityPolicy", Arc::new(put_policy));
-    registry.register_operation("BlobContainers_GetImmutabilityPolicy", Arc::new(get_policy));
-    registry.register_operation("BlobContainers_DeleteImmutabilityPolicy", Arc::new(delete_policy));
-    registry.register_operation("BlobContainers_LockImmutabilityPolicy", Arc::new(lock_policy));
-    registry.register_operation("BlobContainers_ExtendImmutabilityPolicy", Arc::new(extend_policy));
-    registry.register_operation("BlobContainers_SetLegalHold", Arc::new(set_legal_hold));
-    registry.register_operation("BlobContainers_ClearLegalHold", Arc::new(clear_legal_hold));
-    registry.register_operation("BlobContainers_Lease", Arc::new(lease));
+    registry.register_operation("Microsoft.Storage/BlobContainers_CreateOrUpdateImmutabilityPolicy", Arc::new(put_policy));
+    registry.register_operation("Microsoft.Storage/BlobContainers_GetImmutabilityPolicy", Arc::new(get_policy));
+    registry.register_operation("Microsoft.Storage/BlobContainers_DeleteImmutabilityPolicy", Arc::new(delete_policy));
+    registry.register_operation("Microsoft.Storage/BlobContainers_LockImmutabilityPolicy", Arc::new(lock_policy));
+    registry.register_operation("Microsoft.Storage/BlobContainers_ExtendImmutabilityPolicy", Arc::new(extend_policy));
+    registry.register_operation("Microsoft.Storage/BlobContainers_SetLegalHold", Arc::new(set_legal_hold));
+    registry.register_operation("Microsoft.Storage/BlobContainers_ClearLegalHold", Arc::new(clear_legal_hold));
+    registry.register_operation("Microsoft.Storage/BlobContainers_Lease", Arc::new(lease));
 }
 
 fn invalid(message: impl Into<String>) -> ArmError {

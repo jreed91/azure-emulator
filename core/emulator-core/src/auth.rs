@@ -78,6 +78,12 @@ fn now() -> u64 {
 
 /// Signs an access token for `audience` on behalf of the application `client_id`.
 pub fn issue_token(config: &Config, audience: &str, client_id: &str) -> String {
+    issue_token_for(config, audience, client_id, client_id)
+}
+
+/// A token for `client_id` whose principal (`oid`, `sub`) is `object_id`, as a
+/// managed identity's token names the identity's principal id.
+pub fn issue_token_for(config: &Config, audience: &str, client_id: &str, object_id: &str) -> String {
     let iat = now();
     let claims = Claims {
         aud: audience.to_string(),
@@ -86,9 +92,9 @@ pub fn issue_token(config: &Config, audience: &str, client_id: &str) -> String {
         nbf: iat,
         exp: iat + TOKEN_LIFETIME_SECS,
         tid: config.tenant_id.clone(),
-        // A stable object id per client, so role assignments can name a principal.
-        oid: client_id.to_string(),
-        sub: client_id.to_string(),
+        // A stable object id per principal, so role assignments can name it.
+        oid: object_id.to_string(),
+        sub: object_id.to_string(),
         appid: client_id.to_string(),
         ver: "1.0".into(),
     };
