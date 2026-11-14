@@ -55,12 +55,16 @@ socket.getaddrinfo = _resolve_localhost
 def pytest_collection_modifyitems(items):
     """Run each `known_gap` test as a strict xfail: the suite stays green while
     the emulator differs from Azure, and fails once it matches, so the marker is
-    removed and the fidelity score goes up."""
+    removed and the fidelity score goes up. In a live run, skip every test not
+    marked `live`. (One hook does both: a second definition would replace this one.)"""
+    skip = pytest.mark.skip(reason="emulator only; not marked live")
     for item in items:
         gap = item.get_closest_marker("known_gap")
         if gap is not None:
             reason = gap.kwargs.get("reason") or (gap.args[0] if gap.args else "known gap")
             item.add_marker(pytest.mark.xfail(reason=f"known gap: {reason}", strict=True))
+        if LIVE and "live" not in item.keywords:
+            item.add_marker(skip)
 
 
 def _free_port():
@@ -134,15 +138,6 @@ def run_emulator(home, amqps_port=None, extra_args=(), port=None, amqp_port=None
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "live: also runs against a real Azure subscription (AZURE_EMULATOR_LIVE=1)")
-
-
-def pytest_collection_modifyitems(config, items):
-    if not LIVE:
-        return
-    skip = pytest.mark.skip(reason="emulator only; not marked live")
-    for item in items:
-        if "live" not in item.keywords:
-            item.add_marker(skip)
 
 
 class LiveAzure:
