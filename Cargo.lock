@@ -256,6 +256,7 @@ dependencies = [
  "service-eventhub",
  "service-keyvault",
  "service-managedidentity",
+ "service-network",
  "service-servicebus",
  "service-storage",
  "sha2 0.10.9",
@@ -2287,6 +2288,13 @@ dependencies = [
  "http",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "service-network"
+version = "0.1.0"
+dependencies = [
+ "emulator-core",
 ]
 
 [[package]]

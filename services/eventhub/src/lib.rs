@@ -30,5 +30,11 @@ pub fn register(registry: &mut ArmRegistry) {
     // Created only by Microsoft.Network, which the emulator does not model.
     registry.register_type(emulator_core::arm::CreatedByNetwork("Microsoft.EventHub/namespaces/privateEndpointConnections"));
     registry.register_type(emulator_core::arm::CreatedByNetwork("Microsoft.EventHub/namespaces/networkSecurityPerimeterConfigurations"));
+    registry.register_generic_remaining(&scaffold::PROVIDER, GENERIC_EXCEPTIONS);
     registry.register_scaffold(&scaffold::PROVIDER);
 }
+
+/// The configuration-shaped types that are not served from their schema, and why.
+const GENERIC_EXCEPTIONS: &[(&str, &str)] = &[
+    ("Microsoft.EventHub/namespaces/disasterRecoveryConfigs", "pairs two namespaces; storing the setting would report a pairing that does not exist"),
+];

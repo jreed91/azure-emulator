@@ -105,6 +105,11 @@ fn compact(resolver: &mut Resolver, file: &Path, schema: &Value, depth: usize) -
         return Value::Object(out);
     };
     for parent in schema.get("allOf").and_then(Value::as_array).into_iter().flatten() {
+        // Past the depth this goes to, the inherited members are not listed,
+        // so the object keeps whatever it is sent.
+        if depth >= 8 {
+            out.insert("open".into(), Value::Bool(true));
+        }
         let inherited = compact(resolver, &file, parent, depth + 1);
         merge_object(&mut out, inherited);
     }
@@ -513,7 +518,7 @@ pub fn write_crate(repo: &Path, crate_dir: &Path, service: &str, provider: &Prov
         std::fs::write(
             crate_dir.join("Cargo.toml"),
             format!(
-                "[package]\nname = \"service-{service}\"\nversion.workspace = true\nedition.workspace = true\n\n[dependencies]\nemulator-core = {{ workspace = true }}\n\n[lints]\nworkspace = true\n"
+                "[package]\nname = \"service-{service}\"\nversion.workspace = true\nedition.workspace = true\nlicense.workspace = true\n\n[dependencies]\nemulator-core = {{ workspace = true }}\n\n[lints]\nworkspace = true\n"
             ),
         )?;
         std::fs::write(

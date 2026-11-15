@@ -8,6 +8,7 @@ PrivateEndpointConnections_Put / StorageAccountPutPrivateEndpointConnection -- c
 PrivateEndpointConnections_Put / KeyVaultPutPrivateEndpointConnection -- created only by Microsoft.Network
 MHSMPrivateEndpointConnections_Put / ManagedHsmPutPrivateEndpointConnection -- created only by Microsoft.Network
 PrivateEndpointConnections_CreateOrUpdate / NameSpacePrivateEndPointConnectionCreate -- created only by Microsoft.Network
+PrivateEndpointConnections_CreateOrUpdate / Approve or reject a private endpoint connection with a given name. -- created only by Microsoft.Network
 
 # The example names a partner or target namespace it never creates, and the
 # emulator refuses to pair with one that does not exist.
@@ -20,3 +21,9 @@ ObjectReplicationPolicies_CreateOrUpdate / StorageAccountCreateObjectReplication
 ObjectReplicationPolicies_CreateOrUpdate / StorageAccountCreateObjectReplicationPolicyOnSource -- the example accounts do not enable blob versioning
 ObjectReplicationPolicies_CreateOrUpdate / StorageAccountUpdateObjectReplicationPolicyOnDestination -- the example accounts do not enable blob versioning
 ObjectReplicationPolicies_CreateOrUpdate / StorageAccountUpdateObjectReplicationPolicyOnSource -- the example accounts do not enable blob versioning
+
+# The emulator's Cosmos DB accounts have one region, the account's own
+# location, and restoring an account from a backup is not modelled.
+DatabaseAccounts_CreateOrUpdate / CosmosDBDatabaseAccountCreateMax -- the account has one region, its own location
+DatabaseAccounts_CreateOrUpdate / CosmosDBDatabaseAccountCreateMin -- the account has one region, its own location
+DatabaseAccounts_CreateOrUpdate / CosmosDBRestoreDatabaseAccountCreateUpdate.json -- restoring an account is not modelled

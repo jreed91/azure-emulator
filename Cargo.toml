@@ -10,6 +10,7 @@ members = [
     "services/servicebus",
     "services/cosmosdb",
     "services/eventhub",
+    "services/network",
     "tools/scaffold",
 ]
 
@@ -24,6 +25,7 @@ tokio-rustls = "0.26"
 rustls-pemfile = "2"
 bytes = "1"
 emulator-core = { path = "core/emulator-core" }
+service-network = { path = "services/network" }
 service-eventhub = { path = "services/eventhub" }
 service-cosmosdb = { path = "services/cosmosdb" }
 service-servicebus = { path = "services/servicebus" }

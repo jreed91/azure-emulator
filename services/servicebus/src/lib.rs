@@ -59,5 +59,9 @@ pub fn register(registry: &mut ArmRegistry) {
     migration::register(registry);
     registry.register_type(emulator_core::arm::CreatedByNetwork("Microsoft.ServiceBus/namespaces/privateEndpointConnections"));
     registry.register_type(emulator_core::arm::CreatedByNetwork("Microsoft.ServiceBus/namespaces/networkSecurityPerimeterConfigurations"));
+    registry.register_generic_remaining(&scaffold::PROVIDER, GENERIC_EXCEPTIONS);
     registry.register_scaffold(&scaffold::PROVIDER);
 }
+
+/// The configuration-shaped types that are not served from their schema, and why.
+const GENERIC_EXCEPTIONS: &[(&str, &str)] = &[];

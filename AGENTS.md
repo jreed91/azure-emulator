@@ -43,7 +43,8 @@ tests/operations/     check.py: every implemented operation is reached by a test
 | Want to... | Edit |
 |---|---|
 | Implement a resource type | a `ResourceTypeHandler` in `services/<name>/src/`, registered in that crate's `register` before the scaffold (`services/managedidentity/src/lib.rs` is a small complete example) |
-| Serve a configuration-only type from its schema | the `registry.register_generic` list in the crate's `register` (see `services/storage/src/lib.rs`) |
+| Serve a configuration-only type from its schema | nothing: `register_generic_remaining` in the crate's `register` serves every type with a `PUT` schema that has no handler |
+| Keep a type at `501` although it has a schema | the crate's `GENERIC_EXCEPTIONS`, with the reason |
 | Implement a location-, tenant- or state-backed operation | `registry.register_operation` with its `operationId` (examples in `services/keyvault/src/management.rs`) |
 | Change the shared ARM behaviour | `core/emulator-core/src/arm.rs` (and `src/arm/`) |
 | Add or change a data plane | the service crate, plus its hostname dispatch in `core/router/src/lib.rs` |

@@ -43,5 +43,6 @@
   "sdk/test_files_gaps.py": "Azure Files",
   "sdk/test_keyvault_gaps.py": "Key Vault",
   "sdk/test_cosmos_gaps.py": "Cosmos DB",
+  "sdk/test_network.py": "Virtual networks",
   "sdk/test_persistence.py": null
 }

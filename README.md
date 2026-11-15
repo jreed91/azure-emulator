@@ -33,6 +33,7 @@ whether your own project is expected to work, see
 | `Microsoft.ServiceBus` | Namespaces, queues, topics, subscriptions, rules, authorization rules with `listKeys` and `regenerateKeys`, network rule sets, geo-disaster-recovery aliases with failover and break-pairing, legacy IP filter and virtual network rules, private link resources, Standard-to-Premium migration (start and revert; completion is not modeled), `checkNameAvailability`; messaging over AMQP 1.0 (see [Service Bus messaging](#service-bus-messaging)) |
 | `Microsoft.EventHub` | Namespaces (names shared with Service Bus), event hubs, consumer groups, authorization rules with `listKeys` and `regenerateKeys`, network rule sets, `checkNameAvailability`; events over AMQP (see [Event Hubs](#event-hubs)) |
 | `Microsoft.DocumentDB` | Database accounts with `listKeys`, `readonlykeys`, `listConnectionStrings` and `regenerateKey`; SQL databases and containers (the same store as the data plane, reporting dedicated throughput under `options`); the Cosmos DB for NoSQL data plane (see [Cosmos DB](#cosmos-db)) |
+| `Microsoft.Network` | Served from the specification's schema, not modelled: virtual networks and subnets, network interfaces, security groups and rules, public addresses, route tables, load balancers, application gateways, private endpoints and the rest of what the provider's specification can create (122 resource types). Settings are checked against the schema, stored and returned, with references between resources kept as sent, so SDK calls, Bicep and Terraform configurations that only declare networking apply and read back. Nothing is allocated or connected; see [Known gaps](#known-gaps) |
 | Key Vault secrets | Set, get (latest or by version), update attributes, list, list versions, soft delete, get and list deleted, recover, purge |
 | Key Vault keys | RSA (2048, 3072, 4096) and EC (P-256, P-384, P-521, P-256K) keys, `-HSM` types in Premium vaults: create, import (JSON Web Key), get (latest or by version), update (operations, attributes, tags), list, list versions, rotate, rotation policy (stored; rotation is not automatic), backup and restore, soft delete with get and list deleted, recover and purge. Encrypt, decrypt, wrap and unwrap with `RSA1_5`, `RSA-OAEP` and `RSA-OAEP-256`; sign and verify with `RS256`–`RS512`, `PS256`–`PS512`, `ES256`, `ES384`, `ES512` and `ES256K` over a digest; random bytes. A key's permitted operations and `enabled` are enforced, and its `nbf` and `exp`: outside them it cannot encrypt, wrap or sign, but can still decrypt, unwrap and verify |
 | Key Vault certificates | Create with the `Self` issuer (signed by its own key) or the `Unknown` issuer (a CSR, completed by merging the CA's certificate); import PKCS#12 (encrypted or not) or PEM; get (latest or by version), update, list, list versions, policy, pending operation (get, cancel, delete), soft delete with get and list deleted, recover and purge, backup and restore, contacts and issuers. Each version comes with its key (RSA 2048–4096, or EC on P-256 or P-384; imported certificates may also have EC keys on P-521 or P-256K) and a secret holding the key and certificates as PKCS#12 or PEM, under the same version |
@@ -42,13 +43,14 @@ until someone implements it. `azure-emulator coverage` prints the current score:
 
 ```
 Provider                           Types   Operations   Generic
-Microsoft.DocumentDB                5/98       25/387         0
-Microsoft.EventHub                  8/22        37/91         0
+Microsoft.DocumentDB                5/98       25/387       138
+Microsoft.EventHub                  8/22        37/91        28
 Microsoft.KeyVault                 16/16        50/51         0
 Microsoft.ManagedIdentity            2/2        12/14         0
+Microsoft.Network                  0/179        0/856       586
 Microsoft.ServiceBus               19/21        83/91         0
 Microsoft.Storage                  19/32       94/153        30
-Total                             69/191      301/787        30
+Total                             69/370     301/1643       782
 
 Data plane                                 Operations
 Azure Files                                     26/51
@@ -106,6 +108,14 @@ resources in that subscription.
 ### Known gaps
 
 - Every other Azure service and resource type.
+- Types served from their schema (the `Generic` column of `coverage`; all of
+  Microsoft.Network, and the configuration types of the other providers) only
+  check, store and return their settings. Read-only values the service would
+  compute are left out, actions answer `501`, and nothing happens as a result:
+  no address is allocated to a network interface or public address, a virtual
+  network does not list subnets created as resources of their own (or the
+  other way round), a private endpoint does not create a connection on its
+  target, and security rules, routes and peerings are not evaluated.
 - Role assignments and Key Vault access policies are enforced only with
   `--enforce-rbac`. Cosmos DB's own data-plane role assignments
   (`sqlRoleAssignments`) are not implemented, so Cosmos accepts any valid token.
@@ -757,7 +767,8 @@ Each `Emulator` is fully isolated. `core/router/tests/` shows how to drive it.
 │   ├── managedidentity/ # Microsoft.ManagedIdentity
 │   ├── servicebus/      # Microsoft.ServiceBus + the AMQP broker (Service Bus and Event Hubs)
 │   ├── eventhub/        # Microsoft.EventHub
-│   └── cosmosdb/        # Microsoft.DocumentDB + NoSQL data plane
+│   ├── cosmosdb/        # Microsoft.DocumentDB + NoSQL data plane
+│   └── network/         # Microsoft.Network, served from its schema
 ├── tools/scaffold/      # emulator-scaffold: OpenAPI specification → service scaffold
 ├── vendor/fe2o3-amqp/   # the AMQP library, patched (see PATCHED.md)
 ├── tests/sdk/           # checks that run the Azure SDKs for Python against the emulator
@@ -824,8 +835,9 @@ like. `services/managedidentity/src/lib.rs` is a small complete example, and
 Many resource types are configuration objects: their behaviour is accepting
 valid settings, storing them and returning them. For those, writing a handler is
 unnecessary. The scaffolder emits each type's request schema into
-`src/scaffold.rs`, and listing the type in `registry.register_generic` serves it
-from that schema alone:
+`src/scaffold.rs`, and `registry.register_generic_remaining`, which every
+provider's `register` calls just before mounting the scaffold, serves from that
+schema every type that has one and that nothing else handles:
 
 - the name is checked against the path parameter's length and pattern;
 - `properties` is checked for types, closed enums, bounds, patterns and
@@ -837,9 +849,18 @@ from that schema alone:
   invented.
 
 Actions on these types stay `501`, and `coverage` reports them as generic, not
-implemented. Opt a type in only when storing its configuration really is all the
-service does with it; a type with side effects or cross-resource references needs
-a handler. `services/storage/src/lib.rs` lists the types served this way.
+implemented. A type is left out, and keeps answering `501`, by naming it with
+the reason in the crate's `GENERIC_EXCEPTIONS`: do that when storing a setting
+would claim something that is not true (access control nothing enforces, a
+pairing or a capture that does not exist), or when the type's specification
+examples do not come back as sent. Writing a handler for a type takes it over
+from the schema.
+
+Two tests in `core/router/tests/all/spec_examples.rs` keep this honest. One
+replays every create example (below). The other creates each schema-served type
+from its own example and then calls every one of its operations: read, list,
+update, delete, and read again to see it gone. A type none of whose examples
+can be created fails that test, so it gets a handler or an exception.
 
 ### Checking against the specification's examples
 
