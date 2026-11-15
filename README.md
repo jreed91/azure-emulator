@@ -42,13 +42,16 @@ until someone implements it. `azure-emulator coverage` prints the current score:
 
 ```
 Provider                           Types   Operations   Generic
-Microsoft.DocumentDB                4/98       19/387         0
-Microsoft.EventHub                  9/22        37/91         0
+Microsoft.DocumentDB                3/98       18/387         0
+Microsoft.EventHub                  6/22        30/91         0
 Microsoft.KeyVault                 16/16        50/51         0
 Microsoft.ManagedIdentity            2/2        12/14         0
 Microsoft.ServiceBus               19/21        83/91         0
 Microsoft.Storage                  19/32       94/153        30
-Total                             69/191      295/787        30
+Total                             65/191      287/787        30
+
+Data plane                                 Operations
+Key Vault                                       60/84
 ```
 
 Private endpoint connections and network security perimeter configurations
@@ -60,9 +63,13 @@ it (empty listings, `404` for any single one).
 specification's schema alone (see *Serving a type from its schema* below); they
 are not in the implemented count.
 
-That score counts control-plane (Resource Manager) operations only; data planes
-such as Blob and Key Vault secrets are not in it. Add `--operations` to list every
-operation with its status.
+The provider rows count control-plane (Resource Manager) operations. The data
+plane rows count the operations in a data plane's own specification: so far
+only Key Vault (secrets, keys, certificates and managed storage accounts on a
+vault) has one; the Blob, Queue, Table, Files and Cosmos DB data planes are not
+counted yet. A data-plane operation counts as implemented when the emulator
+answers a probe of it with anything but `501`. Add `--operations` to list every
+operation with its status; data-plane lines start with `data`.
 
 `tests/sdk/` and `tests/sdk-js/` exercise the emulator through the official
 Azure SDKs for Python and JavaScript, and `tests/terraform/` applies, re-plans
@@ -149,7 +156,8 @@ resources in that subscription.
 - Key Vault: certificates from issuers other than `Self` and `Unknown` (an
   issuer can be configured but not used), certificate auto-renewal, the
   managed HSM data plane (and with it symmetric keys and AES algorithms),
-  automatic rotation on a key rotation policy's schedule, key release, private
+  automatic rotation on a key rotation policy's schedule, key release and
+  attestation, secret backup and restore, managed storage accounts, private
   endpoints, and listing pages. Purge protection blocks purges, but deleted
   items are not purged automatically when their retention ends.
 - Some error codes and messages are best-effort and have not been compared with
@@ -771,6 +779,25 @@ registers it in the router. Every run rewrites `src/scaffold.rs` and
 specification changes. From then on every type in the provider is routable and
 answers `501`.
 
+A data plane's operations are listed the same way, for `coverage` to report
+on, from the version directories of its specification:
+
+```bash
+cargo run -p emulator-scaffold -- data-plane --service keyvault --name "Key Vault" \
+    --spec /path/to/azure-rest-api-specs/specification/keyvault/data-plane/Secrets/stable/7.6 \
+    --spec .../Keys/stable/7.6 --spec .../Certificates/stable/7.6 --spec .../SecretsStorage/stable/7.6
+```
+
+This writes `services/keyvault/src/data_scaffold.rs`. Nothing is mounted from
+it: `Emulator::data_plane_coverage` sends each operation to a scratch emulator
+and reports the ones answered with `501`.
+
+Each run also records the specification's repository, path and commit in
+`.emulator/scaffolded-specs.json` (the `--spec` directory must be in a git
+checkout without local changes), so a scaffold can be regenerated from exactly
+the input it was made from. To update a provider, check out a newer commit of
+the specifications and rerun the command.
+
 ### Implementing a resource type
 
 Resource Manager is implemented once in `core/emulator-core/src/arm.rs`:
@@ -859,3 +886,13 @@ writes a browsable report to `target/coverage/llvm-cov/html`. It builds in
 `target/coverage`, apart from the normal build. It needs
 [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) and the Python
 suite's requirements (`PYTHON` picks the interpreter).
+
+## License
+
+Licensed under either of the [Apache License, Version 2.0](LICENSE-APACHE) or
+the [MIT license](LICENSE-MIT), at your option. `vendor/fe2o3-amqp/` keeps its
+own license (see `vendor/fe2o3-amqp/LICENSE-MIT`).
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this project by you, as defined in the Apache-2.0 license,
+shall be dual licensed as above, without any additional terms or conditions.

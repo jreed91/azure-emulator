@@ -212,3 +212,28 @@ async fn managed_identities_on_resources() {
     let again = client.arm(Method::PUT, &at(&account), Some(body(json!({"type": "SystemAssigned"})))).await.json();
     assert_ne!(again["identity"]["principalId"], principal.as_str());
 }
+
+/// Every mounted provider's scaffold names the specification commit it was
+/// generated from, so it can be regenerated from the same input.
+#[test]
+fn every_scaffold_records_its_specification_source() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../.emulator/scaffolded-specs.json");
+    let sources: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).expect("scaffolded-specs.json")).expect("JSON");
+    let recorded: std::collections::BTreeSet<&str> = sources
+        .as_object()
+        .expect("an object")
+        .values()
+        .filter_map(|source| {
+            let commit = source["commit"].as_str().expect("a commit");
+            assert!(commit.len() == 40 && commit.chars().all(|c| c.is_ascii_hexdigit()), "{commit} is not a commit id");
+            assert!(source["repository"].as_str().is_some_and(|r| r.starts_with("https://")), "no repository");
+            assert!(source.get("path").or(source.get("paths")).is_some(), "no path");
+            // A data plane's entry names it instead of a namespace.
+            assert!(source.get("namespace").or(source.get("dataPlane")).is_some(), "neither a provider nor a data plane");
+            source["namespace"].as_str()
+        })
+        .collect();
+    let coverage = Client::new().emulator.coverage();
+    let mounted: std::collections::BTreeSet<&str> = coverage.iter().map(|c| c.namespace).collect();
+    assert_eq!(recorded, mounted);
+}

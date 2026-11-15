@@ -45,6 +45,14 @@ pub mod persist;
 pub mod provision;
 pub mod tls;
 
+/// One data-plane operation and whether this emulator answers it.
+pub struct DataPlaneCoverage {
+    /// The data plane's name, such as `Key Vault`.
+    pub plane: &'static str,
+    pub operation: &'static emulator_core::dataplane::DataOperation,
+    pub implemented: bool,
+}
+
 /// One isolated emulator instance.
 #[derive(Clone)]
 pub struct Emulator {
@@ -81,6 +89,71 @@ impl Emulator {
     /// emulator implements it.
     pub fn coverage(&self) -> Vec<arm::OperationCoverage> {
         self.registry.coverage()
+    }
+
+    /// Every operation in the data planes that have a generated operation
+    /// table, and whether this emulator answers it.
+    ///
+    /// Data planes are hand-written, so nothing registers their operations.
+    /// Each one is instead sent, with placeholder names and an empty body, to a
+    /// scratch emulator (same configuration, its own state) holding the
+    /// resource the data plane belongs to: it counts as implemented unless
+    /// the answer is `501`.
+    pub async fn data_plane_coverage(&self) -> Result<Vec<DataPlaneCoverage>, String> {
+        use tower::ServiceExt;
+        let scratch = Emulator::new(self.config().clone());
+        let config = scratch.config();
+        let management = format!("{}:{}", config.host, config.port);
+        let arm_token = emulator_core::auth::issue_token(config, "https://management.azure.com/", emulator_core::auth::PROVISIONING_CLIENT);
+        let send = |method: &str, host: &str, path: String, token: &str, body: Option<String>| {
+            let request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("host", host)
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(body.map(Body::from).unwrap_or_else(Body::empty));
+            let router = scratch.router();
+            async move {
+                let request = request.map_err(|e| e.to_string())?;
+                // The router cannot fail: its error type has no values.
+                match router.oneshot(request).await {
+                    Ok(response) => Ok::<_, String>(response.status()),
+                    Err(never) => match never {},
+                }
+            }
+        };
+
+        // Key Vault: a vault to address the operations to.
+        let group = format!("/subscriptions/{}/resourceGroups/coverage", config.subscription_id);
+        let vault = serde_json::json!({
+            "location": "eastus",
+            "properties": {"tenantId": config.tenant_id, "sku": {"family": "A", "name": "standard"}, "accessPolicies": []},
+        });
+        let setup = [
+            (format!("{group}?api-version=2021-04-01"), r#"{"location":"eastus"}"#.to_string()),
+            (format!("{group}/providers/Microsoft.KeyVault/vaults/coverage?api-version=2023-07-01"), vault.to_string()),
+        ];
+        for (path, body) in setup {
+            let status = send("PUT", &management, path.clone(), &arm_token, Some(body)).await?;
+            if !status.is_success() {
+                return Err(format!("PUT {path} answered {status}"));
+            }
+        }
+        let plane = &service_keyvault::data_scaffold::DATA_PLANE;
+        let vault_uri = config.vault_uri("coverage");
+        let host = vault_uri.split("://").nth(1).unwrap_or(&vault_uri).trim_end_matches('/').to_string();
+        let token = emulator_core::auth::issue_token(config, &config.vault_resource(), emulator_core::auth::PROVISIONING_CLIENT);
+        let mut coverage = Vec::new();
+        for operation in plane.operations {
+            // Every `{parameter}` becomes a name that is valid anywhere.
+            let path: Vec<&str> = operation.path.split('/').map(|s| if s.starts_with('{') { "coverage" } else { s }).collect();
+            let path = format!("{}?api-version={}", path.join("/"), plane.api_version);
+            let body = matches!(operation.method, "PUT" | "POST" | "PATCH").then(|| "{}".to_string());
+            let status = send(operation.method, &host, path, &token, body).await?;
+            coverage.push(DataPlaneCoverage { plane: plane.name, operation, implemented: status != http::StatusCode::NOT_IMPLEMENTED });
+        }
+        Ok(coverage)
     }
 
     /// The HTTP service for this instance.

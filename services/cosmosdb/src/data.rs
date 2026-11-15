@@ -370,7 +370,8 @@ fn account_document(endpoint: &str, account: &str) -> Value {
     json!({
         "_self": "",
         "id": account,
-        "_rid": format!("{account}.documents.azure.com"),
+        // The account's own host, as on Azure, where it is `<account>.documents.azure.com`.
+        "_rid": endpoint.split("://").nth(1).unwrap_or(endpoint).trim_end_matches('/'),
         "media": "//media/",
         "addresses": "//addresses/",
         "_dbs": "//dbs/",

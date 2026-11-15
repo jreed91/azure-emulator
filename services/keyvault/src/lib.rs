@@ -21,6 +21,7 @@ mod keys;
 mod keys_data;
 mod managed_hsm;
 mod management;
+pub mod data_scaffold;
 pub mod scaffold;
 pub mod secrets;
 

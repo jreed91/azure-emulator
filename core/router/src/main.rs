@@ -18,7 +18,8 @@ USAGE:
 COMMANDS:
     coverage               Print how much of each provider's API specification is
                            implemented, served generically from the schema, or
-                           answered with 501; --operations lists every operation
+                           answered with 501, and how much of each listed data
+                           plane's; --operations lists every operation
     health                 Ask the emulator running on this machine whether it is
                            ready (GET /__admin/health); exits 0 if it is. Reads the
                            port, scheme and bind address from the same options and
@@ -66,7 +67,7 @@ fn fail(message: impl std::fmt::Display) -> ! {
 /// Prints, per provider, how many modeled resource types and operations are
 /// implemented, how many are served generically from the schema, and how many
 /// answer 501.
-fn print_coverage(list_operations: bool) {
+async fn print_coverage(list_operations: bool) {
     use std::collections::{BTreeMap, BTreeSet};
     let coverage = Emulator::new(Config::default()).coverage();
     #[derive(Default)]
@@ -118,6 +119,22 @@ fn print_coverage(list_operations: bool) {
         format!("{}/{}", all.implemented, all.operations),
         all.generic.to_string(),
     );
+    // Data planes: each operation in the specification, probed for a 501.
+    let data = Emulator::new(Config::default())
+        .data_plane_coverage()
+        .await
+        .unwrap_or_else(|e| fail(format!("probing the data planes failed: {e}")));
+    let mut planes: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+    for entry in &data {
+        let counts = planes.entry(entry.plane).or_default();
+        counts.0 += usize::from(entry.implemented);
+        counts.1 += 1;
+    }
+    println!();
+    println!("{:<30} {:>9} {:>12}", "Data plane", "", "Operations");
+    for (plane, (implemented, all)) in &planes {
+        println!("{plane:<30} {:>9} {:>12}", "", format!("{implemented}/{all}"));
+    }
     if list_operations {
         println!();
         for entry in &coverage {
@@ -128,6 +145,11 @@ fn print_coverage(list_operations: bool) {
             };
             println!("{status}  {:<6} {}  ({})", entry.operation.method, entry.operation.path, entry.operation.id);
         }
+        // Prefixed with `data` so a reader of the lines above can skip them.
+        for entry in &data {
+            let status = if entry.implemented { "ok     " } else { "501    " };
+            println!("data {status}  {:<6} {}  ({}: {})", entry.operation.method, entry.operation.path, entry.plane, entry.operation.id);
+        }
     }
 }
 
@@ -136,8 +158,8 @@ async fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     if arguments.first().is_some_and(|a| a == "coverage") {
         match &arguments[1..] {
-            [] => print_coverage(false),
-            [flag] if flag == "--operations" => print_coverage(true),
+            [] => print_coverage(false).await,
+            [flag] if flag == "--operations" => print_coverage(true).await,
             _ => fail("coverage takes only --operations"),
         }
         return;
