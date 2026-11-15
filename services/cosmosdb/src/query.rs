@@ -161,12 +161,30 @@ const KEYWORDS: &[&str] = &[
     "distinct", "as", "join", "offset", "limit", "group", "true", "false", "null", "undefined", "exists", "escape",
 ];
 
+/// How deeply a query may nest: parentheses, subqueries, array and object
+/// literals, function arguments, `NOT`s, and chains of arithmetic or property
+/// access. Deeper queries are refused rather than parsed and evaluated by
+/// recursion that could overflow the stack.
+pub const MAX_DEPTH: usize = 64;
+
 struct Parser {
     tokens: Vec<Token>,
     at: usize,
+    /// How deep in the query the parser is.
+    depth: usize,
 }
 
 impl Parser {
+    /// Goes one level deeper, or refuses the query for nesting too deeply. An
+    /// error ends the whole parse, so only successful paths step back out.
+    fn descend(&mut self) -> Result<(), String> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(format!("Syntax error, the query is nested more than {MAX_DEPTH} levels deep."));
+        }
+        Ok(())
+    }
+
     fn peek(&self) -> Option<&Token> {
         self.tokens.get(self.at)
     }
@@ -227,6 +245,17 @@ impl Parser {
     }
 
     fn query(&mut self) -> Result<Query, String> {
+        // A subquery runs a whole query per row: it counts for more.
+        let entered = self.depth;
+        for _ in 0..4 {
+            self.descend()?;
+        }
+        let query = self.select()?;
+        self.depth = entered;
+        Ok(query)
+    }
+
+    fn select(&mut self) -> Result<Query, String> {
         self.expect_keyword("select")?;
         let distinct = self.eat_keyword("distinct");
         let top = if self.eat_keyword("top") { Some(self.primary()?) } else { None };
@@ -308,57 +337,64 @@ impl Parser {
     }
 
     fn expression(&mut self) -> Result<Expr, String> {
+        self.descend()?;
         let condition = self.coalesce()?;
-        if self.eat_op("?") {
+        let expr = if self.eat_op("?") {
             let then = self.expression()?;
             self.expect_op(":")?;
             let otherwise = self.expression()?;
-            return Ok(Expr::Ternary(Box::new(condition), Box::new(then), Box::new(otherwise)));
-        }
-        Ok(condition)
+            Expr::Ternary(Box::new(condition), Box::new(then), Box::new(otherwise))
+        } else {
+            condition
+        };
+        self.depth -= 1;
+        Ok(expr)
     }
 
     fn coalesce(&mut self) -> Result<Expr, String> {
-        let mut left = self.or()?;
+        let mut operands = vec![self.or()?];
         while self.eat_op("??") {
-            left = Expr::Binary("??", Box::new(left), Box::new(self.or()?));
+            operands.push(self.or()?);
         }
-        Ok(left)
+        Ok(balanced("??", operands))
     }
 
     fn or(&mut self) -> Result<Expr, String> {
-        let mut left = self.and()?;
+        let mut operands = vec![self.and()?];
         while self.eat_keyword("or") {
-            left = Expr::Binary("or", Box::new(left), Box::new(self.and()?));
+            operands.push(self.and()?);
         }
-        Ok(left)
+        Ok(balanced("or", operands))
     }
 
     fn and(&mut self) -> Result<Expr, String> {
-        let mut left = self.not()?;
+        let mut operands = vec![self.not()?];
         while self.eat_keyword("and") {
-            left = Expr::Binary("and", Box::new(left), Box::new(self.not()?));
+            operands.push(self.not()?);
         }
-        Ok(left)
+        Ok(balanced("and", operands))
     }
 
     fn not(&mut self) -> Result<Expr, String> {
         if self.eat_keyword("not") {
-            return Ok(Expr::Unary("not", Box::new(self.not()?)));
+            self.descend()?;
+            let inner = self.not()?;
+            self.depth -= 1;
+            return Ok(Expr::Unary("not", Box::new(inner)));
         }
         self.comparison()
     }
 
     fn comparison(&mut self) -> Result<Expr, String> {
         let left = self.additive()?;
+        self.comparison_tail(left)
+    }
+
+    /// What may follow the left side of a comparison.
+    fn comparison_tail(&mut self, left: Expr) -> Result<Expr, String> {
         let negated = self.eat_keyword("not");
         if self.eat_keyword("in") {
-            self.expect_op("(")?;
-            let mut items = vec![self.expression()?];
-            while self.eat_op(",") {
-                items.push(self.expression()?);
-            }
-            self.expect_op(")")?;
+            let items = self.in_list()?;
             return Ok(Expr::In(Box::new(left), items, negated));
         }
         if self.eat_keyword("between") {
@@ -384,7 +420,20 @@ impl Parser {
         Ok(left)
     }
 
+    fn in_list(&mut self) -> Result<Vec<Expr>, String> {
+        self.expect_op("(")?;
+        let mut items = vec![self.expression()?];
+        while self.eat_op(",") {
+            items.push(self.expression()?);
+        }
+        self.expect_op(")")?;
+        Ok(items)
+    }
+
+    // In a chain of arithmetic or property access each step wraps what came
+    // before, one level deeper each time.
     fn additive(&mut self) -> Result<Expr, String> {
+        let entered = self.depth;
         let mut left = self.multiplicative()?;
         loop {
             let op = if self.eat_op("+") {
@@ -394,13 +443,16 @@ impl Parser {
             } else if self.eat_op("||") {
                 "||"
             } else {
+                self.depth = entered;
                 return Ok(left);
             };
+            self.descend()?;
             left = Expr::Binary(op, Box::new(left), Box::new(self.multiplicative()?));
         }
     }
 
     fn multiplicative(&mut self) -> Result<Expr, String> {
+        let entered = self.depth;
         let mut left = self.unary()?;
         loop {
             let op = if self.eat_op("*") {
@@ -410,25 +462,37 @@ impl Parser {
             } else if self.eat_op("%") {
                 "%"
             } else {
+                self.depth = entered;
                 return Ok(left);
             };
+            self.descend()?;
             left = Expr::Binary(op, Box::new(left), Box::new(self.unary()?));
         }
     }
 
     fn unary(&mut self) -> Result<Expr, String> {
         if self.eat_op("-") {
-            return Ok(Expr::Unary("-", Box::new(self.unary()?)));
+            self.descend()?;
+            let inner = self.unary()?;
+            self.depth -= 1;
+            return Ok(Expr::Unary("-", Box::new(inner)));
         }
         if self.eat_op("+") {
-            return self.unary();
+            self.descend()?;
+            let inner = self.unary()?;
+            self.depth -= 1;
+            return Ok(inner);
         }
         self.postfix()
     }
 
     fn postfix(&mut self) -> Result<Expr, String> {
+        let entered = self.depth;
         let mut expr = self.primary()?;
         loop {
+            if matches!(self.peek(), Some(Token::Op(".") | Token::Op("["))) {
+                self.descend()?;
+            }
             if self.eat_op(".") {
                 let name = match self.next() {
                     Some(Token::Ident(name)) => name,
@@ -440,105 +504,125 @@ impl Parser {
                 self.expect_op("]")?;
                 expr = Expr::Member(Box::new(expr), Box::new(index));
             } else {
+                self.depth = entered;
                 return Ok(expr);
             }
         }
     }
 
+    /// One operand. Each kind is parsed in a method of its own: nested
+    /// expressions recurse through here, so this frame stays small.
     fn primary(&mut self) -> Result<Expr, String> {
         match self.next() {
             Some(Token::Num(n)) => Ok(Expr::Literal(number(n))),
             Some(Token::Str(s)) => Ok(Expr::Literal(json!(s))),
             Some(Token::Param(p)) => Ok(Expr::Param(p)),
+            Some(Token::Op("(")) if self.is_keyword("select") => self.subquery(|query| Expr::Exists(Box::new(query))),
             Some(Token::Op("(")) => {
-                if self.is_keyword("select") {
-                    let query = self.query()?;
-                    self.expect_op(")")?;
-                    return Ok(Expr::Exists(Box::new(query)));
-                }
                 let inner = self.expression()?;
                 self.expect_op(")")?;
                 Ok(inner)
             }
-            Some(Token::Op("[")) => {
-                let mut items = Vec::new();
-                if !self.eat_op("]") {
-                    loop {
-                        items.push(self.expression()?);
-                        if !self.eat_op(",") {
-                            break;
-                        }
-                    }
-                    self.expect_op("]")?;
-                }
-                Ok(Expr::Array(items))
-            }
-            Some(Token::Op("{")) => {
-                let mut fields = Vec::new();
-                if !self.eat_op("}") {
-                    loop {
-                        let name = match self.next() {
-                            Some(Token::Ident(name)) | Some(Token::Str(name)) => name,
-                            other => return Err(format!("Syntax error, expected a property name, found {other:?}.")),
-                        };
-                        self.expect_op(":")?;
-                        fields.push((name, self.expression()?));
-                        if !self.eat_op(",") {
-                            break;
-                        }
-                    }
-                    self.expect_op("}")?;
-                }
-                Ok(Expr::Object(fields))
-            }
-            Some(Token::Ident(word)) => {
-                let lower = word.to_ascii_lowercase();
-                match lower.as_str() {
-                    "true" => return Ok(Expr::Literal(json!(true))),
-                    "false" => return Ok(Expr::Literal(json!(false))),
-                    "null" => return Ok(Expr::Literal(Value::Null)),
-                    "undefined" => return Ok(Expr::Undefined),
-                    "exists" => {
-                        self.expect_op("(")?;
-                        let query = self.query()?;
-                        self.expect_op(")")?;
-                        return Ok(Expr::Call("exists".into(), vec![Expr::Exists(Box::new(query))]));
-                    }
-                    // `ARRAY(SELECT ...)`: every value of a subquery, as an array.
-                    "array" if self.subquery_follows() => {
-                        self.expect_op("(")?;
-                        let query = self.query()?;
-                        self.expect_op(")")?;
-                        return Ok(Expr::Call("array".into(), vec![Expr::Exists(Box::new(query))]));
-                    }
-                    _ => {}
-                }
-                if self.eat_op("(") {
-                    let mut args = Vec::new();
-                    if !self.eat_op(")") {
-                        loop {
-                            if self.eat_op("*") {
-                                args.push(Expr::Literal(json!(1)));
-                            } else {
-                                args.push(self.expression()?);
-                            }
-                            if !self.eat_op(",") {
-                                break;
-                            }
-                        }
-                        self.expect_op(")")?;
-                    }
-                    // `udf.name(...)` is not supported; plain names only.
-                    return Ok(Expr::Call(lower, args));
-                }
-                if KEYWORDS.contains(&lower.as_str()) {
-                    return Err(format!("Syntax error, incorrect syntax near '{word}'."));
-                }
-                Ok(Expr::Alias(word))
-            }
+            Some(Token::Op("[")) => self.array_literal(),
+            Some(Token::Op("{")) => self.object_literal(),
+            Some(Token::Ident(word)) => self.word(word),
             other => Err(format!("Syntax error, unexpected {other:?}.")),
         }
     }
+
+    /// A subquery after its opening parenthesis, through the closing one.
+    fn subquery(&mut self, wrap: fn(Query) -> Expr) -> Result<Expr, String> {
+        let query = self.query()?;
+        self.expect_op(")")?;
+        Ok(wrap(query))
+    }
+
+    fn array_literal(&mut self) -> Result<Expr, String> {
+        let mut items = Vec::new();
+        if !self.eat_op("]") {
+            loop {
+                items.push(self.expression()?);
+                if !self.eat_op(",") {
+                    break;
+                }
+            }
+            self.expect_op("]")?;
+        }
+        Ok(Expr::Array(items))
+    }
+
+    fn object_literal(&mut self) -> Result<Expr, String> {
+        let mut fields = Vec::new();
+        if !self.eat_op("}") {
+            loop {
+                let name = match self.next() {
+                    Some(Token::Ident(name)) | Some(Token::Str(name)) => name,
+                    other => return Err(format!("Syntax error, expected a property name, found {other:?}.")),
+                };
+                self.expect_op(":")?;
+                fields.push((name, self.expression()?));
+                if !self.eat_op(",") {
+                    break;
+                }
+            }
+            self.expect_op("}")?;
+        }
+        Ok(Expr::Object(fields))
+    }
+
+    /// A constant, `EXISTS(...)`, `ARRAY(SELECT ...)`, a function call or an alias.
+    fn word(&mut self, word: String) -> Result<Expr, String> {
+        let lower = word.to_ascii_lowercase();
+        match lower.as_str() {
+            "true" => return Ok(Expr::Literal(json!(true))),
+            "false" => return Ok(Expr::Literal(json!(false))),
+            "null" => return Ok(Expr::Literal(Value::Null)),
+            "undefined" => return Ok(Expr::Undefined),
+            "exists" => {
+                self.expect_op("(")?;
+                return self.subquery(|query| Expr::Call("exists".into(), vec![Expr::Exists(Box::new(query))]));
+            }
+            // `ARRAY(SELECT ...)`: every value of a subquery, as an array.
+            "array" if self.subquery_follows() => {
+                self.expect_op("(")?;
+                return self.subquery(|query| Expr::Call("array".into(), vec![Expr::Exists(Box::new(query))]));
+            }
+            _ => {}
+        }
+        if self.eat_op("(") {
+            let mut args = Vec::new();
+            if !self.eat_op(")") {
+                loop {
+                    if self.eat_op("*") {
+                        args.push(Expr::Literal(json!(1)));
+                    } else {
+                        args.push(self.expression()?);
+                    }
+                    if !self.eat_op(",") {
+                        break;
+                    }
+                }
+                self.expect_op(")")?;
+            }
+            // `udf.name(...)` is not supported; plain names only.
+            return Ok(Expr::Call(lower, args));
+        }
+        if KEYWORDS.contains(&lower.as_str()) {
+            return Err(format!("Syntax error, incorrect syntax near '{word}'."));
+        }
+        Ok(Expr::Alias(word))
+    }
+}
+
+/// `a op b op c ...` for an associative `op` (`AND`, `OR`, `??`), as a
+/// balanced tree: a long chain of conditions nests only as deep as its
+/// logarithm. Evaluation still goes left to right and stops at the same place.
+fn balanced(op: &'static str, mut operands: Vec<Expr>) -> Expr {
+    if operands.len() == 1 {
+        return operands.pop().unwrap_or(Expr::Undefined);
+    }
+    let right = operands.split_off(operands.len() / 2);
+    Expr::Binary(op, Box::new(balanced(op, operands)), Box::new(balanced(op, right)))
 }
 
 fn number(n: f64) -> Value {
@@ -551,8 +635,8 @@ fn number(n: f64) -> Value {
 
 /// Parses `text`, or says why it is not a query.
 pub fn parse(text: &str) -> Result<Query, String> {
-    let mut parser = Parser { tokens: tokenize(text)?, at: 0 };
-    let query = parser.query()?;
+    let mut parser = Parser { tokens: tokenize(text)?, at: 0, depth: 0 };
+    let query = parser.select()?;
     match parser.peek() {
         None => Ok(query),
         Some(token) => Err(format!("Syntax error, unexpected {token:?} after the end of the query.")),
@@ -1347,5 +1431,74 @@ mod tests {
         assert!(run(&query, docs(), &Map::new()).is_err());
         let query = parse("SELECT * FROM c WHERE c.a = @missing").unwrap();
         assert!(run(&query, docs(), &Map::new()).is_err());
+    }
+
+    /// Runs `test` on a thread with the 2 MiB stack a Tokio worker gets.
+    fn on_worker_stack(test: fn()) {
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(test)
+            .expect("thread")
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+    }
+
+    fn nested(open: &str, inner: &str, close: &str, depth: usize) -> String {
+        format!("{}{inner}{}", open.repeat(depth), close.repeat(depth))
+    }
+
+    #[test]
+    fn refuses_over_deep_queries() {
+        on_worker_stack(|| {
+            for depth in [MAX_DEPTH + 1, 100_000] {
+                for (open, inner, close) in [
+                    ("(", "1", ")"),
+                    ("[", "1", "]"),
+                    ("{a: ", "1", "}"),
+                    ("ABS(", "1", ")"),
+                    ("NOT ", "true", ""),
+                    ("- ", "1", ""),
+                    ("+", "1", ""),
+                    ("true ? ", "1", " : 0"),
+                    ("", "1", " + 1"),
+                    ("", "c", ".a"),
+                    ("", "c", "['a']"),
+                    ("EXISTS(SELECT VALUE ", "1", " FROM t IN c.tags)"),
+                ] {
+                    let text = format!("SELECT VALUE {} FROM c", nested(open, inner, close, depth));
+                    let error = parse(&text).err().unwrap_or_else(|| panic!("{open}{inner}{close} x {depth} parsed"));
+                    assert!(error.contains("nested more than 64 levels deep"), "{open}{inner}{close} x {depth}: {error}");
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn evaluates_queries_nested_up_to_the_limit() {
+        on_worker_stack(|| {
+            let run_one = |expr: &str| {
+                let text = format!("SELECT VALUE {expr} FROM c WHERE c.id = '1'");
+                let query = parse(&text).unwrap_or_else(|e| panic!("{}: {e}", &expr[..30]));
+                run(&query, docs(), &Map::new()).unwrap_or_else(|e| panic!("{}: {e}", &expr[..30]))
+            };
+            // The top-level expression is the first level.
+            let deepest = MAX_DEPTH - 1;
+            assert_eq!(run_one(&nested("(", "1", ")", deepest)), [json!(1)]);
+            assert_eq!(run_one(&nested("ABS(", "-1", ")", deepest - 1)), [json!(1)]);
+            assert_eq!(run_one(&nested("{a: ", "1", "}", deepest))[0].pointer(&"/a".repeat(deepest)), Some(&json!(1)));
+            assert_eq!(run_one(&nested("NOT ", "true", "", deepest)), [json!(false)]);
+            assert_eq!(run_one(&nested("true ? ", "1", " : 0", deepest)), [json!(1)]);
+            assert_eq!(run_one(&nested("", "1", " + 1", deepest)), [json!(MAX_DEPTH)]);
+            assert_eq!(run_one(&nested("(1 = ", "1", ")", deepest)), [json!(false)]);
+            // Subqueries count four levels each, and their own expression one.
+            let exists = nested("EXISTS(SELECT VALUE ", "1", " FROM t IN c.tags)", (MAX_DEPTH - 1) / 5);
+            assert_eq!(run_one(&exists), [json!(true)]);
+            // A long chain of conditions is not deep.
+            let conditions = vec!["c.id = 'x'"; 20_000].join(" OR ");
+            assert_eq!(run_one(&format!("({conditions} OR c.id = '1')")), [json!(true)]);
+            let conditions = vec!["c.id = '1'"; 20_000].join(" AND ");
+            assert_eq!(run_one(&format!("({conditions})")), [json!(true)]);
+            assert_eq!(run_one(&vec!["c.missing"; 20_000].join(" ?? ")), Vec::<Value>::new());
+        });
     }
 }

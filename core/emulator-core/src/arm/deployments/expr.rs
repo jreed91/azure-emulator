@@ -6,6 +6,11 @@
 //! quote), an integer, or one of those followed by member access (`.name`) and
 //! indexing (`[0]`, `['name']`).
 
+/// How deeply an expression may nest: calls inside calls, and member access or
+/// indexing applied in a chain. Deeper expressions are refused rather than
+/// parsed and evaluated by recursion that could overflow the stack.
+pub const MAX_DEPTH: usize = 64;
+
 /// A parsed expression.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
@@ -42,7 +47,7 @@ pub fn parse_string(text: &str) -> Result<TemplateString, String> {
 /// Parses the inside of an expression (without the outer brackets).
 pub fn parse(text: &str) -> Result<Expr, String> {
     let tokens = lex(text)?;
-    let mut parser = Parser { tokens, at: 0 };
+    let mut parser = Parser { tokens, at: 0, depth: 0 };
     let expr = parser.expression()?;
     if parser.at != parser.tokens.len() {
         return Err(format!(
@@ -174,6 +179,8 @@ fn lex(text: &str) -> Result<Vec<Token>, String> {
 struct Parser {
     tokens: Vec<Token>,
     at: usize,
+    /// How deep in the expression tree the node being parsed is.
+    depth: usize,
 }
 
 impl Parser {
@@ -199,9 +206,27 @@ impl Parser {
         }
     }
 
+    /// Goes one level deeper into the expression tree. Every nested level,
+    /// including each link of an access chain, counts, so the tree that comes
+    /// out is never deeper than `MAX_DEPTH`. An error ends the whole parse, so
+    /// only the successful paths step back out.
+    fn descend(&mut self) -> Result<(), String> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(format!("The expression is nested more than {MAX_DEPTH} levels deep."));
+        }
+        Ok(())
+    }
+
     fn expression(&mut self) -> Result<Expr, String> {
+        self.descend()?;
+        let entered = self.depth;
         let mut expr = self.primary()?;
         loop {
+            if matches!(self.peek(), Some(Token::Question | Token::Dot | Token::LBracket)) {
+                // Access wraps what came before: the tree gets one level deeper.
+                self.descend()?;
+            }
             match self.peek() {
                 // `?.name` and `?[index]` are safe access: `tryGet`, null when missing.
                 Some(Token::Question) if matches!(self.peek_at(1), Some(Token::Dot) | Some(Token::LBracket)) => {
@@ -232,7 +257,10 @@ impl Parser {
                     self.expect(Token::RBracket)?;
                     expr = Expr::Index(Box::new(expr), Box::new(index));
                 }
-                _ => return Ok(expr),
+                _ => {
+                    self.depth = entered - 1;
+                    return Ok(expr);
+                }
             }
         }
     }
@@ -331,5 +359,24 @@ mod tests {
         assert!(parse("'open").is_err());
         assert!(parse("foo").is_err());
         assert!(parse("a() b()").is_err());
+    }
+
+    #[test]
+    fn limits_nesting() {
+        let calls = |n: usize| format!("{}1{}", "f(".repeat(n), ")".repeat(n));
+        // n calls and the integer inside them: n + 1 levels.
+        assert!(parse(&calls(MAX_DEPTH - 1)).is_ok());
+        for n in [MAX_DEPTH, 100_000] {
+            let error = parse(&calls(n)).unwrap_err();
+            assert!(error.contains("nested more than 64 levels deep"), "{error}");
+        }
+        // Access chains and indexes wrap what comes before them.
+        assert!(parse(&format!("a(){}", ".b".repeat(MAX_DEPTH - 1))).is_ok());
+        assert!(parse(&format!("a(){}", ".b".repeat(MAX_DEPTH))).is_err());
+        assert!(parse(&format!("a(){}", "?.b".repeat(100_000))).is_err());
+        assert!(parse(&format!("{}a(){}", "a()[".repeat(100_000), "]".repeat(100_000))).is_err());
+        // Depth is about nesting, not length.
+        let wide = format!("f({})", vec!["g(h(1))"; 10_000].join(", "));
+        assert!(parse(&wide).is_ok());
     }
 }

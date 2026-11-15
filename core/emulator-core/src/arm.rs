@@ -871,6 +871,7 @@ async fn serve(
             .iter()
             .find(|(k, _)| k.eq_ignore_ascii_case("$filter"))
             .map(|(_, v)| v.clone()),
+        nesting: 0,
     };
     request
         .route(&segments, &lower)
@@ -889,6 +890,9 @@ struct ArmRequest<'a> {
     principal: Option<&'a str>,
     /// The request's `$filter`, for the APIs that take one.
     filter: Option<String>,
+    /// How many template deployments this request runs inside: 0 for a
+    /// client's request, one more for each deployment that sent it.
+    nesting: usize,
 }
 
 fn ok(body: Value) -> Result<Response, ArmError> {

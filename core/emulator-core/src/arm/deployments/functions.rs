@@ -52,6 +52,29 @@ fn type_name(value: &Value) -> &'static str {
     }
 }
 
+/// How deeply arrays and objects may nest in a value the template computes:
+/// what a request body may hold (the JSON reader refuses deeper input).
+pub const MAX_VALUE_DEPTH: usize = 128;
+
+/// Whether `value` nests deeper than `limit` levels; looks no deeper than that.
+fn deeper_than(value: &Value, limit: usize) -> bool {
+    match value {
+        Value::Array(items) => limit == 0 || items.iter().any(|item| deeper_than(item, limit - 1)),
+        Value::Object(map) => limit == 0 || map.values().any(|item| deeper_than(item, limit - 1)),
+        _ => false,
+    }
+}
+
+/// Refuses a computed value nested deeper than `MAX_VALUE_DEPTH`.
+pub fn check_depth(value: &Value) -> Result<(), ArmError> {
+    if deeper_than(value, MAX_VALUE_DEPTH) {
+        return Err(invalid(format!(
+            "The template produced a value nested more than {MAX_VALUE_DEPTH} levels deep."
+        )));
+    }
+    Ok(())
+}
+
 /// `string()`: how a value reads as text.
 pub fn to_text(value: &Value) -> String {
     match value {
@@ -504,39 +527,102 @@ fn add_duration(
     Ok(out + chrono::Duration::milliseconds(millis))
 }
 
+/// `value.name`.
+fn member_of(value: &Value, name: &str) -> Result<Value, ArmError> {
+    let object = value.as_object().ok_or_else(|| {
+        invalid(format!(
+            "The language expression property '{name}' can't be evaluated, property name must be a string... the value is of type '{}'.",
+            type_name(value)
+        ))
+    })?;
+    member(object, name).cloned().ok_or_else(|| {
+        let available: Vec<&str> = object.keys().map(String::as_str).collect();
+        invalid(format!(
+            "The language expression property '{name}' doesn't exist, available properties are '{}'.",
+            available.join(", ")
+        ))
+    })
+}
+
+/// `value[index]`.
+fn index_of(value: &Value, index: &Value) -> Result<Value, ArmError> {
+    match (value, index) {
+        (Value::Array(items), Value::Number(n)) => {
+            let i = n.as_i64().unwrap_or(-1);
+            usize::try_from(i).ok().and_then(|i| items.get(i)).cloned().ok_or_else(|| {
+                invalid(format!("The language expression property array index '{i}' is out of bounds."))
+            })
+        }
+        (Value::Object(map), Value::String(name)) => member(map, name)
+            .cloned()
+            .ok_or_else(|| invalid(format!("The language expression property '{name}' doesn't exist."))),
+        _ => Err(invalid(format!(
+            "A value of type '{}' cannot be indexed by a value of type '{}'.",
+            type_name(value),
+            type_name(index)
+        ))),
+    }
+}
+
+/// A `lambda(...)` argument, ready to apply.
+struct Lambda<'l> {
+    /// The function the lambda was given to, for error messages.
+    name: &'l str,
+    params: &'l [String],
+    body: &'l Expr,
+    locals: &'l Locals,
+}
+
 impl Ctx<'_> {
     /// Evaluates a JSON value from the template: expressions in strings are
     /// evaluated, and `copy` arrays inside objects expand into properties.
+    /// The result is never nested deeper than `MAX_VALUE_DEPTH`.
     pub fn eval_value(&self, value: &Value, locals: &Locals) -> Result<Value, ArmError> {
+        let out = self.eval_json(value, locals)?;
+        check_depth(&out)?;
+        Ok(out)
+    }
+
+    fn eval_json(&self, value: &Value, locals: &Locals) -> Result<Value, ArmError> {
+        let _descent = self.descend()?;
         match value {
             Value::String(text) => self.eval_string(text, locals),
-            Value::Array(items) => items
-                .iter()
-                .map(|v| self.eval_value(v, locals))
-                .collect::<Result<_, _>>()
-                .map(Value::Array),
+            Value::Array(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    out.push(self.eval_json(item, locals)?);
+                }
+                Ok(Value::Array(out))
+            }
             Value::Object(map) => {
                 let mut out = Map::new();
                 for (key, item) in map {
                     if key == "copy" {
                         if let Some(loops) = property_copies(item) {
-                            for (name, count, input) in loops {
-                                let count = int(&self.eval_value(count, locals)?, "copy")?;
-                                let mut values = Vec::new();
-                                for index in 0..count.max(0) {
-                                    values.push(self.eval_value(input, &locals.with_copy(name, index))?);
-                                }
-                                out.insert(name.to_string(), Value::Array(values));
-                            }
+                            self.expand_property_copies(loops, locals, &mut out)?;
                             continue;
                         }
                     }
-                    out.insert(key.clone(), self.eval_value(item, locals)?);
+                    out.insert(key.clone(), self.eval_json(item, locals)?);
                 }
                 Ok(Value::Object(out))
             }
             other => Ok(other.clone()),
         }
+    }
+
+    /// `"copy": [{"name", "count", "input"}]` inside an object: each loop
+    /// becomes an array property.
+    fn expand_property_copies(&self, loops: Vec<(&str, &Value, &Value)>, locals: &Locals, out: &mut Map<String, Value>) -> Result<(), ArmError> {
+        for (name, count, input) in loops {
+            let count = int(&self.eval_json(count, locals)?, "copy")?;
+            let mut values = Vec::new();
+            for index in 0..count.max(0) {
+                values.push(self.eval_json(input, &locals.with_copy(name, index))?);
+            }
+            out.insert(name.to_string(), Value::Array(values));
+        }
+        Ok(())
     }
 
     /// Evaluates one template string.
@@ -548,151 +634,163 @@ impl Ctx<'_> {
     }
 
     pub fn eval(&self, expr: &Expr, locals: &Locals) -> Result<Value, ArmError> {
+        let _descent = self.descend()?;
         match expr {
             Expr::Str(s) => Ok(Value::String(s.clone())),
             Expr::Int(i) => Ok(json!(i)),
             Expr::Member(target, name) => {
                 let value = self.eval(target, locals)?;
-                let object = value.as_object().ok_or_else(|| {
-                    invalid(format!(
-                        "The language expression property '{name}' can't be evaluated, property name must be a string... the value is of type '{}'.",
-                        type_name(&value)
-                    ))
-                })?;
-                member(object, name).cloned().ok_or_else(|| {
-                    let available: Vec<&str> = object.keys().map(String::as_str).collect();
-                    invalid(format!(
-                        "The language expression property '{name}' doesn't exist, available properties are '{}'.",
-                        available.join(", ")
-                    ))
-                })
+                member_of(&value, name)
             }
             Expr::Index(target, index) => {
                 let value = self.eval(target, locals)?;
                 let index = self.eval(index, locals)?;
-                match (&value, &index) {
-                    (Value::Array(items), Value::Number(n)) => {
-                        let i = n.as_i64().unwrap_or(-1);
-                        usize::try_from(i).ok().and_then(|i| items.get(i)).cloned().ok_or_else(|| {
-                            invalid(format!(
-                                "The language expression property array index '{i}' is out of bounds."
-                            ))
-                        })
-                    }
-                    (Value::Object(map), Value::String(name)) => member(map, name).cloned().ok_or_else(|| {
-                        invalid(format!("The language expression property '{name}' doesn't exist."))
-                    }),
-                    _ => Err(invalid(format!(
-                        "A value of type '{}' cannot be indexed by a value of type '{}'.",
-                        type_name(&value),
-                        type_name(&index)
-                    ))),
-                }
+                index_of(&value, &index)
             }
             Expr::Call(name, args) => self.call(name, args, locals),
         }
     }
 
     fn args(&self, args: &[Expr], locals: &Locals) -> Result<Vec<Value>, ArmError> {
-        args.iter().map(|a| self.eval(a, locals)).collect()
+        let mut values = Vec::with_capacity(args.len());
+        for arg in args {
+            values.push(self.eval(arg, locals)?);
+        }
+        Ok(values)
     }
 
+    /// Calls a function. Kept small, with each function that evaluates its
+    /// own arguments in a method of its own: this is the path nested calls
+    /// recurse through, so its stack frame bounds how deep they can go.
     fn call(&self, name: &str, args: &[Expr], locals: &Locals) -> Result<Value, ArmError> {
         let lower = name.to_ascii_lowercase();
         if lower.contains('.') {
             return self.call_user_function(name, args, locals);
         }
         if lower.starts_with("list") {
-            arity(name, args, 2, 3)?;
-            let values = self.args(args, locals)?;
-            let id = string(&values[0], name)?;
-            let api_version = string(&values[1], name)?;
-            return self.list_action(id, name, api_version, values.get(2));
+            return self.call_list(name, args, locals);
         }
         // Functions that evaluate their arguments themselves.
         match lower.as_str() {
-            "if" => {
-                arity(name, args, 3, 3)?;
-                let condition = boolean(&self.eval(&args[0], locals)?, name)?;
-                return self.eval(&args[if condition { 1 } else { 2 }], locals);
+            "if" => self.call_if(name, args, locals),
+            "and" => self.call_logical(name, false, args, locals),
+            "or" => self.call_logical(name, true, args, locals),
+            "coalesce" => self.call_coalesce(args, locals),
+            "lambda" => Err(invalid("A lambda expression can only be an argument of a function that takes one.")),
+            "lambdavariables" => self.call_lambda_variables(name, args, locals),
+            "filter" | "map" | "sort" | "groupby" | "mapvalues" => self.call_collection(&lower, name, args, locals),
+            "reduce" => self.call_reduce(name, args, locals),
+            // Kept out of `builtin`, whose frame is large: variables that use
+            // variables recurse through here.
+            "variables" => self.call_variables(name, args, locals),
+            "toobject" => self.call_to_object(name, args, locals),
+            _ => {
+                let values = self.args(args, locals)?;
+                self.builtin(name, &lower, &values, locals)
             }
-            "and" | "or" => {
-                arity(name, args, 2, usize::MAX)?;
-                let want = lower == "or";
-                for arg in args {
-                    if boolean(&self.eval(arg, locals)?, name)? == want {
-                        return Ok(Value::Bool(want));
-                    }
-                }
-                return Ok(Value::Bool(!want));
-            }
-            "coalesce" => {
-                for arg in args {
-                    let value = self.eval(arg, locals)?;
-                    if !value.is_null() {
-                        return Ok(value);
-                    }
-                }
-                return Ok(Value::Null);
-            }
-            "lambda" => return Err(invalid("A lambda expression can only be an argument of a function that takes one.")),
-            "lambdavariables" => {
-                arity(name, args, 1, 1)?;
-                let wanted = self.eval(&args[0], locals)?;
-                let wanted = string(&wanted, name)?;
-                return locals
-                    .lambda
-                    .iter()
-                    .rev()
-                    .find(|(n, _)| n == wanted)
-                    .map(|(_, v)| v.clone())
-                    .ok_or_else(|| invalid(format!("The lambda variable '{wanted}' is not defined.")));
-            }
-            "filter" | "map" | "sort" | "groupby" | "mapvalues" => {
-                arity(name, args, 2, 2)?;
-                let source = self.eval(&args[0], locals)?;
-                let (params, body) = lambda(&args[1], name)?;
-                return self.collection_lambda(&lower, name, &source, &params, body, locals);
-            }
-            "reduce" => {
-                arity(name, args, 3, 3)?;
-                let source = self.eval(&args[0], locals)?;
-                let mut accumulator = self.eval(&args[1], locals)?;
-                let (params, body) = lambda(&args[2], name)?;
-                for (index, item) in array(&source, name)?.iter().enumerate() {
-                    let mut bindings = vec![];
-                    for (slot, value) in params.iter().zip([accumulator.clone(), item.clone(), json!(index)]) {
-                        bindings.push((slot.clone(), value));
-                    }
-                    accumulator = self.eval(body, &locals.with_lambda(bindings))?;
-                }
-                return Ok(accumulator);
-            }
-            "toobject" => {
-                arity(name, args, 2, 3)?;
-                let source = self.eval(&args[0], locals)?;
-                let (key_params, key_body) = lambda(&args[1], name)?;
-                let value_lambda = args.get(2).map(|a| lambda(a, name)).transpose()?;
-                let mut out = Map::new();
-                for item in array(&source, name)? {
-                    let bind = |params: &[String]| {
-                        locals.with_lambda(params.iter().take(1).map(|p| (p.clone(), item.clone())).collect())
-                    };
-                    let key = self.eval(key_body, &bind(&key_params))?;
-                    let value = match &value_lambda {
-                        Some((params, body)) => self.eval(body, &bind(params))?,
-                        None => item.clone(),
-                    };
-                    out.insert(to_text(&key), value);
-                }
-                return Ok(Value::Object(out));
-            }
-            _ => {}
         }
-        let values = self.args(args, locals)?;
-        self.builtin(name, &lower, &values, locals)
     }
 
+    fn call_variables(&self, name: &str, args: &[Expr], locals: &Locals) -> Result<Value, ArmError> {
+        arity(name, args, 1, 1)?;
+        let wanted = self.eval(&args[0], locals)?;
+        self.variable(string(&wanted, name)?)
+    }
+
+    fn call_list(&self, name: &str, args: &[Expr], locals: &Locals) -> Result<Value, ArmError> {
+        arity(name, args, 2, 3)?;
+        let values = self.args(args, locals)?;
+        let id = string(&values[0], name)?;
+        let api_version = string(&values[1], name)?;
+        self.list_action(id, name, api_version, values.get(2))
+    }
+
+    fn call_if(&self, name: &str, args: &[Expr], locals: &Locals) -> Result<Value, ArmError> {
+        arity(name, args, 3, 3)?;
+        let condition = boolean(&self.eval(&args[0], locals)?, name)?;
+        self.eval(&args[if condition { 1 } else { 2 }], locals)
+    }
+
+    /// `and` (`want` false) and `or` (`want` true), short-circuiting.
+    fn call_logical(&self, name: &str, want: bool, args: &[Expr], locals: &Locals) -> Result<Value, ArmError> {
+        arity(name, args, 2, usize::MAX)?;
+        for arg in args {
+            if boolean(&self.eval(arg, locals)?, name)? == want {
+                return Ok(Value::Bool(want));
+            }
+        }
+        Ok(Value::Bool(!want))
+    }
+
+    fn call_coalesce(&self, args: &[Expr], locals: &Locals) -> Result<Value, ArmError> {
+        for arg in args {
+            let value = self.eval(arg, locals)?;
+            if !value.is_null() {
+                return Ok(value);
+            }
+        }
+        Ok(Value::Null)
+    }
+
+    fn call_lambda_variables(&self, name: &str, args: &[Expr], locals: &Locals) -> Result<Value, ArmError> {
+        arity(name, args, 1, 1)?;
+        let wanted = self.eval(&args[0], locals)?;
+        let wanted = string(&wanted, name)?;
+        locals
+            .lambda
+            .iter()
+            .rev()
+            .find(|(n, _)| n == wanted)
+            .map(|(_, v)| v.clone())
+            .ok_or_else(|| invalid(format!("The lambda variable '{wanted}' is not defined.")))
+    }
+
+    fn call_collection(&self, lower: &str, name: &str, args: &[Expr], locals: &Locals) -> Result<Value, ArmError> {
+        arity(name, args, 2, 2)?;
+        let source = self.eval(&args[0], locals)?;
+        let (params, body) = lambda(&args[1], name)?;
+        self.collection_lambda(lower, name, &source, &params, body, locals)
+    }
+
+    fn call_reduce(&self, name: &str, args: &[Expr], locals: &Locals) -> Result<Value, ArmError> {
+        arity(name, args, 3, 3)?;
+        let source = self.eval(&args[0], locals)?;
+        let mut accumulator = self.eval(&args[1], locals)?;
+        let (params, body) = lambda(&args[2], name)?;
+        for (index, item) in array(&source, name)?.iter().enumerate() {
+            let mut bindings = vec![];
+            for (slot, value) in params.iter().zip([accumulator.clone(), item.clone(), json!(index)]) {
+                bindings.push((slot.clone(), value));
+            }
+            accumulator = self.eval(body, &locals.with_lambda(bindings))?;
+            // Each step can wrap the last: keep the result from growing
+            // deeper than any other value may be.
+            check_depth(&accumulator)?;
+        }
+        Ok(accumulator)
+    }
+
+    fn call_to_object(&self, name: &str, args: &[Expr], locals: &Locals) -> Result<Value, ArmError> {
+        arity(name, args, 2, 3)?;
+        let source = self.eval(&args[0], locals)?;
+        let (key_params, key_body) = lambda(&args[1], name)?;
+        let value_lambda = args.get(2).map(|a| lambda(a, name)).transpose()?;
+        let mut out = Map::new();
+        for item in array(&source, name)? {
+            let bind = |params: &[String]| locals.with_lambda(params.iter().take(1).map(|p| (p.clone(), item.clone())).collect());
+            let key = self.eval(key_body, &bind(&key_params))?;
+            let value = match &value_lambda {
+                Some((params, body)) => self.eval(body, &bind(params))?,
+                None => item.clone(),
+            };
+            out.insert(to_text(&key), value);
+        }
+        Ok(Value::Object(out))
+    }
+
+    /// `filter`, `map`, `sort`, `groupBy` and `mapValues`, each in a small
+    /// method with a plain loop: nested lambdas recurse through these, so
+    /// their stack frames bound how deep they can go.
     fn collection_lambda(
         &self,
         lower: &str,
@@ -702,68 +800,84 @@ impl Ctx<'_> {
         body: &Expr,
         locals: &Locals,
     ) -> Result<Value, ArmError> {
-        let bind = |values: Vec<Value>| locals.with_lambda(params.iter().cloned().zip(values).collect());
-        if lower == "mapvalues" {
-            let mut out = Map::new();
-            for (key, value) in object(source, name)? {
-                out.insert(key.clone(), self.eval(body, &bind(vec![value.clone()]))?);
-            }
-            return Ok(Value::Object(out));
-        }
-        let items = array(source, name)?;
+        let lambda = Lambda { name, params, body, locals };
         match lower {
-            "filter" => {
-                let mut out = Vec::new();
-                for (index, item) in items.iter().enumerate() {
-                    if boolean(&self.eval(body, &bind(vec![item.clone(), json!(index)]))?, name)? {
-                        out.push(item.clone());
-                    }
-                }
-                Ok(Value::Array(out))
+            "mapvalues" => self.lambda_map_values(&lambda, object(source, name)?),
+            "filter" => self.lambda_filter(&lambda, array(source, name)?),
+            "map" => self.lambda_map(&lambda, array(source, name)?),
+            "groupby" => self.lambda_group_by(&lambda, array(source, name)?),
+            _ => self.lambda_sort(&lambda, array(source, name)?),
+        }
+    }
+
+    /// Evaluates a lambda's body with its parameters bound to `values`.
+    fn apply_lambda(&self, lambda: &Lambda<'_>, values: Vec<Value>) -> Result<Value, ArmError> {
+        let bound = lambda.locals.with_lambda(lambda.params.iter().cloned().zip(values).collect());
+        self.eval(lambda.body, &bound)
+    }
+
+    fn lambda_map_values(&self, lambda: &Lambda<'_>, source: &Map<String, Value>) -> Result<Value, ArmError> {
+        let mut out = Map::new();
+        for (key, value) in source {
+            out.insert(key.clone(), self.apply_lambda(lambda, vec![value.clone()])?);
+        }
+        Ok(Value::Object(out))
+    }
+
+    fn lambda_filter(&self, lambda: &Lambda<'_>, items: &[Value]) -> Result<Value, ArmError> {
+        let mut out = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            if boolean(&self.apply_lambda(lambda, vec![item.clone(), json!(index)])?, lambda.name)? {
+                out.push(item.clone());
             }
-            "map" => items
-                .iter()
-                .enumerate()
-                .map(|(index, item)| self.eval(body, &bind(vec![item.clone(), json!(index)])))
-                .collect::<Result<_, _>>()
-                .map(Value::Array),
-            "groupby" => {
-                let mut out = Map::new();
-                for item in items {
-                    let key = to_text(&self.eval(body, &bind(vec![item.clone()]))?);
-                    let group = out.entry(key).or_insert_with(|| Value::Array(Vec::new()));
-                    if let Value::Array(group) = group {
-                        group.push(item.clone());
-                    }
-                }
-                Ok(Value::Object(out))
+        }
+        Ok(Value::Array(out))
+    }
+
+    fn lambda_map(&self, lambda: &Lambda<'_>, items: &[Value]) -> Result<Value, ArmError> {
+        let mut out = Vec::with_capacity(items.len());
+        for (index, item) in items.iter().enumerate() {
+            out.push(self.apply_lambda(lambda, vec![item.clone(), json!(index)])?);
+        }
+        Ok(Value::Array(out))
+    }
+
+    fn lambda_group_by(&self, lambda: &Lambda<'_>, items: &[Value]) -> Result<Value, ArmError> {
+        let mut out = Map::new();
+        for item in items {
+            let key = to_text(&self.apply_lambda(lambda, vec![item.clone()])?);
+            let group = out.entry(key).or_insert_with(|| Value::Array(Vec::new()));
+            if let Value::Array(group) = group {
+                group.push(item.clone());
             }
-            _ => {
-                // sort: the lambda says whether its first argument goes first.
-                let mut sorted = items.clone();
-                let mut error = None;
-                sorted.sort_by(|a, b| {
-                    if error.is_some() {
-                        return std::cmp::Ordering::Equal;
-                    }
-                    let first = |x: &Value, y: &Value| {
-                        self.eval(body, &bind(vec![x.clone(), y.clone()])).and_then(|v| boolean(&v, name))
-                    };
-                    match (first(a, b), first(b, a)) {
-                        (Ok(true), _) => std::cmp::Ordering::Less,
-                        (Ok(false), Ok(true)) => std::cmp::Ordering::Greater,
-                        (Ok(false), Ok(false)) => std::cmp::Ordering::Equal,
-                        (Err(e), _) | (_, Err(e)) => {
-                            error = Some(e);
-                            std::cmp::Ordering::Equal
-                        }
-                    }
-                });
-                match error {
-                    Some(e) => Err(e),
-                    None => Ok(Value::Array(sorted)),
+        }
+        Ok(Value::Object(out))
+    }
+
+    /// `sort`: the lambda says whether its first argument goes first.
+    fn lambda_sort(&self, lambda: &Lambda<'_>, items: &[Value]) -> Result<Value, ArmError> {
+        let first = |x: &Value, y: &Value| {
+            self.apply_lambda(lambda, vec![x.clone(), y.clone()]).and_then(|v| boolean(&v, lambda.name))
+        };
+        let mut sorted = items.to_vec();
+        let mut error = None;
+        sorted.sort_by(|a, b| {
+            if error.is_some() {
+                return std::cmp::Ordering::Equal;
+            }
+            match (first(a, b), first(b, a)) {
+                (Ok(true), _) => std::cmp::Ordering::Less,
+                (Ok(false), Ok(true)) => std::cmp::Ordering::Greater,
+                (Ok(false), Ok(false)) => std::cmp::Ordering::Equal,
+                (Err(e), _) | (_, Err(e)) => {
+                    error = Some(e);
+                    std::cmp::Ordering::Equal
                 }
             }
+        });
+        match error {
+            Some(e) => Err(e),
+            None => Ok(Value::Array(sorted)),
         }
     }
 
@@ -1286,10 +1400,6 @@ impl Ctx<'_> {
                     });
                 }
                 self.parameter(wanted)?
-            }
-            "variables" => {
-                need(1, 1)?;
-                self.variable(string(&v[0], name)?)?
             }
             "copyindex" => {
                 need(0, 2)?;

@@ -120,6 +120,12 @@ the Azure CLI; all four run in CI.
   `providers()` functions. Expressions are evaluated when a resource is
   deployed, so a mistake inside a resource's `properties` fails the deployment
   instead of failing validation. `pickZones` returns no zones.
+- Nesting is limited where Azure's own limit is not known: a template
+  expression may nest 64 levels (400 `InvalidTemplate`), and evaluation
+  (variables using variables, user-defined functions, nested deployments) 256
+  levels, with computed values at most 128 levels deep (the deployment fails);
+  Cosmos DB queries, Service Bus SQL filters and actions, and Table `$filter`s
+  may nest 64 levels (400). Long `AND`/`OR` chains are not limited.
 - Azure Files: no SMB or NFS (REST only), no file copy, leases, share
   snapshots, handles or SMB permissions and attributes beyond what the REST
   API reports; files are held in memory, up to 256 MiB. Table SAS tokens scoped to key

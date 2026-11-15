@@ -672,8 +672,16 @@ enum Filter {
     Literal(bool),
 }
 
+/// How deeply a `$filter` may nest: parentheses and `not`s. Deeper filters are
+/// refused rather than parsed and evaluated by recursion that could overflow
+/// the stack. (Azure also allows at most 15 comparisons in one filter, which
+/// this emulator does not enforce.)
+const MAX_FILTER_DEPTH: usize = 64;
+
 struct FilterParser<'a> {
     text: &'a str,
+    /// How deep in the filter the parser is.
+    depth: usize,
 }
 
 impl<'a> FilterParser<'a> {
@@ -698,25 +706,40 @@ impl<'a> FilterParser<'a> {
         }
     }
 
-    fn or(&mut self) -> Result<Filter, String> {
-        let mut left = self.and()?;
-        while self.keyword("or") {
-            left = Filter::Or(Box::new(left), Box::new(self.and()?));
+    /// Goes one level deeper, or refuses the filter for nesting too deeply.
+    /// An error ends the whole parse, so only successful paths step back out.
+    fn descend(&mut self) -> Result<(), String> {
+        self.depth += 1;
+        if self.depth > MAX_FILTER_DEPTH {
+            return Err(format!("The filter is nested more than {MAX_FILTER_DEPTH} levels deep."));
         }
-        Ok(left)
+        Ok(())
+    }
+
+    fn or(&mut self) -> Result<Filter, String> {
+        self.descend()?;
+        let mut operands = vec![self.and()?];
+        while self.keyword("or") {
+            operands.push(self.and()?);
+        }
+        self.depth -= 1;
+        Ok(balanced(Filter::Or, operands))
     }
 
     fn and(&mut self) -> Result<Filter, String> {
-        let mut left = self.unary()?;
+        let mut operands = vec![self.unary()?];
         while self.keyword("and") {
-            left = Filter::And(Box::new(left), Box::new(self.unary()?));
+            operands.push(self.unary()?);
         }
-        Ok(left)
+        Ok(balanced(Filter::And, operands))
     }
 
     fn unary(&mut self) -> Result<Filter, String> {
         if self.keyword("not") {
-            return Ok(Filter::Not(Box::new(self.unary()?)));
+            self.descend()?;
+            let inner = self.unary()?;
+            self.depth -= 1;
+            return Ok(Filter::Not(Box::new(inner)));
         }
         self.skip();
         if let Some(rest) = self.text.strip_prefix('(') {
@@ -835,8 +858,20 @@ impl<'a> FilterParser<'a> {
     }
 }
 
+/// `a and b and c ...` (or `or`) as a balanced tree: a long chain of
+/// conditions nests only as deep as its logarithm.
+fn balanced(op: fn(Box<Filter>, Box<Filter>) -> Filter, mut operands: Vec<Filter>) -> Filter {
+    if operands.len() == 1 {
+        if let Some(only) = operands.pop() {
+            return only;
+        }
+    }
+    let right = operands.split_off(operands.len() / 2);
+    op(Box::new(balanced(op, operands)), Box::new(balanced(op, right)))
+}
+
 fn parse_filter(text: &str) -> Result<Filter, String> {
-    let mut parser = FilterParser { text };
+    let mut parser = FilterParser { text, depth: 0 };
     let filter = parser.or()?;
     parser.skip();
     if parser.text.is_empty() {
@@ -1768,6 +1803,36 @@ mod tests {
         assert!(!check("Name eq 'ann'"));
         assert!(parse_filter("Age gt").is_err());
         assert!(parse_filter("(Age gt 1").is_err());
+    }
+
+    #[test]
+    fn filter_nesting_is_limited() {
+        // On a thread with the 2 MiB stack a Tokio worker gets.
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                let e = entity(json!({"Age": 31}));
+                let nested = |open: &str, inner: &str, close: &str, n: usize| format!("{}{inner}{}", open.repeat(n), close.repeat(n));
+                for n in [MAX_FILTER_DEPTH, 100_000] {
+                    for (open, close) in [("(", ")"), ("not ", "")] {
+                        let error = parse_filter(&nested(open, "Age eq 31", close, n)).err().unwrap_or_else(|| panic!("{open} x {n} parsed"));
+                        assert!(error.contains("nested more than 64 levels deep"), "{error}");
+                    }
+                }
+                // The whole filter is the first level.
+                let deepest = parse_filter(&nested("(", "Age eq 31", ")", MAX_FILTER_DEPTH - 1)).expect("parses");
+                assert!(matches(&deepest, "p1", "r1", &e));
+                let nots = parse_filter(&nested("not ", "Age eq 31", "", MAX_FILTER_DEPTH - 2)).expect("parses");
+                assert!(matches(&nots, "p1", "r1", &e));
+                // A long chain of conditions is not deep.
+                let chain = format!("{} or Age eq 31", vec!["Age eq 1"; 20_000].join(" or "));
+                assert!(matches(&parse_filter(&chain).expect("parses"), "p1", "r1", &e));
+                let chain = vec!["Age eq 31"; 20_000].join(" and ");
+                assert!(matches(&parse_filter(&chain).expect("parses"), "p1", "r1", &e));
+            })
+            .expect("thread")
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
     }
 
     #[test]

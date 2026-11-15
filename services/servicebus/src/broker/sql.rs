@@ -155,9 +155,16 @@ enum Expr {
     Exists(Property),
 }
 
+/// How deeply a filter or action expression may nest: parentheses, `NOT`s,
+/// signs and chains of arithmetic. Deeper expressions are refused rather than
+/// parsed and evaluated by recursion that could overflow the stack.
+pub(crate) const MAX_DEPTH: usize = 64;
+
 struct Parser {
     tokens: Vec<Token>,
     at: usize,
+    /// How deep in the expression the parser is.
+    depth: usize,
 }
 
 fn keyword(token: Option<&Token>, word: &str) -> bool {
@@ -179,7 +186,18 @@ fn property(name: &str) -> Property {
 
 impl Parser {
     fn new(text: &str) -> Result<Self, String> {
-        Ok(Parser { tokens: tokenize(text)?, at: 0 })
+        Ok(Parser { tokens: tokenize(text)?, at: 0, depth: 0 })
+    }
+
+    /// Goes one level deeper, or refuses the expression for nesting too
+    /// deeply. An error ends the whole parse, so only successful paths step
+    /// back out.
+    fn descend(&mut self) -> Result<(), String> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(format!("The expression is nested more than {MAX_DEPTH} levels deep."));
+        }
+        Ok(())
     }
 
     fn peek(&self) -> Option<&Token> {
@@ -209,24 +227,29 @@ impl Parser {
     }
 
     fn or(&mut self) -> Result<Expr, String> {
-        let mut left = self.and()?;
+        self.descend()?;
+        let mut operands = vec![self.and()?];
         while self.eat_keyword("or") {
-            left = Expr::Or(Box::new(left), Box::new(self.and()?));
+            operands.push(self.and()?);
         }
-        Ok(left)
+        self.depth -= 1;
+        Ok(balanced(Expr::Or, operands))
     }
 
     fn and(&mut self) -> Result<Expr, String> {
-        let mut left = self.not()?;
+        let mut operands = vec![self.not()?];
         while self.eat_keyword("and") {
-            left = Expr::And(Box::new(left), Box::new(self.not()?));
+            operands.push(self.not()?);
         }
-        Ok(left)
+        Ok(balanced(Expr::And, operands))
     }
 
     fn not(&mut self) -> Result<Expr, String> {
         if self.eat_keyword("not") {
-            return Ok(Expr::Not(Box::new(self.not()?)));
+            self.descend()?;
+            let inner = self.not()?;
+            self.depth -= 1;
+            return Ok(Expr::Not(Box::new(inner)));
         }
         self.predicate()
     }
@@ -276,36 +299,43 @@ impl Parser {
         Ok(left)
     }
 
+    // In a chain of arithmetic each step wraps what came before, one level
+    // deeper each time.
     fn additive(&mut self) -> Result<Expr, String> {
+        let entered = self.depth;
         let mut left = self.multiplicative()?;
         while let Some(Token::Op(op @ ("+" | "-"))) = self.peek().cloned() {
             self.at += 1;
+            self.descend()?;
             left = Expr::Arith(op, Box::new(left), Box::new(self.multiplicative()?));
         }
+        self.depth = entered;
         Ok(left)
     }
 
     fn multiplicative(&mut self) -> Result<Expr, String> {
+        let entered = self.depth;
         let mut left = self.unary()?;
         while let Some(Token::Op(op @ ("*" | "/" | "%"))) = self.peek().cloned() {
             self.at += 1;
+            self.descend()?;
             left = Expr::Arith(op, Box::new(left), Box::new(self.unary()?));
         }
+        self.depth = entered;
         Ok(left)
     }
 
     fn unary(&mut self) -> Result<Expr, String> {
-        match self.peek() {
-            Some(Token::Op("-")) => {
-                self.at += 1;
-                Ok(Expr::Neg(Box::new(self.unary()?)))
-            }
-            Some(Token::Op("+")) => {
-                self.at += 1;
-                self.unary()
-            }
-            _ => self.primary(),
-        }
+        let negate = match self.peek() {
+            Some(Token::Op("-")) => true,
+            Some(Token::Op("+")) => false,
+            _ => return self.primary(),
+        };
+        self.at += 1;
+        self.descend()?;
+        let inner = self.unary()?;
+        self.depth -= 1;
+        Ok(if negate { Expr::Neg(Box::new(inner)) } else { inner })
     }
 
     fn primary(&mut self) -> Result<Expr, String> {
@@ -346,6 +376,19 @@ impl Parser {
             Some(token) => Err(format!("Unexpected {token:?} after the end of the expression.")),
         }
     }
+}
+
+/// `a op b op c ...` for `AND` or `OR` (associative in three-valued logic)
+/// as a balanced tree: a long chain of conditions nests only as deep as its
+/// logarithm.
+fn balanced(op: fn(Box<Expr>, Box<Expr>) -> Expr, mut operands: Vec<Expr>) -> Expr {
+    if operands.len() == 1 {
+        if let Some(only) = operands.pop() {
+            return only;
+        }
+    }
+    let right = operands.split_off(operands.len() / 2);
+    op(Box::new(balanced(op, operands)), Box::new(balanced(op, right)))
 }
 
 /// A parsed filter expression.
@@ -789,6 +832,47 @@ mod tests {
         for bad in ["color =", "color = 'red", "AND", "color = 'red' extra", "x IN 1", "x LIKE 5", "1 = (2"] {
             assert!(Filter::parse(bad).is_err(), "{bad}");
         }
+    }
+
+    /// Runs `test` on a thread with the 2 MiB stack a Tokio worker gets.
+    fn on_worker_stack(test: fn()) {
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(test)
+            .expect("thread")
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+    }
+
+    #[test]
+    fn over_deep_filters_are_refused() {
+        on_worker_stack(|| {
+            let nested = |open: &str, inner: &str, close: &str, n: usize| format!("{}{inner}{}", open.repeat(n), close.repeat(n));
+            for n in [MAX_DEPTH, 100_000] {
+                for (open, inner, close) in [("(", "1=1", ")"), ("NOT ", "1=1", ""), ("- ", "1", " = 1"), ("", "1", " + 1"), ("(1 = ", "1", ")")] {
+                    let text = nested(open, inner, close, n);
+                    let error = Filter::parse(&text).err().unwrap_or_else(|| panic!("{open}{inner}{close} x {n} parsed"));
+                    assert!(error.contains("nested more than 64 levels deep"), "{error}");
+                    let action = format!("SET x = {}", nested(open, "1", close, n));
+                    assert!(Action::parse(&action).is_err());
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn filters_nested_up_to_the_limit_still_work() {
+        on_worker_stack(|| {
+            let nested = |open: &str, inner: &str, close: &str, n: usize| format!("{}{inner}{}", open.repeat(n), close.repeat(n));
+            // The whole expression is the first level.
+            assert!(check(&nested("(", "color = 'red'", ")", MAX_DEPTH - 1)));
+            assert!(check(&nested("NOT ", "color = 'red'", "", MAX_DEPTH - 1 - 1)));
+            assert!(!check(&format!("{} = -{}", nested("", "1", " + 1", MAX_DEPTH - 1), MAX_DEPTH)));
+            assert!(check(&format!("{} = {}", nested("", "1", " + 1", MAX_DEPTH - 1), MAX_DEPTH)));
+            // A long chain of conditions is not deep.
+            assert!(check(&format!("{} OR color = 'red'", vec!["color = 'blue'"; 20_000].join(" OR "))));
+            assert!(check(&vec!["quantity = 12"; 20_000].join(" AND ")));
+        });
     }
 
     #[test]
