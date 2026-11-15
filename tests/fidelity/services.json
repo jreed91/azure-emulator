@@ -38,5 +38,10 @@
   "sdk/test_cosmos.py": "Cosmos DB",
   "sdk/test_cosmos_data.py": "Cosmos DB",
   "sdk-js/cosmos.test.js": "Cosmos DB",
+  "sdk/test_blob_gaps.py": "Blob Storage",
+  "sdk/test_tables_gaps.py": "Table Storage",
+  "sdk/test_files_gaps.py": "Azure Files",
+  "sdk/test_keyvault_gaps.py": "Key Vault",
+  "sdk/test_cosmos_gaps.py": "Cosmos DB",
   "sdk/test_persistence.py": null
 }
