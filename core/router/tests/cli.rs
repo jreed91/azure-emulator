@@ -71,6 +71,15 @@ fn coverage_summarises_and_lists_operations() {
     assert!(out.lines().any(|l| l.starts_with("data ok") && l.contains("Blob_AcquireLease")), "{out}");
     assert!(out.lines().any(|l| l.starts_with("data 501") && l.contains("Blob_SetTags")), "{out}");
 
+    // The same as JSON, with why a type is kept at 501 where its crate says.
+    let json = run(&["coverage", "--json"], &[]);
+    let listed: serde_json::Value = serde_json::from_slice(&json.stdout).expect("JSON");
+    let operations = listed["operations"].as_array().expect("operations");
+    assert!(operations.iter().any(|o| o["plane"] == "Resource Manager" && o["status"] == "ok"));
+    assert!(operations.iter().any(|o| o["plane"] == "Blob Storage" && o["status"] == "501" && o["selectedBy"][0] == "query comp=tags"));
+    let kept = operations.iter().find(|o| o["id"] == "SqlResources_CreateUpdateSqlRoleAssignment").expect("the operation");
+    assert!(kept["keptAt501"].as_str().is_some_and(|reason| reason.contains("access control")), "{kept}");
+
     let refused = run(&["coverage", "--everything"], &[]);
     assert_eq!(refused.status.code(), Some(2));
     assert!(text(&refused.stderr).contains("coverage takes only --operations"));

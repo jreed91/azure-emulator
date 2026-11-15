@@ -45,6 +45,12 @@
     "path": "specification/msi/resource-manager",
     "repository": "https://github.com/Azure/azure-rest-api-specs"
   },
+  "network": {
+    "commit": "6a42ee6dd4a2c09f9f03eba31cc13ab20e434353",
+    "namespace": "Microsoft.Network",
+    "path": "specification/network/resource-manager",
+    "repository": "https://github.com/Azure/azure-rest-api-specs"
+  },
   "servicebus": {
     "commit": "6a42ee6dd4a2c09f9f03eba31cc13ab20e434353",
     "namespace": "Microsoft.ServiceBus",

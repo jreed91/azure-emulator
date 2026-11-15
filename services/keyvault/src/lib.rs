@@ -94,6 +94,7 @@ pub fn register(registry: &mut ArmRegistry) {
         registry.register_type(emulator_core::arm::CreatedByNetwork(kind));
     }
     // Everything else in the specification is mounted as a 501 stub.
+    registry.register_generic_remaining(&scaffold::PROVIDER, GENERIC_EXCEPTIONS);
     registry.register_scaffold(&scaffold::PROVIDER);
 }
 
@@ -250,3 +251,6 @@ fn check_name_availability(ctx: &ArmContext<'_>, body: &Value) -> Result<Value, 
         json!({"nameAvailable": true})
     })
 }
+
+/// The configuration-shaped types that are not served from their schema, and why.
+const GENERIC_EXCEPTIONS: &[(&str, &str)] = &[];

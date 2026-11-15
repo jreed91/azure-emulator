@@ -342,6 +342,9 @@ pub struct OperationCoverage {
     pub implemented: bool,
     /// Served from the specification's schema alone ([`ArmRegistry::register_generic`]).
     pub generic: bool,
+    /// Why the type is not served from its schema although it has one, where
+    /// its crate says so ([`ArmRegistry::register_generic_remaining`]).
+    pub kept_at_501: Option<&'static str>,
 }
 
 /// A child resource type that only Microsoft.Network creates: private endpoint
@@ -408,6 +411,8 @@ pub struct ArmRegistry {
     generic: HashSet<String>,
     /// Lowercased type → the `api-version`s its specification defines.
     api_versions: HashMap<String, &'static [&'static str]>,
+    /// Lowercased type → why it is not served from its schema.
+    exceptions: HashMap<String, &'static str>,
 }
 
 impl ArmRegistry {
@@ -447,6 +452,39 @@ impl ArmRegistry {
                 .insert(key.clone(), Arc::new(crate::schema::SchemaResource::new(kind.resource_type, &schema)));
             self.generic.insert(key);
         }
+    }
+
+    /// Serves from its schema every type of `provider` that has a `PUT`
+    /// schema and that nothing has registered a handler or an operation for:
+    /// its settings are checked, stored and returned, and its actions keep
+    /// answering `501`. `except` names the types to leave as `501` all the
+    /// same, each with the reason: a type whose behaviour is more than storing
+    /// its settings, or whose specification examples do not come back as
+    /// sent. Call after the provider's own handlers and before
+    /// [`ArmRegistry::register_scaffold`].
+    ///
+    /// Panics if `except` names a type that would not have been served anyway,
+    /// so the list stays true.
+    pub fn register_generic_remaining(&mut self, provider: &'static ScaffoldedProvider, except: &'static [(&'static str, &'static str)]) {
+        let mut unused: Vec<&str> = except.iter().map(|(kind, _)| *kind).collect();
+        for kind in provider.types {
+            let key = kind.resource_type.to_ascii_lowercase();
+            let handled = self.types.contains_key(&key) && !self.stubs.contains(&key);
+            // An operation registered by id means someone wrote part of the type.
+            let partly = kind.operations.iter().any(|operation| self.has_operation(provider.namespace, operation.id));
+            if kind.schema.is_none() || handled || partly {
+                continue;
+            }
+            if let Some(at) = unused.iter().position(|wanted| wanted.eq_ignore_ascii_case(kind.resource_type)) {
+                unused.remove(at);
+                if let Some((_, reason)) = except.iter().find(|(wanted, _)| wanted.eq_ignore_ascii_case(kind.resource_type)) {
+                    self.exceptions.insert(key, reason);
+                }
+                continue;
+            }
+            self.register_generic(provider, &[kind.resource_type]);
+        }
+        assert!(unused.is_empty(), "{unused:?} would not be served from the schema anyway; remove them from the exceptions");
     }
 
     /// Mounts a provider's modeled surface. Types that already have a handler keep
@@ -499,6 +537,7 @@ impl ArmRegistry {
                         operation,
                         implemented,
                         generic,
+                        kept_at_501: self.exceptions.get(&key).copied().filter(|_| !implemented),
                     });
                 }
             }
@@ -516,6 +555,7 @@ impl ArmRegistry {
                     operation,
                     implemented,
                     generic: false,
+                    kept_at_501: None,
                 });
             }
         }

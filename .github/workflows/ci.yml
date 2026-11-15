@@ -15,7 +15,16 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets -- -D warnings
+      - run: mkdir -p target/trace
+      # The in-process tests reach the operations of every type served from its
+      # schema (spec_examples.rs); their trace goes to the operations job.
       - run: cargo test
+        env:
+          AZURE_EMULATOR_TRACE: ${{ github.workspace }}/target/trace/rust.trace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trace-rust
+          path: ${{ github.workspace }}/target/trace/
 
   sdk:
     name: Azure SDK for Python
@@ -34,6 +43,8 @@ jobs:
       - run: mkdir -p target/trace
       # Every test file counts towards a service's fidelity score.
       - run: python tests/fidelity/score.py --check
+      # issues/ lists exactly what the emulator and the tests report as missing.
+      - run: python tools/issues/generate.py --check
       - run: python -m pytest -n auto
         working-directory: tests/sdk
         env:
@@ -114,7 +125,7 @@ jobs:
 
   operations:
     name: Every implemented operation is tested
-    needs: [sdk, sdk-js, terraform, cli]
+    needs: [test, sdk, sdk-js, terraform, cli]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

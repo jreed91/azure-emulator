@@ -204,6 +204,13 @@ def authorization(emulator, credential):
 
 
 @pytest.fixture(scope="session")
+def network(emulator, credential):
+    from azure.mgmt.network import NetworkManagementClient
+
+    return NetworkManagementClient(credential, SUBSCRIPTION, **emulator.arm)
+
+
+@pytest.fixture(scope="session")
 def storage(emulator, credential):
     from azure.mgmt.storage import StorageManagementClient
 

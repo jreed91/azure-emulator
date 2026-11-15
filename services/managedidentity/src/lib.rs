@@ -25,6 +25,7 @@ pub fn register(registry: &mut ArmRegistry) {
     registry.register_type(UserAssignedIdentities);
     registry.register_type(FederatedIdentityCredentials);
     registry.register_operation("Microsoft.ManagedIdentity/SystemAssignedIdentities_GetByScope", Arc::new(system_assigned_by_scope));
+    registry.register_generic_remaining(&scaffold::PROVIDER, GENERIC_EXCEPTIONS);
     registry.register_scaffold(&scaffold::PROVIDER);
 }
 
@@ -190,3 +191,6 @@ fn system_assigned_by_scope(
     }
     Ok((http::StatusCode::OK, out))
 }
+
+/// The configuration-shaped types that are not served from their schema, and why.
+const GENERIC_EXCEPTIONS: &[(&str, &str)] = &[];

@@ -12,14 +12,15 @@ azure-emulator — a local emulator of the Azure APIs
 
 USAGE:
     azure-emulator [OPTIONS]
-    azure-emulator coverage [--operations]
+    azure-emulator coverage [--operations | --json]
     azure-emulator health [--port <PORT>] [--http]
 
 COMMANDS:
     coverage               Print how much of each provider's API specification is
                            implemented, served generically from the schema, or
                            answered with 501, and how much of each listed data
-                           plane's; --operations lists every operation
+                           plane's; --operations lists every operation, and
+                           --json prints the same as JSON for tools
     health                 Ask the emulator running on this machine whether it is
                            ready (GET /__admin/health); exits 0 if it is. Reads the
                            port, scheme and bind address from the same options and
@@ -153,6 +154,46 @@ async fn print_coverage(list_operations: bool) {
     }
 }
 
+/// Every operation and its status as JSON, for tools (`tools/issues`).
+async fn print_coverage_json() {
+    use serde_json::json;
+    let emulator = Emulator::new(Config::default());
+    let mut operations: Vec<serde_json::Value> = emulator
+        .coverage()
+        .iter()
+        .map(|entry| {
+            let status = match (entry.implemented, entry.generic) {
+                (true, _) => "ok",
+                (false, true) => "generic",
+                (false, false) => "501",
+            };
+            json!({
+                "plane": "Resource Manager",
+                "provider": entry.namespace,
+                "resourceType": entry.resource_type,
+                "id": entry.operation.id,
+                "method": entry.operation.method,
+                "path": entry.operation.path,
+                "status": status,
+                "keptAt501": entry.kept_at_501,
+            })
+        })
+        .collect();
+    let data = emulator.data_plane_coverage().await.unwrap_or_else(|e| fail(format!("probing the data planes failed: {e}")));
+    for entry in &data {
+        let fixed: Vec<String> = entry.operation.fixed.iter().filter(|f| !f.2.is_empty()).map(|(place, name, value)| format!("{place} {name}={value}")).collect();
+        operations.push(json!({
+            "plane": entry.plane,
+            "id": entry.operation.id,
+            "method": entry.operation.method,
+            "path": entry.operation.path,
+            "selectedBy": fixed,
+            "status": if entry.implemented { "ok" } else { "501" },
+        }));
+    }
+    println!("{}", serde_json::to_string_pretty(&json!({"operations": operations})).unwrap_or_default());
+}
+
 #[tokio::main]
 async fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -160,7 +201,8 @@ async fn main() {
         match &arguments[1..] {
             [] => print_coverage(false).await,
             [flag] if flag == "--operations" => print_coverage(true).await,
-            _ => fail("coverage takes only --operations"),
+            [flag] if flag == "--json" => print_coverage_json().await,
+            _ => fail("coverage takes only --operations or --json"),
         }
         return;
     }

@@ -36,6 +36,7 @@ tests/sdk/, tests/sdk-js/   fidelity tests through the Python and JavaScript SDK
 tests/terraform/, tests/cli/  azurerm apply/plan/destroy; Azure CLI smoke test
 tests/fidelity/       per-service scores; services.json maps test files to services
 tests/operations/     check.py: every implemented operation is reached by a test
+tools/issues/         generate.py writes issues/: one file per thing not done yet
 ```
 
 ## Which files do I edit?
@@ -43,7 +44,8 @@ tests/operations/     check.py: every implemented operation is reached by a test
 | Want to... | Edit |
 |---|---|
 | Implement a resource type | a `ResourceTypeHandler` in `services/<name>/src/`, registered in that crate's `register` before the scaffold (`services/managedidentity/src/lib.rs` is a small complete example) |
-| Serve a configuration-only type from its schema | the `registry.register_generic` list in the crate's `register` (see `services/storage/src/lib.rs`) |
+| Serve a configuration-only type from its schema | nothing: `register_generic_remaining` in the crate's `register` serves every type with a `PUT` schema that has no handler |
+| Keep a type at `501` although it has a schema | the crate's `GENERIC_EXCEPTIONS`, with the reason |
 | Implement a location-, tenant- or state-backed operation | `registry.register_operation` with its `operationId` (examples in `services/keyvault/src/management.rs`) |
 | Change the shared ARM behaviour | `core/emulator-core/src/arm.rs` (and `src/arm/`) |
 | Add or change a data plane | the service crate, plus its hostname dispatch in `core/router/src/lib.rs` |
@@ -76,6 +78,7 @@ pip install -r tests/sdk/requirements.txt
 (cd tests/sdk && python -m pytest -n auto)    # Python SDK suite (needs the built binary)
 (cd tests/sdk-js && npm ci && npm test)       # JavaScript SDK suite
 python tests/fidelity/score.py --check        # every test file is in services.json
+python tools/issues/generate.py [--check]     # rewrite (or verify) issues/
 tests/fidelity/run.sh                         # scores into target/fidelity/
 
 tests/terraform/run.sh --hosts-line | sudo tee -a /etc/hosts && tests/terraform/run.sh
@@ -129,6 +132,13 @@ may be reported locally; add their traces to compare like for like.
   test that calls it, or an entry with a reason in
   `tests/operations/allowlist.txt` (read by `check.py`; the file does not exist
   until there is a first entry).
+- **`issues/` is generated.** It lists what answers `501` and what the
+  `known_gap` tests assert. After a change that implements an operation, adds
+  a provider, or adds or closes a known gap, run
+  `python tools/issues/generate.py` (it needs the built binary) and commit the
+  result; CI runs it with `--check`. To pick up work, take a file from
+  `issues/things-that-do-not-work/`: it names the crate, the operations and
+  what done means.
 - **Tests are independent.** SDK tests create their own resource group and
   uniquely named resources; pytest workers run in parallel, each with its own
   emulator.

@@ -72,8 +72,11 @@ fn classify(namespace: &str, method: &str, path: &str) -> Option<(Vec<String>, K
         && literal(2, "resourcegroups")
         && is_parameter(scope[3]);
     let provider_level = |kind| Some((Vec::new(), kind));
-    // Type segments sit at even positions and must be literals.
-    if rest.is_empty() || rest.iter().step_by(2).any(|s| is_parameter(s)) {
+    // Type segments sit at even positions and must be literals. A segment
+    // that runs a parameter into text (`{circuitName}stats`, a slash missing
+    // in the specification) is neither a name nor a type.
+    let run_together = rest.iter().any(|s| s.contains('{') && !(s.starts_with('{') && s.ends_with('}') && s.matches('{').count() == 1));
+    if rest.is_empty() || run_together || rest.iter().step_by(2).any(|s| is_parameter(s)) {
         return provider_level(Kind::Other);
     }
     let types = |upto: usize| rest[..upto].iter().step_by(2).map(|s| s.to_string()).collect::<Vec<_>>();
@@ -124,6 +127,12 @@ pub fn build(namespace: &str, versions: &[Version], resolver: &mut Resolver) -> 
                     continue;
                 };
                 for (path, item) in paths {
+                    // An old version may write the same path with a slash at
+                    // the end; it is the same operation.
+                    let path = &match path.trim_end_matches('/') {
+                        "" => path.clone(),
+                        trimmed => trimmed.to_string(),
+                    };
                     for method in ["get", "put", "post", "patch", "delete", "head"] {
                         let Some(definition) = item.get(method) else {
                             continue;

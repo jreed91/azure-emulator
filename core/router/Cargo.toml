@@ -8,6 +8,7 @@ license.workspace = true
 tokio-rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 emulator-core = { workspace = true }
+service-network = { workspace = true }
 service-eventhub = { workspace = true }
 service-cosmosdb = { workspace = true }
 service-servicebus = { workspace = true }

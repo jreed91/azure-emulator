@@ -15,8 +15,9 @@ pick the form that fits:
 - **Feature request**: a change to the emulator itself, such as how you
   install, start, configure or run it.
 
-Before filing, check `azure-emulator coverage --operations` and the README's
-"Known gaps": an operation that answers `501` is known to be missing.
+Before filing, check `azure-emulator coverage --operations`, the README's
+"Known gaps" and the files under `issues/things-that-do-not-work/`: an
+operation that answers `501` is known to be missing, and has a file there.
 
 Remove secrets, keys, connection strings, tokens, subscription and tenant ids,
 and personal data from anything you paste. Security problems go through

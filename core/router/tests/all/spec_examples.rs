@@ -18,11 +18,14 @@ use serde_json::{json, Value};
 
 use crate::support::Client;
 
-const EXAMPLES: [&str; 4] = [
+const EXAMPLES: [&str; 7] = [
     include_str!("../../../../services/storage/spec-examples.json"),
     include_str!("../../../../services/keyvault/spec-examples.json"),
     include_str!("../../../../services/servicebus/spec-examples.json"),
     include_str!("../../../../services/managedidentity/spec-examples.json"),
+    include_str!("../../../../services/eventhub/spec-examples.json"),
+    include_str!("../../../../services/cosmosdb/spec-examples.json"),
+    include_str!("../../../../services/network/spec-examples.json"),
 ];
 const KNOWN_FAILURES: &str = include_str!("../../spec-examples-known-failures.txt");
 
@@ -64,7 +67,18 @@ fn fill(template: &str, parameters: &BTreeMap<String, String>, fallback: &BTreeM
         out.push('/');
         match segment.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
             Some("subscriptionId") => out.push_str(subscription),
-            Some(name) => out.push_str(parameters.get(name).or_else(|| fallback.get(name)).map(String::as_str).unwrap_or(name)),
+            Some(name) => {
+                // Example names may hold characters a path cannot (a space, say).
+                // An ancestor's example may spell the same parameter in another case.
+                let find = |from: &BTreeMap<String, String>| from.iter().find(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, value)| value.clone());
+                let value = find(parameters).or_else(|| find(fallback)).unwrap_or_else(|| name.to_string());
+                for byte in value.bytes() {
+                    match byte {
+                        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'$' | b'(' | b')' | b'@' => out.push(byte as char),
+                        other => out.push_str(&format!("%{other:02X}")),
+                    }
+                }
+            }
             None => out.push_str(segment),
         }
     }
@@ -107,7 +121,14 @@ impl Run<'_> {
     async fn send(&self, example: &Example, parameters: &BTreeMap<String, String>) -> crate::support::Reply {
         let path = fill(&example.path, parameters, &example.parameters, &self.client.config().subscription_id);
         let version = parameters.get("api-version").or_else(|| example.parameters.get("api-version")).cloned().unwrap_or_default();
-        let body = (!example.body.is_null()).then(|| in_this_subscription(&example.body, &self.client.config().subscription_id));
+        let mut body = (!example.body.is_null()).then(|| in_this_subscription(&example.body, &self.client.config().subscription_id));
+        // Some examples of a top-level type leave out the location every
+        // caller has to send.
+        if let Some(Value::Object(members)) = &mut body {
+            if parent_type(&example.kind).is_none() && !members.contains_key("location") {
+                members.insert("location".into(), json!("eastus"));
+            }
+        }
         if let Some(body) = &body {
             self.create_identities(body).await;
         }
@@ -141,7 +162,7 @@ impl Run<'_> {
             let path = format!("/subscriptions/{}/resourcegroups/{group}?api-version=2021-04-01", self.client.config().subscription_id);
             self.client.arm(Method::PUT, &path, Some(json!({"location": "eastus"}))).await;
         }
-        let Some(example) = self.examples.iter().find(|e| e.kind == kind) else {
+        let Some(example) = self.examples.iter().find(|e| e.kind.eq_ignore_ascii_case(kind)) else {
             return Ok(());
         };
         if !self.served.contains(&kind.to_ascii_lowercase()) {
@@ -239,5 +260,70 @@ async fn specification_examples() {
         }
     }
     println!("{passed} specification examples passed; {} known failures", listed_seen.len());
+    assert!(problems.is_empty(), "{} problem(s):\n{}", problems.len(), problems.join("\n"));
+}
+
+/// Every operation of every type served from its schema answers, starting
+/// from the type's own specification example: the resource can be read,
+/// listed, updated and deleted, and is gone afterwards. (This is also what
+/// reaches those operations for the check that every served operation is
+/// tested: nobody writes a test per configuration type.)
+#[tokio::test]
+async fn schema_served_types_answer_every_operation() {
+    use emulator_core::arm::OperationKind;
+
+    let examples = load();
+    let coverage = Client::new().emulator.coverage();
+    let served: BTreeSet<String> = coverage
+        .iter()
+        .filter(|c| (c.implemented || c.generic) && c.operation.method == "PUT")
+        .filter_map(|c| c.resource_type)
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let generic: BTreeSet<&str> = coverage.iter().filter(|c| c.generic).filter_map(|c| c.resource_type).collect();
+    let mut problems = Vec::new();
+    for kind in generic {
+        let client = Client::new();
+        let run = Run { client: &client, examples: &examples, served: &served };
+        // The first of the type's examples that can be created.
+        let mut created = None;
+        for example in examples.iter().filter(|e| e.kind.eq_ignore_ascii_case(kind)) {
+            if run.check(example).await.is_ok() {
+                created = Some(example);
+                break;
+            }
+        }
+        let Some(example) = created else {
+            problems.push(format!("{kind}: none of its examples can be created, so nothing shows it works"));
+            continue;
+        };
+        let subscription = &client.config().subscription_id;
+        let version = example.parameters.get("api-version").cloned().unwrap_or_default();
+        let mut operations: Vec<_> = coverage.iter().filter(|c| c.generic && c.resource_type == Some(kind)).collect();
+        // Deleting comes last.
+        operations.sort_by_key(|c| c.operation.kind == OperationKind::Delete);
+        for entry in operations {
+            let path = format!("{}?api-version={version}", fill(entry.operation.path, &example.parameters, &example.parameters, subscription));
+            let (method, body, expected): (Method, Option<Value>, &[u16]) = match entry.operation.kind {
+                OperationKind::Put => continue,
+                OperationKind::Get | OperationKind::List | OperationKind::ListInSubscription => (Method::GET, None, &[200]),
+                OperationKind::Head => (Method::HEAD, None, &[200, 204]),
+                OperationKind::Patch => (Method::PATCH, Some(json!({})), &[200, 202]),
+                OperationKind::Delete => (Method::DELETE, None, &[200, 202, 204]),
+                _ => continue,
+            };
+            let reply = client.arm(method.clone(), &path, body).await;
+            if !expected.contains(&reply.status.as_u16()) {
+                problems.push(format!("{kind}: {} ({method}) answered {} {}", entry.operation.id, reply.status, reply.text()));
+                continue;
+            }
+            if entry.operation.kind == OperationKind::Delete {
+                let after = client.arm(Method::GET, &path, None).await;
+                if after.status != StatusCode::NOT_FOUND {
+                    problems.push(format!("{kind}: still there after {} ({})", entry.operation.id, after.status));
+                }
+            }
+        }
+    }
     assert!(problems.is_empty(), "{} problem(s):\n{}", problems.len(), problems.join("\n"));
 }
