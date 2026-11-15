@@ -12,6 +12,12 @@ pub struct DataOperation {
     pub method: &'static str,
     /// The path template, with `{parameter}` segments.
     pub path: &'static str,
+    /// The operation's required query and header parameters, as
+    /// `("query" or "header", name, value)`. The value is the only one the
+    /// specification allows, such as `("query", "comp", "lease")`, which is
+    /// what tells operations on one path apart; it is empty where any value
+    /// is allowed.
+    pub fixed: &'static [(&'static str, &'static str, &'static str)],
 }
 
 /// A data plane's operations, generated from its specification by

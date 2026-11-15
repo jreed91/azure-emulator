@@ -95,63 +95,197 @@ impl Emulator {
     /// table, and whether this emulator answers it.
     ///
     /// Data planes are hand-written, so nothing registers their operations.
-    /// Each one is instead sent, with placeholder names and an empty body, to a
-    /// scratch emulator (same configuration, its own state) holding the
-    /// resource the data plane belongs to: it counts as implemented unless
-    /// the answer is `501`.
+    /// Each one is instead sent to a scratch emulator (same configuration, its
+    /// own state) holding resources named `coverage` for it to address, with
+    /// the query and header values the specification says select it,
+    /// `coverage` for every other required one, and an empty body. It counts
+    /// as implemented unless the answer is `501`. This measures routing, not
+    /// correctness: two operations that differ only in an optional parameter
+    /// get the same answer.
     pub async fn data_plane_coverage(&self) -> Result<Vec<DataPlaneCoverage>, String> {
         use tower::ServiceExt;
+        type Headers = Vec<(&'static str, String)>;
+        // A request a probe sends: method, path and query, headers, body.
+        type Call = (&'static str, String, Headers, &'static str);
+        struct Probe {
+            plane: &'static emulator_core::dataplane::DataPlane,
+            /// The data plane's endpoint for the resource named `coverage`.
+            endpoint: String,
+            token: String,
+            /// Sent with every request, the version among them.
+            headers: Headers,
+            /// The version as a query parameter, where the data plane takes it there.
+            version_query: bool,
+            /// Sent with every request that has a body.
+            body: &'static str,
+            /// Requests that put back what an earlier probe may have removed.
+            setup: Vec<Call>,
+        }
+
         let scratch = Emulator::new(self.config().clone());
         let config = scratch.config();
-        let management = format!("{}:{}", config.host, config.port);
-        let arm_token = emulator_core::auth::issue_token(config, "https://management.azure.com/", emulator_core::auth::PROVISIONING_CLIENT);
-        let send = |method: &str, host: &str, path: String, token: &str, body: Option<String>| {
-            let request = Request::builder()
-                .method(method)
-                .uri(path)
-                .header("host", host)
-                .header("authorization", format!("Bearer {token}"))
-                .header("content-type", "application/json")
-                .body(body.map(Body::from).unwrap_or_else(Body::empty));
+        let send = |host: String, token: &str, call: Call| {
+            let (method, path, headers, body) = call;
+            let mut request = Request::builder().method(method).uri(path).header("host", host).header("authorization", format!("Bearer {token}"));
+            for (name, value) in headers {
+                request = request.header(name, value);
+            }
+            let request = request.body(if body.is_empty() { Body::empty() } else { Body::from(body) });
             let router = scratch.router();
             async move {
-                let request = request.map_err(|e| e.to_string())?;
                 // The router cannot fail: its error type has no values.
-                match router.oneshot(request).await {
+                match router.oneshot(request.map_err(|e| e.to_string())?).await {
                     Ok(response) => Ok::<_, String>(response.status()),
                     Err(never) => match never {},
                 }
             }
         };
+        let host_of = |endpoint: &str| endpoint.split("://").nth(1).unwrap_or(endpoint).trim_end_matches('/').to_string();
 
-        // Key Vault: a vault to address the operations to.
+        // The resources the data planes belong to.
+        let management = format!("{}:{}", config.host, config.port);
+        let arm_token = emulator_core::auth::issue_token(config, "https://management.azure.com/", emulator_core::auth::PROVISIONING_CLIENT);
         let group = format!("/subscriptions/{}/resourceGroups/coverage", config.subscription_id);
         let vault = serde_json::json!({
             "location": "eastus",
             "properties": {"tenantId": config.tenant_id, "sku": {"family": "A", "name": "standard"}, "accessPolicies": []},
         });
-        let setup = [
+        let account = serde_json::json!({"location": "eastus", "kind": "StorageV2", "sku": {"name": "Standard_LRS"}});
+        let resources = [
             (format!("{group}?api-version=2021-04-01"), r#"{"location":"eastus"}"#.to_string()),
             (format!("{group}/providers/Microsoft.KeyVault/vaults/coverage?api-version=2023-07-01"), vault.to_string()),
+            (format!("{group}/providers/Microsoft.Storage/storageAccounts/coverage?api-version=2023-05-01"), account.to_string()),
         ];
-        for (path, body) in setup {
-            let status = send("PUT", &management, path.clone(), &arm_token, Some(body)).await?;
+        for (path, body) in resources {
+            let body: &'static str = body.leak();
+            let json = vec![("content-type", "application/json".to_string())];
+            let status = send(management.clone(), &arm_token, ("PUT", path.clone(), json, body)).await?;
             if !status.is_success() {
                 return Err(format!("PUT {path} answered {status}"));
             }
         }
-        let plane = &service_keyvault::data_scaffold::DATA_PLANE;
-        let vault_uri = config.vault_uri("coverage");
-        let host = vault_uri.split("://").nth(1).unwrap_or(&vault_uri).trim_end_matches('/').to_string();
-        let token = emulator_core::auth::issue_token(config, &config.vault_resource(), emulator_core::auth::PROVISIONING_CLIENT);
+
+        let vault_token = emulator_core::auth::issue_token(config, &config.vault_resource(), emulator_core::auth::PROVISIONING_CLIENT);
+        let storage_token = emulator_core::auth::issue_token(config, "https://storage.azure.com", emulator_core::auth::PROVISIONING_CLIENT);
+        let json = || vec![("content-type", "application/json".to_string())];
+        let storage = |plane: &'static emulator_core::dataplane::DataPlane, extra: Headers| -> Headers {
+            let now = httpdate::fmt_http_date(std::time::SystemTime::now());
+            [vec![("x-ms-version", plane.api_version.to_string()), ("x-ms-date", now)], extra].concat()
+        };
+        let blob = &service_storage::blob_scaffold::DATA_PLANE;
+        let queue = &service_storage::queue_scaffold::DATA_PLANE;
+        let files = &service_storage::files_scaffold::DATA_PLANE;
+        let table = &service_storage::table_scaffold::DATA_PLANE;
+        let file_intent = || vec![("x-ms-file-request-intent", "backup".to_string())];
+        let probes = [
+            Probe {
+                plane: &service_keyvault::data_scaffold::DATA_PLANE,
+                endpoint: config.vault_uri("coverage"),
+                token: vault_token,
+                headers: json(),
+                version_query: true,
+                body: "{}",
+                setup: Vec::new(),
+            },
+            Probe {
+                plane: blob,
+                endpoint: config.blob_endpoint("coverage"),
+                token: storage_token.clone(),
+                headers: storage(blob, Vec::new()),
+                version_query: false,
+                body: "",
+                setup: vec![
+                    ("PUT", "/coverage?restype=container".into(), Vec::new(), ""),
+                    ("PUT", "/coverage/coverage".into(), vec![("x-ms-blob-type", "BlockBlob".into())], "coverage"),
+                ],
+            },
+            Probe {
+                plane: queue,
+                endpoint: config.queue_endpoint("coverage"),
+                token: storage_token.clone(),
+                headers: storage(queue, Vec::new()),
+                version_query: false,
+                body: "",
+                setup: vec![("PUT", "/coverage".into(), Vec::new(), "")],
+            },
+            Probe {
+                plane: files,
+                endpoint: config.file_endpoint("coverage"),
+                token: storage_token.clone(),
+                headers: storage(files, file_intent()),
+                version_query: false,
+                body: "",
+                setup: vec![
+                    ("PUT", "/coverage?restype=share".into(), Vec::new(), ""),
+                    ("PUT", "/coverage/coverage?restype=directory".into(), Vec::new(), ""),
+                    (
+                        "PUT",
+                        "/coverage/coverage/coverage".into(),
+                        vec![("x-ms-type", "file".into()), ("x-ms-content-length", "8".into())],
+                        "",
+                    ),
+                ],
+            },
+            Probe {
+                plane: table,
+                endpoint: config.table_endpoint("coverage"),
+                token: storage_token,
+                headers: storage(table, json()),
+                version_query: false,
+                body: "{}",
+                setup: vec![("POST", "/Tables".into(), Vec::new(), r#"{"TableName":"coverage"}"#)],
+            },
+        ];
+
         let mut coverage = Vec::new();
-        for operation in plane.operations {
-            // Every `{parameter}` becomes a name that is valid anywhere.
-            let path: Vec<&str> = operation.path.split('/').map(|s| if s.starts_with('{') { "coverage" } else { s }).collect();
-            let path = format!("{}?api-version={}", path.join("/"), plane.api_version);
-            let body = matches!(operation.method, "PUT" | "POST" | "PATCH").then(|| "{}".to_string());
-            let status = send(operation.method, &host, path, &token, body).await?;
-            coverage.push(DataPlaneCoverage { plane: plane.name, operation, implemented: status != http::StatusCode::NOT_IMPLEMENTED });
+        for probe in &probes {
+            let host = host_of(&probe.endpoint);
+            for operation in probe.plane.operations {
+                for (method, path, extra, body) in &probe.setup {
+                    let headers = [probe.headers.clone(), extra.clone()].concat();
+                    send(host.clone(), &probe.token, (method, path.clone(), headers, body)).await?;
+                }
+                // Every `{parameter}` becomes a name that is valid anywhere.
+                let mut path = String::new();
+                let mut in_parameter = false;
+                for c in operation.path.chars() {
+                    match c {
+                        '{' => {
+                            in_parameter = true;
+                            path.push_str("coverage");
+                        }
+                        '}' => in_parameter = false,
+                        c if !in_parameter => path.push(c),
+                        _ => {}
+                    }
+                }
+                let value = |value: &'static str| if value.is_empty() { "coverage" } else { value };
+                let mut query: Vec<String> = Vec::new();
+                if probe.version_query {
+                    query.push(format!("api-version={}", probe.plane.api_version));
+                }
+                let mut headers = probe.headers.clone();
+                for (place, name, fixed) in operation.fixed {
+                    match *place {
+                        "query" => query.push(format!("{name}={}", value(fixed))),
+                        _ => headers.push((name, value(fixed).to_string())),
+                    }
+                }
+                if !query.is_empty() {
+                    path = format!("{path}?{}", query.join("&"));
+                }
+                let body = if matches!(operation.method, "PUT" | "POST" | "PATCH") { probe.body } else { "" };
+                let status = send(host.clone(), &probe.token, (operation.method, path.clone(), headers, body)).await?;
+                // A refused token would make everything look implemented.
+                if matches!(status, http::StatusCode::UNAUTHORIZED | http::StatusCode::FORBIDDEN) {
+                    return Err(format!("{}: {} {path} answered {status}", probe.plane.name, operation.method));
+                }
+                coverage.push(DataPlaneCoverage {
+                    plane: probe.plane.name,
+                    operation,
+                    implemented: status != http::StatusCode::NOT_IMPLEMENTED,
+                });
+            }
         }
         Ok(coverage)
     }

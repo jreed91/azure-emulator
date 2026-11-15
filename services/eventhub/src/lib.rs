@@ -27,5 +27,8 @@ pub fn register(registry: &mut ArmRegistry) {
     registry.register_type(hubs::EventHubs);
     registry.register_type(hubs::ConsumerGroups);
     registry.register_provider_action("Microsoft.EventHub/checkNameAvailability", Arc::new(namespaces::check_name_availability));
+    // Created only by Microsoft.Network, which the emulator does not model.
+    registry.register_type(emulator_core::arm::CreatedByNetwork("Microsoft.EventHub/namespaces/privateEndpointConnections"));
+    registry.register_type(emulator_core::arm::CreatedByNetwork("Microsoft.EventHub/namespaces/networkSecurityPerimeterConfigurations"));
     registry.register_scaffold(&scaffold::PROVIDER);
 }

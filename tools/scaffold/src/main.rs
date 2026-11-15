@@ -26,12 +26,14 @@ emulator-scaffold — generate a service's scaffold from its OpenAPI specificati
 
 USAGE:
     emulator-scaffold --namespace <Microsoft.X> --service <name> --spec <dir> [--repo <dir>]
-    emulator-scaffold data-plane --service <name> --name <NAME> --spec <dir>... [--repo <dir>]
+    emulator-scaffold data-plane --service <name> --name <NAME> --spec <dir>...
+                                 [--output <file.rs>] [--repo <dir>]
 
-With `data-plane`, writes services/<name>/src/data_scaffold.rs: the operations
-of a data plane, for `azure-emulator coverage` to report on. --name is what the
-data plane is called (\"Key Vault\"); each --spec is one version directory
-holding its OpenAPI documents (.../data-plane/Secrets/stable/7.6).
+With `data-plane`, writes services/<name>/src/data_scaffold.rs (or --output, for
+a crate with several data planes): the operations of a data plane, for
+`azure-emulator coverage` to report on. --name is what the data plane is called
+(\"Key Vault\"); each --spec is one version directory holding its OpenAPI
+documents (.../data-plane/Secrets/stable/7.6).
 
 OPTIONS:
     --namespace <NS>   Resource provider namespace, e.g. Microsoft.Storage
@@ -49,12 +51,14 @@ fn fail(message: impl std::fmt::Display) -> ! {
 /// `emulator-scaffold data-plane`: lists a data plane's operations.
 fn data_plane(mut args: impl Iterator<Item = String>) {
     let (mut service, mut name, mut spec_dirs) = (None, None, Vec::new());
+    let mut output = String::from("data_scaffold.rs");
     let mut repo = PathBuf::from(".");
     while let Some(arg) = args.next() {
         let mut value = || args.next().unwrap_or_else(|| fail(format!("{arg} needs a value")));
         match arg.as_str() {
             "--service" => service = Some(value()),
             "--name" => name = Some(value()),
+            "--output" => output = value(),
             "--spec" => spec_dirs.push(PathBuf::from(value())),
             "--repo" => repo = PathBuf::from(value()),
             other => fail(format!("unknown option '{other}'")),
@@ -65,7 +69,8 @@ fn data_plane(mut args: impl Iterator<Item = String>) {
     if spec_dirs.is_empty() {
         fail("--spec is required");
     }
-    // (path, method) -> operationId, so the listing is sorted and has no repeats.
+    // operationId -> (path, method, fixed parameters): sorted, and an
+    // operation two documents both describe is listed once.
     let mut operations = std::collections::BTreeMap::new();
     let mut api_version = String::new();
     for dir in &spec_dirs {
@@ -75,25 +80,77 @@ fn data_plane(mut args: impl Iterator<Item = String>) {
             .filter(|path| path.extension().is_some_and(|e| e == "json"))
             .collect();
         files.sort();
-        for file in files {
-            let text = std::fs::read_to_string(&file).unwrap_or_else(|e| fail(format!("reading {}: {e}", file.display())));
+        for file in &files {
+            // `generated_x.json` describes the same operations as `x.json`
+            // beside it, without the values that select them.
+            let twin = file.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_prefix("generated_")).map(|n| file.with_file_name(n));
+            if twin.is_some_and(|twin| files.contains(&twin)) {
+                continue;
+            }
+            let text = std::fs::read_to_string(file).unwrap_or_else(|e| fail(format!("reading {}: {e}", file.display())));
             let document: serde_json::Value =
                 serde_json::from_str(&text).unwrap_or_else(|e| fail(format!("{} is not JSON: {e}", file.display())));
-            let Some(paths) = document.get("paths").and_then(|p| p.as_object()).filter(|p| !p.is_empty()) else {
+            // `x-ms-paths` holds the paths that differ only in their query or headers.
+            let groups = ["paths", "x-ms-paths"].map(|key| document.get(key).and_then(|p| p.as_object()));
+            if groups.iter().flatten().all(|group| group.is_empty()) {
                 continue;
-            };
+            }
             if let Some(version) = document.pointer("/info/version").and_then(|v| v.as_str()) {
                 if api_version.as_str() < version {
                     api_version = version.to_string();
                 }
             }
-            for (path, methods) in paths {
+            // A required parameter with one allowed value, in the query or a header.
+            let fixed = |parameters: Option<&serde_json::Value>| -> Vec<(String, String, String)> {
+                let mut found = Vec::new();
+                for parameter in parameters.and_then(|p| p.as_array()).into_iter().flatten() {
+                    let parameter = match parameter.get("$ref").and_then(|r| r.as_str()).and_then(|r| r.strip_prefix('#')) {
+                        Some(pointer) => document.pointer(pointer).unwrap_or(parameter),
+                        None => parameter,
+                    };
+                    let place = parameter.get("in").and_then(|v| v.as_str()).unwrap_or_default();
+                    let values = parameter.get("enum").and_then(|v| v.as_array());
+                    let required = parameter.get("required").and_then(|v| v.as_bool()) == Some(true);
+                    let name = parameter.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+                    // The version and the length are the sender's to set.
+                    let senders = ["api-version", "x-ms-version", "content-length"].iter().any(|n| name.eq_ignore_ascii_case(n));
+                    if required && matches!(place, "query" | "header") && !senders {
+                        // The one value the specification allows; none (any
+                        // value will do) where it allows several or does not say.
+                        let value = match values.map(Vec::as_slice) {
+                            Some([value]) => value.as_str().unwrap_or_default(),
+                            _ => "",
+                        };
+                        found.push((place.to_string(), name.to_string(), value.to_string()));
+                    }
+                }
+                found
+            };
+            for (path, methods) in groups.into_iter().flatten().flatten() {
+                let shared = fixed(methods.get("parameters"));
                 for (method, operation) in methods.as_object().into_iter().flatten() {
                     if !["get", "put", "post", "patch", "delete", "head"].contains(&method.as_str()) {
                         continue;
                     }
                     let id = operation.get("operationId").and_then(|v| v.as_str()).unwrap_or_default();
-                    operations.insert((path.clone(), method.to_ascii_uppercase()), id.to_string());
+                    let mut selects = shared.clone();
+                    selects.extend(fixed(operation.get("parameters")));
+                    // An `x-ms-paths` key may carry the query that selects the
+                    // operation (`?comp=acl`); other words there only tell keys apart.
+                    let (path, query) = path.split_once('?').unwrap_or((path, ""));
+                    for (name, value) in query.split('&').filter_map(|pair| pair.split_once('=')) {
+                        if name != "_overload" {
+                            selects.push(("query".to_string(), name.to_string(), value.to_string()));
+                        }
+                    }
+                    selects.sort();
+                    selects.dedup();
+                    // A value from the key stands in for the same parameter without one.
+                    let valued: Vec<(String, String)> =
+                        selects.iter().filter(|s| !s.2.is_empty()).map(|s| (s.0.clone(), s.1.clone())).collect();
+                    selects.retain(|s| !s.2.is_empty() || !valued.contains(&(s.0.clone(), s.1.clone())));
+                    let path = if path.is_empty() { "/" } else { path }.to_string();
+                    operations.insert(id.to_string(), (path, method.to_ascii_uppercase(), selects));
                 }
             }
         }
@@ -105,16 +162,17 @@ fn data_plane(mut args: impl Iterator<Item = String>) {
         "// @generated by emulator-scaffold from the data plane's OpenAPI specification.\n// Do not edit: rerun the generator instead. See tools/scaffold.\n\nuse emulator_core::dataplane::{DataOperation as Op, DataPlane};\n\n#[rustfmt::skip]\npub static DATA_PLANE: DataPlane = DataPlane {\n",
     );
     source.push_str(&format!("    name: {name:?},\n    api_version: {api_version:?},\n    operations: &[\n"));
-    for ((path, method), id) in &operations {
-        source.push_str(&format!("        Op {{ id: {id:?}, method: {method:?}, path: {path:?} }},\n"));
+    for (id, (path, method, fixed)) in &operations {
+        source.push_str(&format!("        Op {{ id: {id:?}, method: {method:?}, path: {path:?}, fixed: &{fixed:?} }},\n"));
     }
     source.push_str("    ],\n};\n");
-    let file = repo.join("services").join(&service).join("src/data_scaffold.rs");
+    let file = repo.join("services").join(&service).join("src").join(&output);
     std::fs::write(&file, source).unwrap_or_else(|e| fail(format!("writing {}: {e}", file.display())));
     println!("{name}: {} operations, api-version {api_version}", operations.len());
     println!("  wrote {}", file.display());
     let entry = serde_json::json!({"dataPlane": name});
-    match record_source(&repo, &format!("{service}-data-plane"), entry, &spec_dirs) {
+    let key = format!("{service}-{}", output.trim_end_matches(".rs").replace('_', "-"));
+    match record_source(&repo, &key, entry, &spec_dirs) {
         Ok(commit) => println!("  recorded specification commit {commit} in {SOURCES}"),
         Err(e) => eprintln!("warning: {SOURCES} not updated: {e}"),
     }

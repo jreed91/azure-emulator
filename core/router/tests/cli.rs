@@ -48,6 +48,9 @@ fn coverage_summarises_and_lists_operations() {
     let (done, all) = key_vault.split_whitespace().last().and_then(|cell| cell.split_once('/')).expect("counts");
     let (done, all): (u32, u32) = (done.parse().unwrap(), all.parse().unwrap());
     assert!(done > 0 && done < all, "{key_vault}");
+    for plane in ["Blob Storage", "Queue Storage", "Azure Files", "Table Storage"] {
+        assert!(lines.iter().any(|l| l.starts_with(plane)), "{plane} in {out}");
+    }
     // "implemented/all" for types and for operations.
     let counts: Vec<(u32, u32)> = total
         .split_whitespace()
@@ -64,6 +67,9 @@ fn coverage_summarises_and_lists_operations() {
     assert!(out.lines().any(|l| l.starts_with("generic")), "a schema-served operation is listed");
     assert!(out.lines().any(|l| l.starts_with("data ok") && l.contains("/secrets/{secret-name}")), "an implemented data-plane operation");
     assert!(out.lines().any(|l| l.starts_with("data 501") && l.contains("BackupSecret")), "an unimplemented data-plane operation");
+    // Operations on one path are told apart by what the specification fixes.
+    assert!(out.lines().any(|l| l.starts_with("data ok") && l.contains("Blob_AcquireLease")), "{out}");
+    assert!(out.lines().any(|l| l.starts_with("data 501") && l.contains("Blob_SetTags")), "{out}");
 
     let refused = run(&["coverage", "--everything"], &[]);
     assert_eq!(refused.status.code(), Some(2));

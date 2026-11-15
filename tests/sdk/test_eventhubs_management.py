@@ -105,3 +105,21 @@ def test_network_rule_set(eventhub, group, namespace):
     assert (updated.default_action, [r.ip_mask for r in updated.ip_rules]) == ("Deny", ["10.0.0.0/24"])
     assert eventhub.namespaces.get_network_rule_set(group, namespace.name).default_action == "Deny"
     assert [r.name for r in eventhub.namespaces.list_network_rule_set(group, namespace.name).value] == ["default"]
+
+
+def test_private_endpoint_connections_and_perimeters_are_absent(emulator, arm_request, group, namespace):
+    """Microsoft.Network creates these; without it there are none."""
+    base = f"/subscriptions/{emulator.subscription}/resourceGroups/{group}/providers/Microsoft.EventHub/namespaces/{namespace.name}"
+    connections = f"{base}/privateEndpointConnections"
+    listed = arm_request("GET", connections, "2026-01-01")
+    assert listed.status_code == 200 and listed.json()["value"] == [], listed.text()
+    assert arm_request("GET", f"{connections}/connection", "2026-01-01").status_code == 404
+    body = {"properties": {"privateLinkServiceConnectionState": {"status": "Approved"}}}
+    assert arm_request("PUT", f"{connections}/connection", "2026-01-01", body).status_code == 404
+    assert arm_request("DELETE", f"{connections}/connection", "2026-01-01").status_code in (204, 404)
+
+    perimeters = f"{base}/networkSecurityPerimeterConfigurations"
+    listed = arm_request("GET", perimeters, "2026-01-01")
+    assert listed.status_code == 200 and listed.json()["value"] == [], listed.text()
+    assert arm_request("GET", f"{perimeters}/association", "2026-01-01").status_code == 404
+    assert arm_request("POST", f"{perimeters}/association/reconcile", "2026-01-01", {}).status_code == 404
