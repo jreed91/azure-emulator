@@ -19,7 +19,7 @@
 
 pub mod broker;
 mod entities;
-mod geo;
+pub mod geo;
 mod migration;
 pub mod namespaces;
 pub mod scaffold;

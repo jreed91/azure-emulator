@@ -66,7 +66,7 @@ fn coverage_summarises_and_lists_operations() {
     assert!(out.lines().any(|l| l.starts_with("501")), "an unimplemented operation is listed");
     assert!(out.lines().any(|l| l.starts_with("generic")), "a schema-served operation is listed");
     assert!(out.lines().any(|l| l.starts_with("data ok") && l.contains("/secrets/{secret-name}")), "an implemented data-plane operation");
-    assert!(out.lines().any(|l| l.starts_with("data 501") && l.contains("BackupSecret")), "an unimplemented data-plane operation");
+    assert!(out.lines().any(|l| l.starts_with("data 501") && l.contains("BackupStorageAccount")), "an unimplemented data-plane operation");
     // Operations on one path are told apart by what the specification fixes.
     assert!(out.lines().any(|l| l.starts_with("data ok") && l.contains("Blob_AcquireLease")), "{out}");
     assert!(out.lines().any(|l| l.starts_with("data 501") && l.contains("Blob_SetTags")), "{out}");

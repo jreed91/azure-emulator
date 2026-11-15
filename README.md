@@ -31,10 +31,10 @@ whether your own project is expected to work, see
 | `Microsoft.KeyVault` | Vaults: create, get, update, delete, list, `checkNameAvailability`; soft delete with list, get, recover and purge of deleted vaults; purge protection (irreversible once on), which refuses purging the vault and its deleted secrets, keys and certificates; access-policy updates; secrets through Resource Manager (the same store as the data plane); managed HSMs with soft delete, regions and name availability (no HSM data plane); keys through Resource Manager in vaults and managed HSMs, with real key material the vault's keys data plane uses |
 | `Microsoft.ManagedIdentity` | User-assigned identities and federated identity credentials; listing the resources that use an identity; reading any resource's system-assigned identity. Every resource's `identity` block is filled in: system-assigned identities get a principal id, and user-assigned identities are checked and given their principal and client ids |
 | `Microsoft.ServiceBus` | Namespaces, queues, topics, subscriptions, rules, authorization rules with `listKeys` and `regenerateKeys`, network rule sets, geo-disaster-recovery aliases with failover and break-pairing, legacy IP filter and virtual network rules, private link resources, Standard-to-Premium migration (start and revert; completion is not modeled), `checkNameAvailability`; messaging over AMQP 1.0 (see [Service Bus messaging](#service-bus-messaging)) |
-| `Microsoft.EventHub` | Namespaces (names shared with Service Bus), event hubs, consumer groups, authorization rules with `listKeys` and `regenerateKeys`, network rule sets, `checkNameAvailability`; events over AMQP (see [Event Hubs](#event-hubs)) |
+| `Microsoft.EventHub` | Namespaces (names shared with Service Bus), event hubs, consumer groups, authorization rules with `listKeys` and `regenerateKeys`, network rule sets, private link resources, geo-disaster-recovery aliases with failover, break-pairing and the alias's authorization rules and keys, `checkNameAvailability`; events over AMQP (see [Event Hubs](#event-hubs)) |
 | `Microsoft.DocumentDB` | Database accounts with `listKeys`, `readonlykeys`, `listConnectionStrings` and `regenerateKey`; SQL databases and containers (the same store as the data plane, reporting dedicated throughput under `options`); the Cosmos DB for NoSQL data plane (see [Cosmos DB](#cosmos-db)) |
 | `Microsoft.Network` | Served from the specification's schema, not modelled: virtual networks and subnets, network interfaces, security groups and rules, public addresses, route tables, load balancers, application gateways, private endpoints and the rest of what the provider's specification can create (122 resource types). Settings are checked against the schema, stored and returned, with references between resources kept as sent, so SDK calls, Bicep and Terraform configurations that only declare networking apply and read back. Nothing is allocated or connected; see [Known gaps](#known-gaps) |
-| Key Vault secrets | Set, get (latest or by version), update attributes, list, list versions, soft delete, get and list deleted, recover, purge |
+| Key Vault secrets | Set, get (latest or by version), update attributes, list, list versions, soft delete, get and list deleted, recover, purge, backup and restore (every version; the backup is the emulator's own format, so only the emulator restores it, and a certificate's secret is backed up with its certificate) |
 | Key Vault keys | RSA (2048, 3072, 4096) and EC (P-256, P-384, P-521, P-256K) keys, `-HSM` types in Premium vaults: create, import (JSON Web Key), get (latest or by version), update (operations, attributes, tags), list, list versions, rotate, rotation policy (stored; rotation is not automatic), backup and restore, soft delete with get and list deleted, recover and purge. Encrypt, decrypt, wrap and unwrap with `RSA1_5`, `RSA-OAEP` and `RSA-OAEP-256`; sign and verify with `RS256`–`RS512`, `PS256`–`PS512`, `ES256`, `ES384`, `ES512` and `ES256K` over a digest; random bytes. A key's permitted operations and `enabled` are enforced, and its `nbf` and `exp`: outside them it cannot encrypt, wrap or sign, but can still decrypt, unwrap and verify |
 | Key Vault certificates | Create with the `Self` issuer (signed by its own key) or the `Unknown` issuer (a CSR, completed by merging the CA's certificate); import PKCS#12 (encrypted or not) or PEM; get (latest or by version), update, list, list versions, policy, pending operation (get, cancel, delete), soft delete with get and list deleted, recover and purge, backup and restore, contacts and issuers. Each version comes with its key (RSA 2048–4096, or EC on P-256 or P-384; imported certificates may also have EC keys on P-521 or P-256K) and a secret holding the key and certificates as PKCS#12 or PEM, under the same version |
 
@@ -44,18 +44,18 @@ until someone implements it. `azure-emulator coverage` prints the current score:
 ```
 Provider                           Types   Operations   Generic
 Microsoft.DocumentDB                5/98       25/387       138
-Microsoft.EventHub                  8/22        37/91        28
+Microsoft.EventHub                 11/22        48/91        28
 Microsoft.KeyVault                 16/16        50/51         0
 Microsoft.ManagedIdentity            2/2        12/14         0
 Microsoft.Network                  0/179        0/856       586
 Microsoft.ServiceBus               19/21        83/91         0
 Microsoft.Storage                  19/32       94/153        30
-Total                             69/370     301/1643       782
+Total                             72/370     312/1643       782
 
 Data plane                                 Operations
 Azure Files                                     26/51
 Blob Storage                                    48/71
-Key Vault                                       60/84
+Key Vault                                       62/84
 Queue Storage                                   15/17
 Table Storage                                   13/14
 ```
@@ -144,6 +144,9 @@ picture:
   partition key maps to a partition by the emulator's own hash, so the same
   key may land on a different partition number than on Azure (it always lands
   on the same one here).
+- Service Bus and Event Hubs geo-disaster-recovery aliases are control-plane
+  state only: pairing records the two roles, but no entities or metadata are
+  replicated to the secondary namespace.
 - Cosmos DB serves the NoSQL API only (no MongoDB, Cassandra, Gremlin or Table
   data planes), with one region and one partition key range per container.
   Request charges are a flat 1 RU, consistency levels are accepted but every
@@ -182,8 +185,8 @@ picture:
   issuer can be configured but not used), certificate auto-renewal, the
   managed HSM data plane (and with it symmetric keys and AES algorithms),
   automatic rotation on a key rotation policy's schedule, key release and
-  attestation, secret backup and restore, managed storage accounts, private
-  endpoints, and listing pages. Purge protection blocks purges, but deleted
+  attestation, managed storage accounts, private endpoints, and listing
+  pages. Purge protection blocks purges, but deleted
   items are not purged automatically when their retention ends.
 - Some error codes and messages are best-effort and have not been compared with
   real Azure; the code marks the ones known to be unverified.

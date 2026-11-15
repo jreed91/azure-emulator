@@ -1,8 +1,8 @@
 //! The Key Vault secrets data plane.
 //!
 //! Implemented: set, get (latest and by version), update attributes, list, list
-//! versions, delete (soft), get/list deleted, recover and purge. Listings return
-//! every item in one page.
+//! versions, delete (soft), get/list deleted, recover, purge, backup and
+//! restore. Listings return every item in one page.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -20,6 +20,8 @@ use crate::KeyVaultState;
 
 /// Days a deleted secret stays recoverable.
 const RECOVERABLE_DAYS: i64 = 90;
+/// What a backup blob starts with, so a restore can tell one from noise.
+const BACKUP_MARKER: &str = "azure-emulator-secret-backup-v1";
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Vault {
@@ -458,6 +460,60 @@ impl SecretRequest<'_> {
         })
     }
 
+    /// Backup Secret: every version, values included, in one opaque value. The
+    /// blob is the emulator's own format; only this emulator can restore it.
+    fn backup(&self, name: &str) -> Result<Value, ArmError> {
+        self.with_vault(|vault| {
+            let secret = vault.secrets.get(&name.to_ascii_lowercase()).ok_or_else(|| not_found(name))?;
+            if secret.versions.iter().any(|v| v.kid.is_some()) {
+                // Unverified against Azure: the status, code and message for
+                // backing up a certificate's secret; Backup Certificate is the
+                // way to back one up.
+                return Err(ArmError::new(
+                    StatusCode::FORBIDDEN,
+                    "Forbidden",
+                    format!("Operation backup is not allowed on a managed secret: {name}. Back up the certificate instead."),
+                ));
+            }
+            let blob = json!({"format": BACKUP_MARKER, "secret": secret});
+            Ok(json!({"value": crate::crypto::encode(blob.to_string().as_bytes())}))
+        })
+    }
+
+    /// Restore Secret: the secret a backup holds, under its name, versions and ids.
+    fn restore(&self) -> Result<Value, ArmError> {
+        let malformed = || ArmError::bad_request("BadParameter", "Backup blob contains invalid or corrupt version.");
+        let secret: Secret = self
+            .body
+            .get("value")
+            .and_then(Value::as_str)
+            .and_then(|text| crate::crypto::unb64(text).ok())
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .filter(|blob| blob.get("format").and_then(Value::as_str) == Some(BACKUP_MARKER))
+            .and_then(|mut blob| serde_json::from_value(blob.get_mut("secret")?.take()).ok())
+            .filter(|secret: &Secret| is_valid_secret_name(&secret.name) && !secret.versions.is_empty())
+            .ok_or_else(malformed)?;
+        self.with_vault(|vault| {
+            let key = secret.name.to_ascii_lowercase();
+            let name = &secret.name;
+            // Unverified against Azure: the code and message of both conflicts,
+            // modelled on Restore Key's.
+            if vault.secrets.contains_key(&key) {
+                return Err(ArmError::conflict("Conflict", format!("Secret {name} already exists. Restore is not allowed over an existing secret.")));
+            }
+            if vault.deleted.contains_key(&key) {
+                return Err(ArmError::conflict(
+                    "Conflict",
+                    format!("Secret {name} is currently in a deleted but recoverable state, and its name cannot be reused; in this state, the secret can only be recovered or purged."),
+                ));
+            }
+            // Unverified against Azure: whether the restored bundle carries the value.
+            let body = self.bundle(name, secret.versions.last().expect("checked above"), true, false);
+            vault.secrets.insert(key, secret);
+            Ok(body)
+        })
+    }
+
     fn recover(&self, name: &str) -> Result<Value, ArmError> {
         self.with_vault(|vault| {
             let key = name.to_ascii_lowercase();
@@ -517,6 +573,12 @@ fn permission_for(method: &Method, collection: &str, rest: &[&str]) -> Option<Ne
         ("deletedsecrets", [] | [_], "GET") => needed(READ_METADATA, "list"),
         ("deletedsecrets", [_], "DELETE") => needed("Microsoft.KeyVault/vaults/secrets/purge/action", "purge"),
         ("deletedsecrets", [_, "recover"], "POST") => needed("Microsoft.KeyVault/vaults/secrets/recover/action", "recover"),
+        ("secrets", [name], "POST") if name.eq_ignore_ascii_case("restore") => {
+            needed("Microsoft.KeyVault/vaults/secrets/restore/action", "restore")
+        }
+        ("secrets", [_, op], "POST") if op.eq_ignore_ascii_case("backup") => {
+            needed("Microsoft.KeyVault/vaults/secrets/backup/action", "backup")
+        }
         _ => None,
     }
 }
@@ -717,6 +779,7 @@ async fn serve(
     };
     let result = match (collection.as_str(), rest.as_slice()) {
         ("secrets", []) if method == Method::GET => request.list(),
+        ("secrets", [name]) if method == Method::POST && name.eq_ignore_ascii_case("restore") => request.restore(),
         ("secrets", [name]) => match method.as_str() {
             "PUT" => request.set(name),
             "GET" => request.get(name, None),
@@ -736,6 +799,7 @@ async fn serve(
                 .map_err(fail);
         }
         ("deletedsecrets", [name, "recover"]) if method == Method::POST => request.recover(name),
+        ("secrets", [name, op]) if method == Method::POST && op.eq_ignore_ascii_case("backup") => request.backup(name),
         _ => Err(ArmError::not_implemented("this Key Vault operation")),
     };
     result

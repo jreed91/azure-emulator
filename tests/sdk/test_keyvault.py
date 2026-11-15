@@ -35,6 +35,42 @@ def test_secret_lifecycle(credential, vault):
         secrets.get_deleted_secret("api-key")
 
 
+@pytest.mark.live
+def test_secret_backup_and_restore(credential, vault):
+    secrets = SecretClient(vault.properties.vault_uri, credential)
+    first = secrets.set_secret("portable", "v1", content_type="text/plain")
+    second = secrets.set_secret("portable", "v2", tags={"env": "test"})
+    backup = secrets.backup_secret("portable")
+    assert isinstance(backup, bytes) and backup
+
+    with pytest.raises(HttpResponseError) as conflict:
+        secrets.restore_secret_backup(backup)
+    assert conflict.value.status_code == 409, "a live secret's name is taken"
+    secrets.begin_delete_secret("portable").wait()
+    with pytest.raises(HttpResponseError) as conflict:
+        secrets.restore_secret_backup(backup)
+    assert conflict.value.status_code == 409, "a deleted secret's name is still taken"
+    secrets.purge_deleted_secret("portable")
+    with pytest.raises(ResourceNotFoundError):
+        secrets.get_secret("portable")
+
+    restored = secrets.restore_secret_backup(backup)
+    assert (restored.name, restored.version, restored.id) == ("portable", second.properties.version, second.id)
+    assert restored.tags == {"env": "test"}
+    current = secrets.get_secret("portable")
+    assert (current.value, current.properties.version) == ("v2", second.properties.version)
+    older = secrets.get_secret("portable", first.properties.version)
+    assert (older.value, older.properties.content_type) == ("v1", "text/plain")
+    versions = {v.version for v in secrets.list_properties_of_secret_versions("portable")}
+    assert versions == {first.properties.version, second.properties.version}
+
+    with pytest.raises(ResourceNotFoundError):
+        secrets.backup_secret("never-created")
+    with pytest.raises(HttpResponseError) as corrupt:
+        secrets.restore_secret_backup(b"not a backup")
+    assert corrupt.value.status_code == 400
+
+
 def test_access_policy_update(emulator, keyvault, group, vault):
     policy = {"tenantId": emulator.tenant, "objectId": "00000000-0000-0000-0000-000000000001", "permissions": {"secrets": ["get"]}}
     keyvault.vaults.update_access_policy(group, vault.name, "add", {"properties": {"accessPolicies": [policy]}})
