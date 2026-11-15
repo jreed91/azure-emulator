@@ -2,6 +2,7 @@
 name = "service-servicebus"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 socket2 = { workspace = true }

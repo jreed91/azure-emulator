@@ -859,3 +859,13 @@ writes a browsable report to `target/coverage/llvm-cov/html`. It builds in
 `target/coverage`, apart from the normal build. It needs
 [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) and the Python
 suite's requirements (`PYTHON` picks the interpreter).
+
+## License
+
+Licensed under either of the [Apache License, Version 2.0](LICENSE-APACHE) or
+the [MIT license](LICENSE-MIT), at your option. `vendor/fe2o3-amqp/` keeps its
+own license (see `vendor/fe2o3-amqp/LICENSE-MIT`).
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this project by you, as defined in the Apache-2.0 license,
+shall be dual licensed as above, without any additional terms or conditions.

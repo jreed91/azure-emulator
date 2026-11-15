@@ -2,6 +2,7 @@
 name = "service-entra"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 emulator-core = { workspace = true }
