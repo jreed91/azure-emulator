@@ -1,0 +1,19 @@
+Issue-Kind: known-gap
+Issue-Service: tests/sdk/test_blob_gaps.py
+Issue-Key: sdk/test_blob_gaps.py::test_blob_versions
+
+# Blob Storage: blob versions are not kept
+
+The test `test_blob_versions` in `tests/sdk/test_blob_gaps.py` asserts how Azure behaves and fails against the emulator. It is marked as a known gap, so it runs as a strict expected failure and counts against the Blob Storage fidelity score.
+
+## Where to work
+
+- Read the test for the exact behaviour expected, then implement it in the service's crate.
+- Never weaken the assertion to make it pass.
+- Follow `AGENTS.md`: never fabricate a result, never panic in a handler, and add a Python, JavaScript, Terraform or CLI test that reaches each operation you implement.
+
+## Done when
+
+- the test passes with its known-gap marker removed (the suite fails while a passing test still has it);
+- README "Known gaps" no longer lists the difference;
+- `python tools/issues/generate.py` moves this file to `issues/things-that-now-work/`.

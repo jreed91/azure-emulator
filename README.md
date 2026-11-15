@@ -107,6 +107,14 @@ resources in that subscription.
 
 ### Known gaps
 
+Each missing piece also has a file of its own under
+[`issues/things-that-do-not-work/`](issues/): every resource type and operation
+that answers `501`, and every difference from Azure a test asserts, with where
+to work on it and when it is done. `tools/issues/generate.py` writes them from
+`azure-emulator coverage --json` and the `known_gap` tests, and moves a file to
+`issues/things-that-now-work/` once the emulator serves it. The broader
+picture:
+
 - Every other Azure service and resource type.
 - Types served from their schema (the `Generic` column of `coverage`; all of
   Microsoft.Network, and the configuration types of the other providers) only

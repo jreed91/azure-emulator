@@ -36,6 +36,7 @@ tests/sdk/, tests/sdk-js/   fidelity tests through the Python and JavaScript SDK
 tests/terraform/, tests/cli/  azurerm apply/plan/destroy; Azure CLI smoke test
 tests/fidelity/       per-service scores; services.json maps test files to services
 tests/operations/     check.py: every implemented operation is reached by a test
+tools/issues/         generate.py writes issues/: one file per thing not done yet
 ```
 
 ## Which files do I edit?
@@ -77,6 +78,7 @@ pip install -r tests/sdk/requirements.txt
 (cd tests/sdk && python -m pytest -n auto)    # Python SDK suite (needs the built binary)
 (cd tests/sdk-js && npm ci && npm test)       # JavaScript SDK suite
 python tests/fidelity/score.py --check        # every test file is in services.json
+python tools/issues/generate.py [--check]     # rewrite (or verify) issues/
 tests/fidelity/run.sh                         # scores into target/fidelity/
 
 tests/terraform/run.sh --hosts-line | sudo tee -a /etc/hosts && tests/terraform/run.sh
@@ -130,6 +132,13 @@ may be reported locally; add their traces to compare like for like.
   test that calls it, or an entry with a reason in
   `tests/operations/allowlist.txt` (read by `check.py`; the file does not exist
   until there is a first entry).
+- **`issues/` is generated.** It lists what answers `501` and what the
+  `known_gap` tests assert. After a change that implements an operation, adds
+  a provider, or adds or closes a known gap, run
+  `python tools/issues/generate.py` (it needs the built binary) and commit the
+  result; CI runs it with `--check`. To pick up work, take a file from
+  `issues/things-that-do-not-work/`: it names the crate, the operations and
+  what done means.
 - **Tests are independent.** SDK tests create their own resource group and
   uniquely named resources; pytest workers run in parallel, each with its own
   emulator.

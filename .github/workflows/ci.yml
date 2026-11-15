@@ -43,6 +43,8 @@ jobs:
       - run: mkdir -p target/trace
       # Every test file counts towards a service's fidelity score.
       - run: python tests/fidelity/score.py --check
+      # issues/ lists exactly what the emulator and the tests report as missing.
+      - run: python tools/issues/generate.py --check
       - run: python -m pytest -n auto
         working-directory: tests/sdk
         env:
