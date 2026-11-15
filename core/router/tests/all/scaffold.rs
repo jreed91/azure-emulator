@@ -223,12 +223,14 @@ fn every_scaffold_records_its_specification_source() {
         .as_object()
         .expect("an object")
         .values()
-        .map(|source| {
+        .filter_map(|source| {
             let commit = source["commit"].as_str().expect("a commit");
             assert!(commit.len() == 40 && commit.chars().all(|c| c.is_ascii_hexdigit()), "{commit} is not a commit id");
             assert!(source["repository"].as_str().is_some_and(|r| r.starts_with("https://")), "no repository");
-            assert!(source["path"].as_str().is_some_and(|p| !p.is_empty()), "no path");
-            source["namespace"].as_str().expect("a namespace")
+            assert!(source.get("path").or(source.get("paths")).is_some(), "no path");
+            // A data plane's entry names it instead of a namespace.
+            assert!(source.get("namespace").or(source.get("dataPlane")).is_some(), "neither a provider nor a data plane");
+            source["namespace"].as_str()
         })
         .collect();
     let coverage = Client::new().emulator.coverage();

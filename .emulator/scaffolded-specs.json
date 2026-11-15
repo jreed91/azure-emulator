@@ -17,6 +17,17 @@
     "path": "specification/keyvault/resource-manager",
     "repository": "https://github.com/Azure/azure-rest-api-specs"
   },
+  "keyvault-data-plane": {
+    "commit": "6a42ee6dd4a2c09f9f03eba31cc13ab20e434353",
+    "dataPlane": "Key Vault",
+    "paths": [
+      "specification/keyvault/data-plane/Secrets/stable/7.6",
+      "specification/keyvault/data-plane/Keys/stable/7.6",
+      "specification/keyvault/data-plane/Certificates/stable/7.6",
+      "specification/keyvault/data-plane/SecretsStorage/stable/7.6"
+    ],
+    "repository": "https://github.com/Azure/azure-rest-api-specs"
+  },
   "managedidentity": {
     "commit": "6a42ee6dd4a2c09f9f03eba31cc13ab20e434353",
     "namespace": "Microsoft.ManagedIdentity",

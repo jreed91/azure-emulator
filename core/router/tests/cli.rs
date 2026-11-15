@@ -42,8 +42,12 @@ fn coverage_summarises_and_lists_operations() {
     for provider in ["Microsoft.Storage", "Microsoft.ServiceBus", "Microsoft.KeyVault", "Microsoft.DocumentDB"] {
         assert!(lines.iter().any(|l| l.starts_with(provider)), "{provider} in {out}");
     }
-    let total = lines.last().expect("a total line");
-    assert!(total.starts_with("Total"), "{out}");
+    let total = lines.iter().find(|l| l.starts_with("Total")).expect("a total line");
+    // Data planes follow, each with "implemented/all" operations.
+    let key_vault = lines.iter().find(|l| l.starts_with("Key Vault")).expect("a Key Vault data-plane line");
+    let (done, all) = key_vault.split_whitespace().last().and_then(|cell| cell.split_once('/')).expect("counts");
+    let (done, all): (u32, u32) = (done.parse().unwrap(), all.parse().unwrap());
+    assert!(done > 0 && done < all, "{key_vault}");
     // "implemented/all" for types and for operations.
     let counts: Vec<(u32, u32)> = total
         .split_whitespace()
@@ -58,6 +62,8 @@ fn coverage_summarises_and_lists_operations() {
     assert!(out.lines().any(|l| l.starts_with("ok ") && l.contains("PUT")), "an implemented operation is listed");
     assert!(out.lines().any(|l| l.starts_with("501")), "an unimplemented operation is listed");
     assert!(out.lines().any(|l| l.starts_with("generic")), "a schema-served operation is listed");
+    assert!(out.lines().any(|l| l.starts_with("data ok") && l.contains("/secrets/{secret-name}")), "an implemented data-plane operation");
+    assert!(out.lines().any(|l| l.starts_with("data 501") && l.contains("BackupSecret")), "an unimplemented data-plane operation");
 
     let refused = run(&["coverage", "--everything"], &[]);
     assert_eq!(refused.status.code(), Some(2));

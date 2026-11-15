@@ -161,7 +161,7 @@ jobs:
             echo
             tail -n +3 fidelity/scores.md
             echo
-            echo "<details><summary>Control-plane operation coverage (<code>azure-emulator coverage</code>)</summary>"
+            echo "<details><summary>Operation coverage (<code>azure-emulator coverage</code>)</summary>"
             echo
             echo '```'
             target/debug/azure-emulator coverage

@@ -5,6 +5,7 @@
 pub mod arm;
 pub mod auth;
 pub mod config;
+pub mod dataplane;
 pub mod engine;
 pub mod error;
 pub mod http_util;
