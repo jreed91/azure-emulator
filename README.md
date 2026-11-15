@@ -771,6 +771,12 @@ registers it in the router. Every run rewrites `src/scaffold.rs` and
 specification changes. From then on every type in the provider is routable and
 answers `501`.
 
+Each run also records the specification's repository, path and commit in
+`.emulator/scaffolded-specs.json` (the `--spec` directory must be in a git
+checkout without local changes), so a scaffold can be regenerated from exactly
+the input it was made from. To update a provider, check out a newer commit of
+the specifications and rerun the command.
+
 ### Implementing a resource type
 
 Resource Manager is implemented once in `core/emulator-core/src/arm.rs`:

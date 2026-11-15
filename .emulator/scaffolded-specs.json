@@ -1,0 +1,38 @@
+{
+  "cosmosdb": {
+    "commit": "6a42ee6dd4a2c09f9f03eba31cc13ab20e434353",
+    "namespace": "Microsoft.DocumentDB",
+    "path": "specification/cosmos-db/resource-manager",
+    "repository": "https://github.com/Azure/azure-rest-api-specs"
+  },
+  "eventhub": {
+    "commit": "6a42ee6dd4a2c09f9f03eba31cc13ab20e434353",
+    "namespace": "Microsoft.EventHub",
+    "path": "specification/eventhub/resource-manager",
+    "repository": "https://github.com/Azure/azure-rest-api-specs"
+  },
+  "keyvault": {
+    "commit": "6a42ee6dd4a2c09f9f03eba31cc13ab20e434353",
+    "namespace": "Microsoft.KeyVault",
+    "path": "specification/keyvault/resource-manager",
+    "repository": "https://github.com/Azure/azure-rest-api-specs"
+  },
+  "managedidentity": {
+    "commit": "6a42ee6dd4a2c09f9f03eba31cc13ab20e434353",
+    "namespace": "Microsoft.ManagedIdentity",
+    "path": "specification/msi/resource-manager",
+    "repository": "https://github.com/Azure/azure-rest-api-specs"
+  },
+  "servicebus": {
+    "commit": "6a42ee6dd4a2c09f9f03eba31cc13ab20e434353",
+    "namespace": "Microsoft.ServiceBus",
+    "path": "specification/servicebus/resource-manager",
+    "repository": "https://github.com/Azure/azure-rest-api-specs"
+  },
+  "storage": {
+    "commit": "6a42ee6dd4a2c09f9f03eba31cc13ab20e434353",
+    "namespace": "Microsoft.Storage",
+    "path": "specification/storage/resource-manager",
+    "repository": "https://github.com/Azure/azure-rest-api-specs"
+  }
+}

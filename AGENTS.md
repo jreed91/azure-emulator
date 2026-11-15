@@ -53,8 +53,10 @@ tests/operations/     check.py: every implemented operation is reached by a test
 | Record a spec example that cannot pass | `core/router/spec-examples-known-failures.txt`, with the reason |
 | Change user-visible behaviour | also README "What works today" and "Known gaps" |
 
-Never edit by hand: `services/*/src/scaffold.rs`, `services/*/CONTRACT.md` and
-`services/*/spec-examples.json` (rewritten by the scaffolder). Read `CONTRACT.md`
+Never edit by hand: `services/*/src/scaffold.rs`, `services/*/CONTRACT.md`,
+`services/*/spec-examples.json` and `.emulator/scaffolded-specs.json` (rewritten
+by the scaffolder; the last records the specification commit each scaffold came
+from). Read `CONTRACT.md`
 for what a type's name and body must look like.
 
 ## Commands
