@@ -2,10 +2,14 @@
 //! Manager and the Blob service data plane on `{account}.blob.core.<suffix>`.
 
 pub mod blob;
+pub mod blob_scaffold;
 mod persist;
 pub mod files;
+pub mod files_scaffold;
 pub mod queue;
+pub mod queue_scaffold;
 pub mod table;
+pub mod table_scaffold;
 mod management;
 mod protection;
 mod replication;

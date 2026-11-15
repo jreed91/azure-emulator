@@ -28,6 +28,17 @@
     ],
     "repository": "https://github.com/Azure/azure-rest-api-specs"
   },
+  "keyvault-data-scaffold": {
+    "commit": "6a42ee6dd4a2c09f9f03eba31cc13ab20e434353",
+    "dataPlane": "Key Vault",
+    "paths": [
+      "specification/keyvault/data-plane/Secrets/stable/7.6",
+      "specification/keyvault/data-plane/Keys/stable/7.6",
+      "specification/keyvault/data-plane/Certificates/stable/7.6",
+      "specification/keyvault/data-plane/SecretsStorage/stable/7.6"
+    ],
+    "repository": "https://github.com/Azure/azure-rest-api-specs"
+  },
   "managedidentity": {
     "commit": "6a42ee6dd4a2c09f9f03eba31cc13ab20e434353",
     "namespace": "Microsoft.ManagedIdentity",
@@ -44,6 +55,30 @@
     "commit": "6a42ee6dd4a2c09f9f03eba31cc13ab20e434353",
     "namespace": "Microsoft.Storage",
     "path": "specification/storage/resource-manager",
+    "repository": "https://github.com/Azure/azure-rest-api-specs"
+  },
+  "storage-blob-scaffold": {
+    "commit": "6a42ee6dd4a2c09f9f03eba31cc13ab20e434353",
+    "dataPlane": "Blob Storage",
+    "path": "specification/storage/data-plane/BlobStorage/stable/2026-12-06",
+    "repository": "https://github.com/Azure/azure-rest-api-specs"
+  },
+  "storage-files-scaffold": {
+    "commit": "6a42ee6dd4a2c09f9f03eba31cc13ab20e434353",
+    "dataPlane": "Azure Files",
+    "path": "specification/storage/data-plane/FileStorage/stable/2026-12-06",
+    "repository": "https://github.com/Azure/azure-rest-api-specs"
+  },
+  "storage-queue-scaffold": {
+    "commit": "6a42ee6dd4a2c09f9f03eba31cc13ab20e434353",
+    "dataPlane": "Queue Storage",
+    "path": "specification/storage/data-plane/QueueStorage/stable/2026-04-06",
+    "repository": "https://github.com/Azure/azure-rest-api-specs"
+  },
+  "storage-table-scaffold": {
+    "commit": "6a42ee6dd4a2c09f9f03eba31cc13ab20e434353",
+    "dataPlane": "Table Storage",
+    "path": "specification/cosmos-db/data-plane/Tables/stable/2019-02-02",
     "repository": "https://github.com/Azure/azure-rest-api-specs"
   }
 }

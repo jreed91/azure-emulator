@@ -51,7 +51,11 @@ Microsoft.Storage                  19/32       94/153        30
 Total                             69/191      301/787        30
 
 Data plane                                 Operations
+Azure Files                                     26/51
+Blob Storage                                    48/71
 Key Vault                                       60/84
+Queue Storage                                   15/17
+Table Storage                                   13/14
 ```
 
 Private endpoint connections and network security perimeter configurations
@@ -64,12 +68,15 @@ specification's schema alone (see *Serving a type from its schema* below); they
 are not in the implemented count.
 
 The provider rows count control-plane (Resource Manager) operations. The data
-plane rows count the operations in a data plane's own specification: so far
-only Key Vault (secrets, keys, certificates and managed storage accounts on a
-vault) has one; the Blob, Queue, Table, Files and Cosmos DB data planes are not
-counted yet. A data-plane operation counts as implemented when the emulator
-answers a probe of it with anything but `501`. Add `--operations` to list every
-operation with its status; data-plane lines start with `data`.
+plane rows count the operations in each data plane's own specification: Key
+Vault (secrets, keys, certificates and managed storage accounts on a vault),
+Blob, Queue, Azure Files and Table. Cosmos DB's data plane has no OpenAPI
+specification to count against, and Service Bus and Event Hubs messaging is
+AMQP. A data-plane operation counts as implemented when the emulator answers a
+probe of it with anything but `501`; this measures routing, not correctness,
+and two operations that differ only in an optional parameter get the same
+answer. Add `--operations` to list every operation with its status;
+data-plane lines start with `data`.
 
 `tests/sdk/` and `tests/sdk-js/` exercise the emulator through the official
 Azure SDKs for Python and JavaScript, and `tests/terraform/` applies, re-plans
@@ -140,14 +147,14 @@ resources in that subscription.
   levels, with computed values at most 128 levels deep (the deployment fails);
   Cosmos DB queries, Service Bus SQL filters and actions, and Table `$filter`s
   may nest 64 levels (400). Long `AND`/`OR` chains are not limited.
-- Azure Files: no SMB or NFS (REST only), no file copy, leases, share
+- Azure Files: no SMB or NFS (REST only), no file or directory rename, hard or symbolic links, share permissions, restoring a share, file copy, leases, share
   snapshots, handles or SMB permissions and attributes beyond what the REST
   API reports; files are held in memory, up to 256 MiB. Table SAS tokens scoped to key
   ranges (`spk`/`srk`/`epk`/`erk`) are verified but not narrowed, and table
   access policies are stored but not used to sign tokens. Version-level
   immutability (`migrate`) is not implemented. A container lease is the same
   lease on Resource Manager and the Blob data plane.
-- Blob: versions; container soft delete; with blob soft delete on, overwritten blobs and snapshots deleted on their own (`x-ms-delete-snapshots: only` or by `snapshot=`) are not kept; page-range diffs between snapshots
+- Blob: blob tags and finding blobs by tag, access tiers, expiry, blob-level immutability policies and legal holds, blob queries, batches, container metadata and access policies on the data plane, renaming and restoring containers, incremental page blob copies, account information and service statistics; versions; container soft delete; with blob soft delete on, overwritten blobs and snapshots deleted on their own (`x-ms-delete-snapshots: only` or by `snapshot=`) are not kept; page-range diffs between snapshots
   (`prevsnapshot`); page blobs are held in memory, up to 256 MiB. Copies come only
   from blobs the emulator holds (not from other URLs), always complete before
   the response, and do not check `x-ms-copy-source-authorization`. Shared access
@@ -788,9 +795,13 @@ cargo run -p emulator-scaffold -- data-plane --service keyvault --name "Key Vaul
     --spec .../Keys/stable/7.6 --spec .../Certificates/stable/7.6 --spec .../SecretsStorage/stable/7.6
 ```
 
-This writes `services/keyvault/src/data_scaffold.rs`. Nothing is mounted from
-it: `Emulator::data_plane_coverage` sends each operation to a scratch emulator
-and reports the ones answered with `501`.
+This writes `services/keyvault/src/data_scaffold.rs` (`--output` names another
+file, for a crate with several data planes: `services/storage/src/` has
+`blob_scaffold.rs`, `queue_scaffold.rs`, `files_scaffold.rs` and
+`table_scaffold.rs`). Nothing is mounted from these files:
+`Emulator::data_plane_coverage` sends each operation to a scratch emulator and
+reports the ones answered with `501`. A new data plane also needs an entry
+there, saying which host, token and resources its operations are probed with.
 
 Each run also records the specification's repository, path and commit in
 `.emulator/scaffolded-specs.json` (the `--spec` directory must be in a git
