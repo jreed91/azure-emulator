@@ -127,3 +127,21 @@ def test_sql_database_and_container_get_and_delete(cosmos, group, account):
     assert list(sql.list_sql_containers(group, account.name, "shop")) == []
     with pytest.raises(ResourceNotFoundError):
         sql.get_sql_database(group, account.name, "missing")
+
+
+def test_private_endpoint_connections_and_perimeters_are_absent(emulator, arm_request, group, account):
+    """Microsoft.Network creates these; without it there are none."""
+    base = f"/subscriptions/{emulator.subscription}/resourceGroups/{group}/providers/Microsoft.DocumentDB/databaseAccounts/{account.name}"
+    connections = f"{base}/privateEndpointConnections"
+    listed = arm_request("GET", connections, "2026-07-15")
+    assert listed.status_code == 200 and listed.json()["value"] == [], listed.text()
+    assert arm_request("GET", f"{connections}/connection", "2026-07-15").status_code == 404
+    body = {"properties": {"privateLinkServiceConnectionState": {"status": "Approved"}}}
+    assert arm_request("PUT", f"{connections}/connection", "2026-07-15", body).status_code == 404
+    assert arm_request("DELETE", f"{connections}/connection", "2026-07-15").status_code in (204, 404)
+
+    perimeters = f"{base}/networkSecurityPerimeterConfigurations"
+    listed = arm_request("GET", perimeters, "2026-04-01-preview")
+    assert listed.status_code == 200 and listed.json()["value"] == [], listed.text()
+    assert arm_request("GET", f"{perimeters}/association", "2026-04-01-preview").status_code == 404
+    assert arm_request("POST", f"{perimeters}/association/reconcile", "2026-04-01-preview", {}).status_code == 404

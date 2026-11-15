@@ -42,13 +42,13 @@ until someone implements it. `azure-emulator coverage` prints the current score:
 
 ```
 Provider                           Types   Operations   Generic
-Microsoft.DocumentDB                3/98       18/387         0
-Microsoft.EventHub                  6/22        30/91         0
+Microsoft.DocumentDB                5/98       25/387         0
+Microsoft.EventHub                  8/22        37/91         0
 Microsoft.KeyVault                 16/16        50/51         0
 Microsoft.ManagedIdentity            2/2        12/14         0
 Microsoft.ServiceBus               19/21        83/91         0
 Microsoft.Storage                  19/32       94/153        30
-Total                             65/191      287/787        30
+Total                             69/191      301/787        30
 
 Data plane                                 Operations
 Key Vault                                       60/84

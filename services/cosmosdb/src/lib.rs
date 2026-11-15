@@ -21,5 +21,8 @@ pub fn register(registry: &mut ArmRegistry) {
     registry.register_type(accounts::DatabaseAccounts);
     registry.register_type(accounts::SqlDatabases);
     registry.register_type(accounts::SqlContainers);
+    // Created only by Microsoft.Network, which the emulator does not model.
+    registry.register_type(emulator_core::arm::CreatedByNetwork("Microsoft.DocumentDB/databaseAccounts/privateEndpointConnections"));
+    registry.register_type(emulator_core::arm::CreatedByNetwork("Microsoft.DocumentDB/databaseAccounts/networkSecurityPerimeterConfigurations"));
     registry.register_scaffold(&scaffold::PROVIDER);
 }
