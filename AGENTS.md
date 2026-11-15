@@ -133,13 +133,13 @@ may be reported locally; add their traces to compare like for like.
 ## Commits and releases
 
 Every commit to `main` that passes CI is released by semantic-release
-(`.releaserc.json`, default Angular preset). The commit messages since the last
+(`.releaserc.json`, `conventionalcommits` preset). The commit messages since the last
 release pick the version:
 
-- a `BREAKING CHANGE:` footer in the body: major;
+- a `BREAKING CHANGE:` footer in the body, or a `!` after the type
+  (`feat!:`, `fix(scope)!:`): major;
 - a `feat:` (or `feat(scope):`) subject: minor;
 - anything else: patch.
 
-The Angular preset does not parse a `type!:` subject, so use the footer for a
-breaking change. Write subjects in the imperative and say what changed for a
+Write subjects in the imperative and say what changed for a
 user of the emulator.
