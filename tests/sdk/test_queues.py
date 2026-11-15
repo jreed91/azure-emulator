@@ -8,6 +8,7 @@ from azure.core.exceptions import ClientAuthenticationError, HttpResponseError, 
 from azure.storage.queue import QueueClient, QueueSasPermissions, QueueServiceClient, generate_queue_sas
 
 
+@pytest.mark.live
 @pytest.mark.parametrize("auth", ["shared-key", "entra"])
 def test_queues_and_metadata(credential, account, auth):
     service = QueueServiceClient(account.queue_url, credential=account.key if auth == "shared-key" else credential)
@@ -26,6 +27,7 @@ def test_queues_and_metadata(credential, account, auth):
         queue.get_queue_properties()
 
 
+@pytest.mark.live
 def test_messages(account):
     queue = QueueClient(account.queue_url, "work", credential=account.key)
     queue.create_queue()
