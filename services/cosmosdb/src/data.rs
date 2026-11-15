@@ -701,6 +701,20 @@ fn parent_of<'a>(root: &'a mut Value, segments: &[String]) -> Result<&'a mut Val
     Ok(current)
 }
 
+/// The deepest nesting of objects and arrays a document may have, as in Azure
+/// Cosmos DB's documented limits.
+const MAX_DOCUMENT_DEPTH: usize = 128;
+
+/// Whether `value` nests objects and arrays deeper than `limit`; looks no
+/// deeper than that.
+fn nested_deeper_than(value: &Value, limit: usize) -> bool {
+    match value {
+        Value::Array(items) => limit == 0 || items.iter().any(|item| nested_deeper_than(item, limit - 1)),
+        Value::Object(map) => limit == 0 || map.values().any(|item| nested_deeper_than(item, limit - 1)),
+        _ => false,
+    }
+}
+
 fn apply_patch(body: &mut Value, operation: &Map<String, Value>) -> Result<(), Failure> {
     let op = operation.get("op").and_then(Value::as_str).ok_or_else(|| bad_request("A patch operation needs an op."))?;
     let path = operation.get("path").and_then(Value::as_str).ok_or_else(|| bad_request("A patch operation needs a path."))?;
@@ -829,6 +843,14 @@ fn patch_item(engine: &Engine, req: &Req, db: &str, coll: &str, id: &str) -> Res
         let mut patched = Value::Object(existing.body.clone());
         for operation in &operations {
             apply_patch(&mut patched, operation.as_object().ok_or_else(|| bad_request("A patch operation must be an object."))?)?;
+        }
+        // Patches add to a document a request at a time; it can grow no deeper
+        // than one request may carry.
+        if nested_deeper_than(&patched, MAX_DOCUMENT_DEPTH) {
+            // Unverified against Azure: the message.
+            return Err(bad_request(format!(
+                "The patched document would nest more than {MAX_DOCUMENT_DEPTH} levels of objects and arrays."
+            )));
         }
         let Value::Object(patched) = patched else { unreachable!() };
         if store::key_string(&c.key_of(&patched)) != key {
@@ -1230,5 +1252,28 @@ mod tests {
         }
         assert_eq!(doc, json!({"id": "1", "n": 3, "tags": ["z", "a", "b"], "moved": {"y": true}}));
         assert!(apply_patch(&mut doc, json!({"op": "replace", "path": "/missing", "value": 1}).as_object().unwrap()).is_err());
+    }
+
+    #[test]
+    fn repeated_patches_cannot_nest_past_the_limit() {
+        // Each patch nests another 100 levels under the deepest one so far, as
+        // a client could, a request at a time.
+        let mut doc = json!({"id": "1", "a": {}});
+        let mut path = "/a".to_string();
+        let mut chunk = json!({});
+        for _ in 0..99 {
+            chunk = json!({"a": chunk});
+        }
+        for _ in 0..3 {
+            apply_patch(&mut doc, json!({"op": "set", "path": format!("{path}/a"), "value": chunk}).as_object().unwrap()).unwrap();
+            path.push_str(&"/a".repeat(100));
+        }
+        assert!(nested_deeper_than(&doc, MAX_DOCUMENT_DEPTH));
+        let mut shallow = json!({});
+        for _ in 0..MAX_DOCUMENT_DEPTH - 1 {
+            shallow = json!({"a": shallow});
+        }
+        assert!(!nested_deeper_than(&shallow, MAX_DOCUMENT_DEPTH));
+        assert!(nested_deeper_than(&json!([shallow]), MAX_DOCUMENT_DEPTH));
     }
 }

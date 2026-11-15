@@ -96,6 +96,7 @@ impl Dispatch for ArmRequest<'_> {
             body,
             principal: self.principal,
             filter: None,
+            nesting: self.nesting + 1,
         };
         let response = request.route(&segments, &lower)?;
         let status = response.status();
@@ -366,6 +367,7 @@ impl ArmRequest<'_> {
             template,
             parameters,
             complete,
+            nesting: self.nesting,
         })
     }
 

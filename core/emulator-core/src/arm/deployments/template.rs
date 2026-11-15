@@ -7,7 +7,7 @@
 //! the emulator implements, and fails the way a direct request would for
 //! anything it does not.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
@@ -44,6 +44,8 @@ pub struct Request<'a> {
     pub template: Value,
     pub parameters: Map<String, Value>,
     pub complete: bool,
+    /// How many deployments this one is nested in.
+    pub nesting: usize,
 }
 
 /// What running a deployment produced.
@@ -81,6 +83,29 @@ pub struct Ctx<'a> {
     functions: HashMap<String, Value>,
     targets: RefCell<Vec<Target>>,
     complete: bool,
+    /// How many evaluations are in progress, one inside another.
+    depth: Cell<usize>,
+}
+
+/// How many evaluations may run one inside another: expressions inside
+/// expressions, variables that use variables, user-defined functions, and
+/// nested JSON values. A template that goes deeper (a function that calls
+/// itself, say) is refused instead of overflowing the stack.
+pub const MAX_EVAL_DEPTH: usize = 256;
+
+/// A nested deployment runs on top of the stack of the deployments it is nested
+/// in, and each of those takes about as much stack as this many levels of
+/// evaluation. Nesting spends the same budget, so deployments nested in
+/// deployments cannot overflow the stack either.
+const NESTED_DEPLOYMENT_COST: usize = 8;
+
+/// One level of evaluation in progress; dropping it steps back out.
+pub struct Descent<'c>(&'c Cell<usize>);
+
+impl Drop for Descent<'_> {
+    fn drop(&mut self) {
+        self.0.set(self.0.get().saturating_sub(1));
+    }
 }
 
 /// One resource instance after loops are expanded.
@@ -151,6 +176,19 @@ fn operation_id() -> String {
 }
 
 impl<'a> Ctx<'a> {
+    /// Enters one more level of evaluation, or refuses when the template is
+    /// nested too deeply to evaluate.
+    pub fn descend(&self) -> Result<Descent<'_>, ArmError> {
+        let depth = self.depth.get() + 1;
+        if depth > MAX_EVAL_DEPTH {
+            return Err(invalid(format!(
+                "The template is nested too deeply to evaluate: expressions, variables, user-defined functions, values, child resources and nested deployments may nest at most {MAX_EVAL_DEPTH} levels deep."
+            )));
+        }
+        self.depth.set(depth);
+        Ok(Descent(&self.depth))
+    }
+
     pub fn parameter(&self, name: &str) -> Result<Value, ArmError> {
         let parameters = self.parameters.borrow();
         member(&parameters, name)
@@ -366,6 +404,7 @@ pub fn prepare<'a>(request: Request<'a>) -> Result<Prepared<'a>, ArmError> {
         functions,
         targets: RefCell::new(Vec::new()),
         complete: request.complete,
+        depth: Cell::new(request.nesting.saturating_mul(NESTED_DEPLOYMENT_COST)),
         template,
     };
     bind_parameters(&ctx, &request.parameters)?;
@@ -583,6 +622,9 @@ fn expand(
     locals: &Locals,
     out: &mut Vec<Instance>,
 ) -> Result<(), ArmError> {
+    // Child resources recurse through here: their nesting spends the
+    // evaluation budget too, two levels for each (these frames are large).
+    let _descent = (ctx.descend()?, ctx.descend()?);
     if !definition.is_object() {
         return Err(invalid("Deployment template validation failed: a template resource must be a JSON object."));
     }

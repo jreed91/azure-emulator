@@ -11,6 +11,8 @@ mod arm;
 mod authorization;
 #[path = "all/deployment_validation.rs"]
 mod deployment_validation;
+#[path = "all/deep_input.rs"]
+mod deep_input;
 #[path = "all/deployments.rs"]
 mod deployments;
 #[path = "all/entra.rs"]
