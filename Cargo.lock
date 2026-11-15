@@ -2249,6 +2249,7 @@ name = "service-eventhub"
 version = "0.1.0"
 dependencies = [
  "emulator-core",
+ "http",
  "serde_json",
  "service-servicebus",
 ]

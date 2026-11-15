@@ -13,6 +13,7 @@ PrivateEndpointConnections_CreateOrUpdate / Approve or reject a private endpoint
 # The example names a partner or target namespace it never creates, and the
 # emulator refuses to pair with one that does not exist.
 DisasterRecoveryConfigs_CreateOrUpdate / SBAliasCreate -- the partner namespace in the example does not exist
+DisasterRecoveryConfigs_CreateOrUpdate / EHAliasCreate -- the partner namespace in the example does not exist
 MigrationConfigs_CreateAndStartMigration / MigrationConfigurationsStartMigration -- the target namespace in the example does not exist
 
 # Object replication requires blob versioning on both accounts and the change

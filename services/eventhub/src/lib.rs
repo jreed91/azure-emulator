@@ -3,14 +3,15 @@
 //! over AMQP through the Service Bus crate's broker, which serves both kinds
 //! of namespace (see `service_servicebus::broker::eventhubs`).
 //!
-//! Namespaces, network rule sets and authorization rules are the Service Bus
-//! handlers with the Event Hubs types: names are unique across both
-//! providers, as on Azure, and keys come from the same store.
+//! Namespaces, network rule sets, authorization rules and geo-disaster-recovery
+//! aliases are the Service Bus handlers with the Event Hubs types: names are
+//! unique across both providers, as on Azure, and keys come from the same store.
 //!
 //! Every other resource type in the provider's API specification is mounted
 //! from [`scaffold::PROVIDER`] and answers `501` until it is implemented.
 
 mod hubs;
+mod private_link;
 pub mod scaffold;
 
 use std::sync::Arc;
@@ -27,6 +28,9 @@ pub fn register(registry: &mut ArmRegistry) {
     registry.register_type(hubs::EventHubs);
     registry.register_type(hubs::ConsumerGroups);
     registry.register_provider_action("Microsoft.EventHub/checkNameAvailability", Arc::new(namespaces::check_name_availability));
+    // Geo-disaster-recovery aliases: the Service Bus handler with the Event Hubs types.
+    service_servicebus::geo::register_aliases(registry, &service_servicebus::geo::EVENT_HUBS_GEO);
+    private_link::register(registry);
     // Created only by Microsoft.Network, which the emulator does not model.
     registry.register_type(emulator_core::arm::CreatedByNetwork("Microsoft.EventHub/namespaces/privateEndpointConnections"));
     registry.register_type(emulator_core::arm::CreatedByNetwork("Microsoft.EventHub/namespaces/networkSecurityPerimeterConfigurations"));
@@ -35,6 +39,4 @@ pub fn register(registry: &mut ArmRegistry) {
 }
 
 /// The configuration-shaped types that are not served from their schema, and why.
-const GENERIC_EXCEPTIONS: &[(&str, &str)] = &[
-    ("Microsoft.EventHub/namespaces/disasterRecoveryConfigs", "pairs two namespaces; storing the setting would report a pairing that does not exist"),
-];
+const GENERIC_EXCEPTIONS: &[(&str, &str)] = &[];

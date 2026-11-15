@@ -5,6 +5,9 @@
 //! one configuration on each namespace, under the same alias name: `Primary` on
 //! one side, `Secondary` on the other. Breaking the pairing or failing over
 //! leaves a single `PrimaryNotReplicating` configuration on the surviving side.
+//!
+//! Event Hubs namespaces have the same aliases ([`EVENT_HUBS_GEO`]); the
+//! `service-eventhub` crate mounts them with [`register_aliases`].
 
 use std::sync::Arc;
 
@@ -18,10 +21,56 @@ use serde_json::{json, Value};
 use crate::namespaces::{id_part, invalid, is_valid_namespace_name, rule_keys};
 use crate::ServiceBusState;
 
-const ALIAS_TYPE: &str = "Microsoft.ServiceBus/namespaces/disasterRecoveryConfigs";
+/// One provider's geo-disaster-recovery aliases: the types and operations they
+/// are served under, and the tiers that can be paired.
+pub struct GeoFlavor {
+    pub namespace: &'static str,
+    pub alias: &'static str,
+    /// The tiers a pairing may join; both namespaces must be of the same one.
+    pub tiers: &'static [&'static str],
+    /// `operationId`s of `CheckNameAvailability`, `ListAuthorizationRules`,
+    /// `GetAuthorizationRule` and `ListKeys`.
+    pub operations: [&'static str; 4],
+}
+
+pub const SERVICE_BUS_GEO: GeoFlavor = GeoFlavor {
+    namespace: "Microsoft.ServiceBus/namespaces",
+    alias: "Microsoft.ServiceBus/namespaces/disasterRecoveryConfigs",
+    tiers: &["Premium"],
+    operations: [
+        "Microsoft.ServiceBus/DisasterRecoveryConfigs_CheckNameAvailability",
+        "Microsoft.ServiceBus/DisasterRecoveryConfigs_ListAuthorizationRules",
+        "Microsoft.ServiceBus/DisasterRecoveryConfigs_GetAuthorizationRule",
+        "Microsoft.ServiceBus/DisasterRecoveryConfigs_ListKeys",
+    ],
+};
+
+/// Event Hubs pairs Standard with Standard and Premium with Premium (Dedicated
+/// clusters are not modelled).
+pub const EVENT_HUBS_GEO: GeoFlavor = GeoFlavor {
+    namespace: "Microsoft.EventHub/namespaces",
+    alias: "Microsoft.EventHub/namespaces/disasterRecoveryConfigs",
+    tiers: &["Standard", "Premium"],
+    operations: [
+        "Microsoft.EventHub/DisasterRecoveryConfigs_CheckNameAvailability",
+        "Microsoft.EventHub/DisasterRecoveryConfigs_ListAuthorizationRules",
+        "Microsoft.EventHub/DisasterRecoveryConfigs_GetAuthorizationRule",
+        "Microsoft.EventHub/DisasterRecoveryConfigs_ListKeys",
+    ],
+};
+
+/// Mounts one provider's aliases, their authorization rules and keys.
+pub fn register_aliases(registry: &mut ArmRegistry, flavor: &'static GeoFlavor) {
+    registry.register_type(Aliases(flavor));
+    let [check, list, get, keys] = flavor.operations;
+    registry.register_operation(check, Arc::new(move |ctx, request| check_alias_name(flavor, ctx, request)));
+    registry.register_operation(list, Arc::new(move |ctx, request| list_alias_rules(flavor, ctx, request)));
+    registry.register_operation(get, Arc::new(move |ctx, request| get_alias_rule(flavor, ctx, request)));
+    registry.register_operation(keys, Arc::new(move |ctx, request| alias_rule_keys(flavor, ctx, request)));
+}
 
 pub(crate) fn register(registry: &mut ArmRegistry) {
-    registry.register_type(Aliases);
+    register_aliases(registry, &SERVICE_BUS_GEO);
     registry.register_type(FilterRules {
         resource_type: "Microsoft.ServiceBus/namespaces/ipfilterrules",
         required: "ipMask",
@@ -30,10 +79,6 @@ pub(crate) fn register(registry: &mut ArmRegistry) {
         resource_type: "Microsoft.ServiceBus/namespaces/virtualnetworkrules",
         required: "virtualNetworkSubnetId",
     });
-    registry.register_operation("Microsoft.ServiceBus/DisasterRecoveryConfigs_CheckNameAvailability", Arc::new(check_alias_name));
-    registry.register_operation("Microsoft.ServiceBus/DisasterRecoveryConfigs_ListAuthorizationRules", Arc::new(list_alias_rules));
-    registry.register_operation("Microsoft.ServiceBus/DisasterRecoveryConfigs_GetAuthorizationRule", Arc::new(get_alias_rule));
-    registry.register_operation("Microsoft.ServiceBus/DisasterRecoveryConfigs_ListKeys", Arc::new(alias_rule_keys));
     registry.register_operation("Microsoft.ServiceBus/PrivateLinkResources_Get", Arc::new(private_link_resources));
 }
 
@@ -48,11 +93,11 @@ fn namespace_id(id: &str) -> String {
     id[..end].to_string()
 }
 
-fn is_premium(namespace: &Resource) -> bool {
-    namespace.sku.as_ref().and_then(|sku| sku.get("name")).and_then(Value::as_str) == Some("Premium")
+fn tier(namespace: &Resource) -> &str {
+    namespace.sku.as_ref().and_then(|sku| sku.get("name")).and_then(Value::as_str).unwrap_or("")
 }
 
-struct Aliases;
+struct Aliases(&'static GeoFlavor);
 
 impl Aliases {
     /// The other namespace's configuration of the same alias.
@@ -86,7 +131,7 @@ impl Aliases {
 
 impl ResourceTypeHandler for Aliases {
     fn resource_type(&self) -> &'static str {
-        ALIAS_TYPE
+        self.0.alias
     }
 
     fn put(&self, ctx: &ArmContext<'_>, request: &PutRequest<'_>) -> Result<Value, ArmError> {
@@ -117,13 +162,18 @@ impl ResourceTypeHandler for Aliases {
         };
         let own = own.ok_or_else(|| invalid("The namespace of the alias does not exist."))?;
         let partner = partner
-            .filter(|p| p.resource_type.eq_ignore_ascii_case("Microsoft.ServiceBus/namespaces"))
+            .filter(|p| p.resource_type.eq_ignore_ascii_case(self.0.namespace))
             .ok_or_else(|| invalid(format!("The partner namespace '{partner_id}' does not exist.")))?;
         if partner.id.eq_ignore_ascii_case(&own.id) {
             return Err(invalid("A namespace cannot be paired with itself."));
         }
-        if !is_premium(&own) || !is_premium(&partner) {
-            return Err(invalid("Geo-disaster recovery requires both namespaces to be Premium."));
+        // Unverified against Azure: the wording of this refusal, and for Event
+        // Hubs that a Standard namespace cannot pair with a Premium one.
+        if !self.0.tiers.contains(&tier(&own)) || tier(&own) != tier(&partner) {
+            return Err(invalid(format!(
+                "Geo-disaster recovery requires both namespaces to be of the same tier, one of: {}.",
+                self.0.tiers.join(", ")
+            )));
         }
         // An alias is a DNS name in the same space as namespace names.
         let state = ctx.engine.state::<ServiceBusState>();
@@ -181,7 +231,7 @@ impl ResourceTypeHandler for Aliases {
         match action.to_ascii_lowercase().as_str() {
             "breakpairing" => Self::unpair(ctx, resource, "Primary", "be broken"),
             "failover" => Self::unpair(ctx, resource, "Secondary", "fail over"),
-            other => Err(ArmError::not_implemented(format_args!("the '{other}' action on {ALIAS_TYPE}"))),
+            other => Err(ArmError::not_implemented(format_args!("the '{other}' action on {}", self.0.alias))),
         }
     }
 
@@ -211,37 +261,32 @@ impl ResourceTypeHandler for Aliases {
 
 type Reply = Result<(StatusCode, Value), ArmError>;
 
-fn request_namespace_id(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> String {
-    format!(
-        "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ServiceBus/namespaces/{}",
-        ctx.subscription_id,
-        ctx.resource_group,
-        request.param("namespaceName")
-    )
-}
-
-fn namespace_not_found(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> ArmError {
-    ArmError::not_found(
-        "ResourceNotFound",
-        format!(
-            "The Resource 'Microsoft.ServiceBus/namespaces/{}' under resource group '{}' was not found. For more details please go to https://aka.ms/ARMResourceNotFoundFix",
-            request.param("namespaceName"),
-            ctx.resource_group
-        ),
-    )
-}
-
 fn require_namespace(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Result<Resource, ArmError> {
+    require_namespace_of(SERVICE_BUS_GEO.namespace, ctx, request)
+}
+
+/// The namespace of type `namespace_type` that the request's `namespaceName` names.
+fn require_namespace_of(namespace_type: &str, ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Result<Resource, ArmError> {
+    let name = request.param("namespaceName");
+    let id = format!(
+        "/subscriptions/{}/resourceGroups/{}/providers/{namespace_type}/{name}",
+        ctx.subscription_id, ctx.resource_group
+    );
     let state = ctx.engine.state::<ArmState>();
     let state = state.lock();
-    state
-        .resource(&request_namespace_id(ctx, request))
-        .cloned()
-        .ok_or_else(|| namespace_not_found(ctx, request))
+    state.resource(&id).cloned().ok_or_else(|| {
+        ArmError::not_found(
+            "ResourceNotFound",
+            format!(
+                "The Resource '{namespace_type}/{name}' under resource group '{}' was not found. For more details please go to https://aka.ms/ARMResourceNotFoundFix",
+                ctx.resource_group
+            ),
+        )
+    })
 }
 
-fn check_alias_name(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Reply {
-    require_namespace(ctx, request)?;
+fn check_alias_name(flavor: &GeoFlavor, ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Reply {
+    require_namespace_of(flavor.namespace, ctx, request)?;
     let name = request
         .body
         .get("name")
@@ -258,8 +303,8 @@ fn check_alias_name(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Rep
 }
 
 /// The namespace's own authorization rules, presented under the alias.
-fn alias_rules(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Result<Vec<(Resource, Value)>, ArmError> {
-    let namespace = require_namespace(ctx, request)?;
+fn alias_rules(flavor: &GeoFlavor, ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Result<Vec<(Resource, Value)>, ArmError> {
+    let namespace = require_namespace_of(flavor.namespace, ctx, request)?;
     let alias = request.param("alias");
     let state = ctx.engine.state::<ArmState>();
     let state = state.lock();
@@ -272,7 +317,7 @@ fn alias_rules(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Result<V
             let view = json!({
                 "id": format!("{}/authorizationRules/{}", config.id, rule.name),
                 "name": rule.name,
-                "type": format!("{ALIAS_TYPE}/authorizationRules"),
+                "type": format!("{}/authorizationRules", flavor.alias),
                 "properties": rule.properties,
             });
             (rule.clone(), view)
@@ -280,25 +325,25 @@ fn alias_rules(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Result<V
         .collect())
 }
 
-fn find_alias_rule(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Result<(Resource, Value), ArmError> {
+fn find_alias_rule(flavor: &GeoFlavor, ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Result<(Resource, Value), ArmError> {
     let wanted = request.param("authorizationRuleName");
-    alias_rules(ctx, request)?
+    alias_rules(flavor, ctx, request)?
         .into_iter()
         .find(|(rule, _)| rule.name.eq_ignore_ascii_case(wanted))
         .ok_or_else(|| ArmError::not_found("ResourceNotFound", format!("The authorization rule '{wanted}' was not found.")))
 }
 
-fn list_alias_rules(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Reply {
-    let views: Vec<Value> = alias_rules(ctx, request)?.into_iter().map(|(_, view)| view).collect();
+fn list_alias_rules(flavor: &GeoFlavor, ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Reply {
+    let views: Vec<Value> = alias_rules(flavor, ctx, request)?.into_iter().map(|(_, view)| view).collect();
     Ok((StatusCode::OK, json!({"value": views})))
 }
 
-fn get_alias_rule(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Reply {
-    Ok((StatusCode::OK, find_alias_rule(ctx, request)?.1))
+fn get_alias_rule(flavor: &GeoFlavor, ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Reply {
+    Ok((StatusCode::OK, find_alias_rule(flavor, ctx, request)?.1))
 }
 
-fn alias_rule_keys(ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Reply {
-    let (rule, _) = find_alias_rule(ctx, request)?;
+fn alias_rule_keys(flavor: &GeoFlavor, ctx: &ArmContext<'_>, request: &OperationRequest<'_>) -> Reply {
+    let (rule, _) = find_alias_rule(flavor, ctx, request)?;
     let keys = rule_keys(ctx, &rule.id);
     let config = ctx.engine.config();
     let endpoint = |host: &str| config.servicebus_amqp_endpoint(&host.to_ascii_lowercase());

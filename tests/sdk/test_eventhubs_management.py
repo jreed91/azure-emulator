@@ -107,6 +107,22 @@ def test_network_rule_set(eventhub, group, namespace):
     assert [r.name for r in eventhub.namespaces.list_network_rule_set(group, namespace.name).value] == ["default"]
 
 
+def test_private_link_resources(eventhub, group, namespace):
+    [resource] = eventhub.private_link_resources.get(group, namespace.name).value
+    assert (resource.name, resource.type) == ("namespace", "Microsoft.EventHub/namespaces/privateLinkResources")
+    assert resource.id.lower() == f"{namespace.id}/privateLinkResources/namespace".lower()
+    assert (resource.group_id, resource.required_members) == ("namespace", ["namespace"])
+    assert resource.required_zone_names == ["privatelink.servicebus.windows.net"]
+    # Reading them leaves nothing behind on the namespace.
+    assert list(eventhub.private_endpoint_connections.list(group, namespace.name)) == []
+
+    with pytest.raises(ResourceNotFoundError):
+        eventhub.private_link_resources.get(group, unique("eh-missing-"))
+    eventhub.namespaces.begin_delete(group, namespace.name).result()
+    with pytest.raises(ResourceNotFoundError):
+        eventhub.private_link_resources.get(group, namespace.name)
+
+
 def test_private_endpoint_connections_and_perimeters_are_absent(emulator, arm_request, group, namespace):
     """Microsoft.Network creates these; without it there are none."""
     base = f"/subscriptions/{emulator.subscription}/resourceGroups/{group}/providers/Microsoft.EventHub/namespaces/{namespace.name}"

@@ -34,6 +34,7 @@
   "sdk/test_eventhubs.py": "Event Hubs",
   "sdk/test_eventhubs_more.py": "Event Hubs",
   "sdk/test_eventhubs_management.py": "Event Hubs",
+  "sdk/test_eventhubs_geo.py": "Event Hubs",
   "sdk-js/eventhubs.test.js": "Event Hubs",
   "sdk/test_cosmos.py": "Cosmos DB",
   "sdk/test_cosmos_data.py": "Cosmos DB",
