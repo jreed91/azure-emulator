@@ -116,7 +116,11 @@ impl Emulator {
             let router = scratch.router();
             async move {
                 let request = request.map_err(|e| e.to_string())?;
-                router.oneshot(request).await.map(|response| response.status()).map_err(|e| e.to_string())
+                // The router cannot fail: its error type has no values.
+                match router.oneshot(request).await {
+                    Ok(response) => Ok::<_, String>(response.status()),
+                    Err(never) => match never {},
+                }
             }
         };
 
