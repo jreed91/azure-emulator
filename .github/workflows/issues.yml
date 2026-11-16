@@ -1,0 +1,30 @@
+name: Issues
+
+# Keeps the repository's GitHub issues in step with issues/: one issue per file
+# in issues/things-that-do-not-work/, closed when its file moves to
+# issues/things-that-now-work/. See tools/issues/sync_github.py.
+
+on:
+  push:
+    branches: [main]
+    paths: ["issues/**", "tools/issues/**"]
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+concurrency:
+  group: issues
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python tools/issues/sync_github.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
