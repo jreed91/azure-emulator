@@ -139,6 +139,9 @@ may be reported locally; add their traces to compare like for like.
   result; CI runs it with `--check`. To pick up work, take a file from
   `issues/things-that-do-not-work/`: it names the crate, the operations and
   what done means.
+  Each open file also has a GitHub issue, which the `Issues` workflow opens
+  and closes from `issues/` on every push to main; do not edit those issues'
+  `<!-- issue-file: ... -->` markers.
 - **Tests are independent.** SDK tests create their own resource group and
   uniquely named resources; pytest workers run in parallel, each with its own
   emulator.

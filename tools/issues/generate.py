@@ -242,6 +242,8 @@ def build(operations):
         "- `things-that-do-not-work/`: open. Each file says what is missing, where to work and when it is done.",
         "- `things-that-now-work/`: files the generator stopped writing, because the operation is served or the",
         "  test passes.\n",
+        "Each open file also has a GitHub issue, opened by `.github/workflows/issues.yml`",
+        "(`tools/issues/sync_github.py`) and closed when the file moves.\n",
         "Resource types served from their schema alone (the `Generic` column of `coverage`) are not listed: they",
         "answer, with the limits README \"Known gaps\" describes.\n",
         f"## Open: {len(issues)}\n",
