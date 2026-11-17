@@ -8,11 +8,15 @@
 # AZURE_EMULATOR_CONFIG to create resources at startup.
 
 FROM rust:1-slim-bookworm AS build
+# The release tag (v1.2.3), reported by `azure-emulator --version`; release.yml
+# passes it. Left empty, the binary reports the crate version.
+ARG VERSION=
 WORKDIR /src
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo build --release --locked -p azure-emulator \
+    if [ -n "$VERSION" ]; then export AZURE_EMULATOR_VERSION="${VERSION#v}"; fi \
+    && cargo build --release --locked -p azure-emulator \
     && cp target/release/azure-emulator /azure-emulator
 
 FROM debian:bookworm-slim

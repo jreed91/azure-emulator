@@ -60,6 +60,8 @@ jobs:
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+          # Empty for an edge build, which then reports the crate version.
+          build-args: VERSION=${{ env.TAG }}
       - run: |
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
@@ -105,27 +107,57 @@ jobs:
   binaries:
     name: Binary (${{ matrix.target }})
     if: inputs.tag != '' || startsWith(github.ref, 'refs/tags/v')
+    # The asset names are what install.sh and install.ps1 download:
+    # azure-emulator-<target>.tar.gz, or .zip on Windows.
     strategy:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-22.04-arm
+          # Cross-compiled on Apple silicon: GitHub's Intel macOS runners
+          # are being retired.
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            cross: true
           - target: aarch64-apple-darwin
             runner: macos-latest
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
     runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --release --locked -p azure-emulator
-      - run: tar -czf azure-emulator-${{ matrix.target }}.tar.gz -C target/release azure-emulator
+        with:
+          targets: ${{ matrix.target }}
+      # `azure-emulator --version` reports the release (the crate version
+      # stays 0.1.0; semantic-release versions the tag, not Cargo.toml).
+      - run: AZURE_EMULATOR_VERSION="${TAG#v}" cargo build --release --locked -p azure-emulator --target ${{ matrix.target }}
+      - name: Check the binary runs
+        if: ${{ !matrix.cross }}
+        run: target/${{ matrix.target }}/release/azure-emulator --version
+      - name: Package
+        run: |
+          name=azure-emulator-${{ matrix.target }}
+          cd target/${{ matrix.target }}/release
+          if [ "${{ runner.os }}" = Windows ]; then
+            7z a "$GITHUB_WORKSPACE/$name.zip" azure-emulator.exe
+          else
+            tar -czf "$GITHUB_WORKSPACE/$name.tar.gz" azure-emulator
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.target }}
-          path: azure-emulator-${{ matrix.target }}.tar.gz
+          path: |
+            azure-emulator-${{ matrix.target }}.tar.gz
+            azure-emulator-${{ matrix.target }}.zip
+          if-no-files-found: error
 
   fidelity:
     name: Fidelity scores
@@ -183,10 +215,20 @@ jobs:
     needs: [binaries, fidelity]
     runs-on: ubuntu-latest
     steps:
+      # The install scripts, attached so a release's own script installs it.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          sparse-checkout: |
+            install.sh
+            install.ps1
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with:
           pattern: binary-*
           merge-multiple: true
+      # The install scripts check every download against this file.
+      - run: sha256sum azure-emulator-* > SHA256SUMS && cat SHA256SUMS
       - uses: actions/download-artifact@v4
         with:
           name: fidelity
@@ -200,7 +242,7 @@ jobs:
           if gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
             { cat notes.md; echo; gh release view "$TAG" --repo "$REPO" --json body --jq .body; } > body.md
             gh release edit "$TAG" --repo "$REPO" --notes-file body.md
-            gh release upload "$TAG" --repo "$REPO" --clobber azure-emulator-*.tar.gz fidelity-checks.jsonl
+            gh release upload "$TAG" --repo "$REPO" --clobber azure-emulator-* SHA256SUMS install.sh install.ps1 fidelity-checks.jsonl
           else
-            gh release create "$TAG" --repo "$REPO" --generate-notes --notes-file notes.md azure-emulator-*.tar.gz fidelity-checks.jsonl
+            gh release create "$TAG" --repo "$REPO" --generate-notes --notes-file notes.md azure-emulator-* SHA256SUMS install.sh install.ps1 fidelity-checks.jsonl
           fi

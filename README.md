@@ -274,9 +274,48 @@ sent, the response you got, and what Azure returns. Better still, add a
 
 ## Quick start
 
+### Install
+
+Each [release](https://github.com/jreed91/azure-emulator/releases) has a
+prebuilt `azure-emulator` binary for Linux (x86_64 and arm64, glibc), macOS
+(Intel and Apple silicon) and Windows (x86_64; it also runs on Windows on Arm).
+The install scripts pick the one for your machine, check it against the
+release's `SHA256SUMS`, and put it on your `PATH`.
+
+Linux and macOS (installs to `~/.local/bin`):
+
 ```bash
-cargo run -p azure-emulator
+curl -fsSL https://github.com/jreed91/azure-emulator/releases/latest/download/install.sh | sh
 ```
+
+Windows, in PowerShell (installs to `%LOCALAPPDATA%\Programs\azure-emulator`
+and adds it to your user `PATH`):
+
+```powershell
+irm https://github.com/jreed91/azure-emulator/releases/latest/download/install.ps1 | iex
+```
+
+To pick a release or a directory, pass `--version v1.2.3` and `--dir <directory>`
+to `install.sh` (`sh -s -- --version v1.2.3` when piped), or `-Version` and `-Dir`
+to `install.ps1`; both also read `AZURE_EMULATOR_INSTALL_VERSION` and
+`AZURE_EMULATOR_INSTALL_DIR`. You can also download an archive from the release
+page and unpack it yourself, or build from source with Rust:
+
+```bash
+cargo install --locked --git https://github.com/jreed91/azure-emulator azure-emulator
+```
+
+(The emulator isn't published to crates.io: it depends on a patched copy of
+`fe2o3-amqp` in `vendor/`, and crates.io would build it against the unpatched
+original.)
+
+Then run it:
+
+```bash
+azure-emulator
+```
+
+or, from a checkout, `cargo run -p azure-emulator`.
 
 The emulator serves HTTPS on `127.0.0.1:10443` and prints its endpoints. Options:
 `--port`, `--bind`, `--host`, `--dns-suffix`, `--amqp-port`, `--http`,

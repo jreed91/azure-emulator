@@ -149,3 +149,69 @@ jobs:
         with:
           push: false
           cache-from: type=gha,scope=linux/amd64
+
+  install:
+    # The release binaries' platforms: build, package the archive as
+    # release.yml does, install it with install.sh or install.ps1 from a local
+    # server, and check the installed emulator starts and answers its health check.
+    name: Install (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p azure-emulator
+        env:
+          AZURE_EMULATOR_VERSION: 0.0.0-ci
+      - name: Package as a release
+        run: |
+          target=$(rustc -vV | sed -n 's/^host: //p')
+          mkdir release
+          if [ "${{ runner.os }}" = Windows ]; then
+            (cd target/debug && 7z a "$GITHUB_WORKSPACE/release/azure-emulator-$target.zip" azure-emulator.exe)
+          else
+            tar -czf "release/azure-emulator-$target.tar.gz" -C target/debug azure-emulator
+          fi
+          cd release
+          if command -v sha256sum > /dev/null; then sha256sum azure-emulator-* > SHA256SUMS; else shasum -a 256 azure-emulator-* > SHA256SUMS; fi
+          cat SHA256SUMS
+          python -m http.server 8765 > /dev/null 2>&1 &
+          # It takes a moment to start listening: wait, or the install races it.
+          for _ in $(seq 30); do
+            if curl -fsS -o /dev/null http://127.0.0.1:8765/SHA256SUMS 2> /dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "the local release server did not start" >&2
+          exit 1
+      - name: install.sh
+        if: runner.os != 'Windows'
+        run: |
+          AZURE_EMULATOR_INSTALL_URL=http://127.0.0.1:8765 sh install.sh --dir "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: install.ps1
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:AZURE_EMULATOR_INSTALL_URL = 'http://127.0.0.1:8765'
+          .\install.ps1 -Dir "$env:RUNNER_TEMP\bin"
+          Add-Content $env:GITHUB_PATH "$env:RUNNER_TEMP\bin"
+      - name: The installed emulator runs
+        run: |
+          cd "$RUNNER_TEMP"
+          test "$(azure-emulator --version)" = "azure-emulator 0.0.0-ci"
+          # `health` reads the emulator's CA certificate from the same home.
+          export AZURE_EMULATOR_HOME="$RUNNER_TEMP/home"
+          azure-emulator --idle-timeout 120 > emulator.log 2>&1 &
+          for _ in $(seq 60); do
+            if azure-emulator health; then exit 0; fi
+            sleep 1
+          done
+          cat emulator.log
+          exit 1
