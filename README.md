@@ -482,11 +482,14 @@ DefaultEndpointsProtocol=https;AccountName=devstoreaccount1;AccountKey=Eby8vdM02
 
 Clients need the emulator's CA (see [Trust the certificate](#trust-the-certificate)),
 or `AZURE_EMULATOR_HTTP=1` and `http://` endpoints for clients that cannot
-take it. `UseDevelopmentStorage=true` does not work: it means Azurite's ports
-`10000`–`10002` and its path-style addresses
-(`http://127.0.0.1:10000/devstoreaccount1`), where the emulator routes storage
-by hostname. Inside Docker Compose, give the emulator's service a network alias
-for each hostname, such as `devstoreaccount1.blob.core.azure.localhost`.
+take it. Started with `--blob-port 10000 --queue-port 10001 --table-port 10002`,
+the emulator also serves Azurite's path-style addresses
+(`http://127.0.0.1:10000/devstoreaccount1`), so `UseDevelopmentStorage=true`
+and Azurite's connection strings work unchanged, and inside Docker Compose the
+emulator's service name is enough (see
+[Path-style storage addressing](#path-style-storage-addressing-azurite-style)).
+Without those ports, give the emulator's service a network alias for each
+hostname, such as `devstoreaccount1.blob.core.azure.localhost`.
 
 ### Trust the certificate
 
@@ -525,7 +528,9 @@ With `--blob-port`, `--queue-port` and `--table-port` (or
 `AZURE_EMULATOR_TABLE_PORT`), the emulator also serves Blob, Queue and Table
 storage the way Azurite does: on a port per service, over plain HTTP, with the
 account as the first path segment, whatever the hostname. A connection string
-written for Azurite then needs only its account name and key:
+written for Azurite then works as it is, given the account and its keys
+(provision `devstoreaccount1` with Azurite's key as shown above to keep
+`UseDevelopmentStorage=true`):
 
 ```bash
 azure-emulator --blob-port 10000 --queue-port 10001 --table-port 10002

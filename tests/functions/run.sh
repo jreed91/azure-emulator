@@ -44,23 +44,16 @@ fi
 docker run "${build_args[@]}" "$sdk_image" bash -c "$script"
 
 echo "Starting the emulator"
-cat >"$work/config.json" <<'JSON'
-{ "resources": [
-  { "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/local", "apiVersion": "2021-04-01", "body": { "location": "eastus" } },
-  { "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/local/providers/Microsoft.Storage/storageAccounts/devstoreaccount1",
-    "apiVersion": "2023-05-01", "body": { "location": "eastus", "kind": "StorageV2", "sku": { "name": "Standard_LRS" } } } ] }
+# The well-known Azurite account and key, as projects moving from Azurite use.
+key="Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="
+cat >"$work/config.json" <<JSON
+{ "storage": [{ "resourceGroup": "local", "account": "devstoreaccount1", "keys": { "key1": "$key" } }] }
 JSON
 port=${PORT:-10443}
 AZURE_EMULATOR_HOME="$work/home" "$bin" --http --port "$port" --config "$work/config.json" \
   --blob-port 10000 --queue-port 10001 --table-port 10002 >"$work/emulator.log" 2>&1 &
 emulator=$!
-base="http://localhost:$port"
-for _ in $(seq 100); do curl -sf "$base/__admin/health" >/dev/null && break; sleep 0.1; done
-token=$(curl -sf "$base/11111111-1111-1111-1111-111111111111/oauth2/v2.0/token" \
-  -d "grant_type=client_credentials&client_id=a&client_secret=b&scope=$base/.default" | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
-key=$(curl -sf -X POST -H "authorization: Bearer $token" -H "content-length: 0" \
-  "$base/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/local/providers/Microsoft.Storage/storageAccounts/devstoreaccount1/listKeys?api-version=2023-05-01" \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin)["keys"][0]["value"])')
+for _ in $(seq 100); do curl -sf "http://localhost:$port/__admin/health" >/dev/null && break; sleep 0.1; done
 storage() { echo "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=$key;BlobEndpoint=http://$1:10000/devstoreaccount1;QueueEndpoint=http://$1:10001/devstoreaccount1;TableEndpoint=http://$1:10002/devstoreaccount1"; }
 
 echo "Starting the Functions host"
