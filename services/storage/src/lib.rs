@@ -220,7 +220,24 @@ impl ResourceTypeHandler for StorageAccounts {
                         ))
                     }
                 };
-                account.keys[index] = new_key();
+                // The emulator also takes the key to set (not an Azure field):
+                // a fixed key lets connection strings be written ahead of time,
+                // such as the storage emulator's well-known key.
+                account.keys[index] = match body.get("key").and_then(Value::as_str).filter(|k| !k.is_empty()) {
+                    Some(key) => {
+                        let decoded = base64::engine::general_purpose::STANDARD.decode(key).map_err(|_| {
+                            ArmError::bad_request("InvalidValuesForRequestParameters", "Values for request parameters are invalid: key. A key must be base64.")
+                        })?;
+                        if decoded.is_empty() {
+                            return Err(ArmError::bad_request(
+                                "InvalidValuesForRequestParameters",
+                                "Values for request parameters are invalid: key. A key must not be empty.",
+                            ));
+                        }
+                        key.to_string()
+                    }
+                    None => new_key(),
+                };
                 account.key_created[index] = now_iso();
                 Ok(keys_json(account))
             }

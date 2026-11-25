@@ -335,8 +335,10 @@ docker build -t azure-emulator .
 docker run -p 10443:10443 -p 5672:5672 -p 5671:5671 azure-emulator
 ```
 
-Pushes to `main` publish `ghcr.io/<owner>/azure-emulator:edge` (and a
-`sha-<commit>` tag). Every commit to `main` that passes CI is also released by
+Releases publish `ghcr.io/jreed91/azure-emulator:<version>` (such as
+`1.6.0`), `:<major>.<minor>` and `:latest`; pin an exact version, as the
+examples below do, so an upgrade is a change you make. Pushes to `main` also
+publish `:edge` (and a `sha-<commit>` tag), the unreleased tip. Every commit to `main` that passes CI is also released by
 [semantic-release](https://semantic-release.gitbook.io): it is tagged `v<version>`
 and gets a GitHub release with binaries, fidelity scores, and the
 `<version>`, `<major>.<minor>` and `latest` images. The version follows the
@@ -349,7 +351,7 @@ Compose, with resources created at startup from a file:
 ```yaml
 services:
   azure:
-    image: ghcr.io/<owner>/azure-emulator:edge
+    image: ghcr.io/jreed91/azure-emulator:1.6.0
     environment:
       AZURE_EMULATOR_HTTP: "1"          # plain HTTP for Resource Manager
       AZURE_EMULATOR_CONFIG: /config.json
@@ -384,7 +386,7 @@ Event Hubs, which start empty again.
 ```yaml
 services:
   azure:
-    image: ghcr.io/<owner>/azure-emulator:edge
+    image: ghcr.io/jreed91/azure-emulator:1.6.0
     environment:
       AZURE_EMULATOR_PERSIST: "1"
     volumes:
@@ -397,8 +399,9 @@ volumes:
 
 `--config <file>` (or `AZURE_EMULATOR_CONFIG`) creates resources before the
 emulator starts serving, through the same Resource Manager API a client would
-call, so they are validated the same way. Service Bus has a shorthand; any
-other resource can be listed by id:
+call, so they are validated the same way. Service Bus, Event Hubs, Cosmos DB
+(see [Cosmos DB](#cosmos-db)) and storage accounts have shorthands; any other
+resource can be listed by id:
 
 ```json
 {
@@ -430,6 +433,58 @@ ahead of time. A rule other than `RootManageSharedAccessKey` is created with
 `Listen`, `Send` and `Manage`. Rules given for a subscription replace its
 `$Default` rule. Keys can also be set at any time with `regenerateKeys` and a
 `key` in the body, as on Azure.
+
+A storage account takes fixed keys too, plus its containers, queues and
+tables (each a name, or `{"name": ..., "properties": {...}}` as Resource
+Manager takes them). `sku` defaults to `Standard_LRS` and `kind` to
+`StorageV2`:
+
+```json
+{
+  "storage": [{
+    "resourceGroup": "local",
+    "account": "appstorage",
+    "keys": { "key1": "BASE64_KEY", "key2": "BASE64_KEY" },
+    "containers": ["uploads", { "name": "reports", "properties": { "metadata": { "team": "ops" } } }],
+    "queues": ["jobs"],
+    "tables": ["audit"]
+  }]
+}
+```
+
+`keys` may give only `key1` (or be one string, for `key1`); a key left out
+is generated. A key must be base64. The same keys can be set at any time with
+`regenerateKey` and a `key` (an emulator-only field) next to `keyName`.
+
+#### Azurite and storage emulator compatibility
+
+To move a project from Azurite or the Azure Storage Emulator, create the
+account they have built in, `devstoreaccount1`, with their well-known key:
+
+```json
+{
+  "storage": [{
+    "resourceGroup": "local",
+    "account": "devstoreaccount1",
+    "keys": { "key1": "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==" }
+  }]
+}
+```
+
+Then the stock account name and key work unchanged, and only the endpoints
+change, to the emulator's hostnames and port:
+
+```
+DefaultEndpointsProtocol=https;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=https://devstoreaccount1.blob.core.azure.localhost:10443;QueueEndpoint=https://devstoreaccount1.queue.core.azure.localhost:10443;TableEndpoint=https://devstoreaccount1.table.core.azure.localhost:10443;
+```
+
+Clients need the emulator's CA (see [Trust the certificate](#trust-the-certificate)),
+or `AZURE_EMULATOR_HTTP=1` and `http://` endpoints for clients that cannot
+take it. `UseDevelopmentStorage=true` does not work: it means Azurite's ports
+`10000`–`10002` and its path-style addresses
+(`http://127.0.0.1:10000/devstoreaccount1`), where the emulator routes storage
+by hostname. Inside Docker Compose, give the emulator's service a network alias
+for each hostname, such as `devstoreaccount1.blob.core.azure.localhost`.
 
 ### Trust the certificate
 
