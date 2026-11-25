@@ -456,16 +456,15 @@ fn authorize(
             if signed_account != account {
                 return Err(failed());
             }
-            let to_sign = if lite {
-                shared_key::table_lite_string_to_sign(&parts.uri, &parts.headers, account)
-            } else {
-                shared_key::table_string_to_sign(&parts.method, &parts.uri, &parts.headers, account)
-            };
-            return keys
-                .iter()
-                .any(|key| shared_key::verify(&to_sign, key, signature))
-                .then_some(())
-                .ok_or_else(failed);
+            let signed = shared_key::signed_uris(parts).into_iter().any(|uri| {
+                let to_sign = if lite {
+                    shared_key::table_lite_string_to_sign(uri, &parts.headers, account)
+                } else {
+                    shared_key::table_string_to_sign(&parts.method, uri, &parts.headers, account)
+                };
+                keys.iter().any(|key| shared_key::verify(&to_sign, key, signature))
+            });
+            return signed.then_some(()).ok_or_else(failed);
         }
     }
     if query.contains_key("sig") {
@@ -1526,6 +1525,11 @@ fn batch(
             .map(|(_, rest)| rest.split_once('/').map_or("", |(_, p)| p))
             .unwrap_or(url);
         let path = path.split('?').next().unwrap_or_default();
+        // A path-style batch addresses its operations path-style too.
+        let path = match parts.extensions.get::<crate::PathStyle>() {
+            Some(_) => path.strip_prefix(account).and_then(|p| p.strip_prefix('/')).unwrap_or(path),
+            None => path,
+        };
         let Some(Target::Table { name, key }) = parse_target(path) else {
             return Err(bad(
                 "InvalidInput",

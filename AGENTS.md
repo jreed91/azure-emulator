@@ -34,6 +34,7 @@ tools/builtin-roles/  generate.py regenerates the built-in role definitions
 vendor/fe2o3-amqp/    the AMQP library, patched (PATCHED.md)
 tests/sdk/, tests/sdk-js/   fidelity tests through the Python and JavaScript SDKs
 tests/terraform/, tests/cli/  azurerm apply/plan/destroy; Azure CLI smoke test
+tests/functions/      the Azure Functions host on path-style storage (Docker)
 tests/fidelity/       per-service scores; services.json maps test files to services
 tests/operations/     check.py: every implemented operation is reached by a test
 tools/issues/         generate.py writes issues/: one file per thing not done yet
@@ -83,6 +84,7 @@ tests/fidelity/run.sh                         # scores into target/fidelity/
 
 tests/terraform/run.sh --hosts-line | sudo tee -a /etc/hosts && tests/terraform/run.sh
 tests/cli/run.sh --hosts-line | sudo tee -a /etc/hosts && tests/cli/run.sh
+tests/functions/run.sh                        # Functions host smoke test (needs Docker)
 tests/coverage.sh [--html]                    # line coverage (needs cargo-llvm-cov)
 ```
 

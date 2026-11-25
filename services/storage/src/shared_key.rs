@@ -9,6 +9,18 @@ use base64::Engine as _;
 use emulator_core::http_util::percent_decode;
 use hmac::{Hmac, Mac};
 use http::{HeaderMap, Method, Uri};
+
+/// The URIs a client may have signed this request over: the one the data plane
+/// serves and, for a path-style request, the one the client sent. Clients sign
+/// `/<account><path>`, so a path-style request carries the account twice; some
+/// (Azurite-era) clients sign it once, which the first URI covers.
+pub(crate) fn signed_uris(parts: &http::request::Parts) -> Vec<&Uri> {
+    let mut uris = vec![&parts.uri];
+    if let Some(path_style) = parts.extensions.get::<crate::PathStyle>() {
+        uris.push(&path_style.original);
+    }
+    uris
+}
 use sha2::Sha256;
 
 /// The string a client signs for this request.

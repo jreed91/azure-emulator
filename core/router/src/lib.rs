@@ -295,7 +295,28 @@ impl Emulator {
     pub fn router(&self) -> Router {
         Router::new().fallback(guarded_dispatch).with_state(self.clone())
     }
+
+    /// An HTTP service for one storage service addressed path-style, as Azurite
+    /// serves it: `http://<any host>:<port>/<account>/...`, so connection strings
+    /// such as `BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1` work without
+    /// a hostname per account. Each service needs a port of its own, since a
+    /// path-style URL does not say which service it addresses.
+    pub fn storage_router(&self, service: StorageService) -> Router {
+        let dispatch = move |State(emulator): State<Emulator>, request: Request<Body>| async move {
+            let what = format!("{} {}", request.method(), request.uri().path());
+            catch_panic(&what, async move {
+                if request.uri().path() == HEALTH_PATH && matches!(*request.method(), http::Method::GET | http::Method::HEAD) {
+                    return json_response(http::StatusCode::OK, &serde_json::json!({"status": "ok", "version": VERSION}));
+                }
+                service_storage::handle_path_style(emulator.engine.clone(), service, request).await
+            })
+            .await
+        };
+        Router::new().fallback(dispatch).with_state(self.clone())
+    }
 }
+
+pub use service_storage::Service as StorageService;
 
 async fn guarded_dispatch(State(emulator): State<Emulator>, request: Request<Body>) -> Response {
     let what = format!("{} {}", request.method(), request.uri().path());

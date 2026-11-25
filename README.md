@@ -320,6 +320,8 @@ or, from a checkout, `cargo run -p azure-emulator`.
 The emulator serves HTTPS on `127.0.0.1:10443` and prints its endpoints. Options:
 `--port`, `--bind`, `--host`, `--dns-suffix`, `--amqp-port`, `--http`,
 `--config`, `--persist`, `--state-file`, `--enforce-rbac`, `--rbac-owner`,
+`--blob-port`, `--queue-port`, `--table-port` (see
+[Path-style storage addressing](#path-style-storage-addressing-azurite-style)),
 `--idle-timeout` (exit after that many seconds without an HTTP request or an
 open AMQP connection); each also has an
 `AZURE_EMULATOR_*` environment variable. Run with
@@ -460,6 +462,36 @@ add it to your hosts file:
 ```
 127.0.0.1 myaccount.blob.core.azure.localhost my-vault.vault.azure.localhost
 ```
+
+### Path-style storage addressing (Azurite style)
+
+With `--blob-port`, `--queue-port` and `--table-port` (or
+`AZURE_EMULATOR_BLOB_PORT`, `AZURE_EMULATOR_QUEUE_PORT`,
+`AZURE_EMULATOR_TABLE_PORT`), the emulator also serves Blob, Queue and Table
+storage the way Azurite does: on a port per service, over plain HTTP, with the
+account as the first path segment, whatever the hostname. A connection string
+written for Azurite then needs only its account name and key:
+
+```bash
+azure-emulator --blob-port 10000 --queue-port 10001 --table-port 10002
+```
+
+```
+DefaultEndpointsProtocol=http;AccountName=<account>;AccountKey=<key>;
+BlobEndpoint=http://azure:10000/<account>;QueueEndpoint=http://azure:10001/<account>;TableEndpoint=http://azure:10002/<account>
+```
+
+Inside Docker Compose that is the emulator's service name, with no network
+alias per account and service. These ports serve the same accounts, containers,
+queues and tables as the hostname-addressed endpoints. Shared Key and SAS work
+on them; Azure SDKs send Entra ID tokens only over HTTPS, so use a key or SAS
+there. The Azure Functions host runs on them (`AzureWebJobsStorage`): its lock
+leases, `azure-webjobs-hosts` and `azure-webjobs-secrets` containers, queue
+and blob triggers with their poison and receipt handling, and blob, queue and
+table bindings. A path that names no account is answered `400 InvalidUri`; one
+that names an account the emulator does not hold, `404`. Listings and Table
+responses still name the hostname-addressed endpoint (`ServiceEndpoint`,
+`odata.metadata`); the SDKs do not follow those.
 
 ### Point an SDK at it
 
@@ -961,6 +993,12 @@ Event Hubs and Cosmos DB with the Azure SDK for JavaScript:
 cargo build -p azure-emulator
 cd tests/sdk-js && npm ci && npm test
 ```
+
+`tests/functions/run.sh` runs the Azure Functions v4 host (its Docker image,
+with a small .NET isolated app) against the path-style storage ports and checks
+what the host does with `AzureWebJobsStorage`: lock leases, keys, timer, queue
+and blob triggers, and blob, queue and table bindings. It needs Docker and the
+JavaScript suite's dependencies.
 
 `tests/coverage.sh` runs all three (the Rust tests, and both SDK suites against
 an instrumented emulator) and reports line coverage per file; `--html` also
