@@ -281,8 +281,11 @@ fn authorize(engine: &Engine, account: &str, parts: &http::request::Parts, query
         if signed_account != account {
             return Err(failed());
         }
-        let to_sign = shared_key::string_to_sign(&parts.method, &parts.uri, &parts.headers, account);
-        return keys.iter().any(|key| shared_key::verify(&to_sign, key, signature)).then_some(()).ok_or_else(failed);
+        let signed = shared_key::signed_uris(parts).into_iter().any(|uri| {
+            let to_sign = shared_key::string_to_sign(&parts.method, uri, &parts.headers, account);
+            keys.iter().any(|key| shared_key::verify(&to_sign, key, signature))
+        });
+        return signed.then_some(()).ok_or_else(failed);
     }
     if query.contains_key("sig") {
         let keys = keys.ok_or_else(failed)?;

@@ -231,6 +231,73 @@ async fn shared_key_signatures_are_verified() {
     assert_eq!(reply.status, StatusCode::NOT_FOUND);
 }
 
+#[tokio::test]
+async fn path_style_addressing_as_azurite_serves_it() {
+    use azure_emulator::StorageService::{Blob, Queue, Table};
+    let client = Client::new();
+    client.create_group("rg").await;
+    create_account(&client, "rg", "pathacct").await;
+    let keys = client.arm(Method::POST, &format!("{}/listKeys?{API}", account_path("rg", "pathacct")), None).await.json();
+    let key = keys["keys"][0]["value"].as_str().unwrap();
+    let date = httpdate::fmt_http_date(std::time::SystemTime::now());
+
+    // SDKs sign `/<account><url path>`, so the account appears twice.
+    let authorization = sign(key, "PUT", "pathacct", "/pathacct/docs", "\nrestype:container", &date);
+    let headers = [("authorization", authorization.as_str()), ("x-ms-date", date.as_str()), ("x-ms-version", "2023-11-03")];
+    let reply = client.send_path_style(Blob, Method::PUT, "/pathacct/docs?restype=container", &headers, "").await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.text());
+
+    // A signature over the path without the account segment is accepted too.
+    let authorization = sign(key, "GET", "pathacct", "/", "\ncomp:list", &date);
+    let headers = [("authorization", authorization.as_str()), ("x-ms-date", date.as_str()), ("x-ms-version", "2023-11-03")];
+    let reply = client.send_path_style(Blob, Method::GET, "/pathacct?comp=list", &headers, "").await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert!(reply.text().contains("<Name>docs</Name>"), "{}", reply.text());
+
+    // The container is the one the hostname-addressed endpoint serves.
+    let token = client.token(STORAGE_SCOPE).await;
+    let bearer = format!("Bearer {token}");
+    let auth = [("authorization", bearer.as_str()), ("x-ms-version", "2023-11-03")];
+    let reply = client.send(Method::GET, "pathacct.blob.core.azure.localhost:10443", "/docs?restype=container", &auth, "").await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+
+    // A wrong signature still fails.
+    let authorization = sign(key, "PUT", "pathacct", "/pathacct/other", "\nrestype:container", &date);
+    let headers = [("authorization", authorization.as_str()), ("x-ms-date", date.as_str()), ("x-ms-version", "2023-11-03")];
+    let reply = client.send_path_style(Blob, Method::PUT, "/pathacct/docs2?restype=container", &headers, "").await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN);
+
+    // Queue and Table, each on its own port.
+    let reply = client.send_path_style(Queue, Method::PUT, "/pathacct/jobs", &auth, "").await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.text());
+    let reply = client.send(Method::GET, "pathacct.queue.core.azure.localhost:10443", "/?comp=list", &auth, "").await;
+    assert!(reply.text().contains("<Name>jobs</Name>"), "{}", reply.text());
+    let json_headers = [
+        ("authorization", bearer.as_str()),
+        ("x-ms-version", "2019-02-02"),
+        ("content-type", "application/json"),
+        ("accept", "application/json;odata=nometadata"),
+    ];
+    let reply = client.send_path_style(Table, Method::POST, "/pathacct/Tables", &json_headers, r#"{"TableName":"events"}"#).await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.text());
+
+    // A HEAD error has no body, so no Content-Type: the .NET SDK parses an
+    // XML-typed body to build its exception, and an empty one throws (the
+    // Functions host's lease manager probes its lock blobs this way).
+    let reply = client.send_path_style(Blob, Method::HEAD, "/pathacct/locks/host", &auth, "").await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+    assert_eq!(reply.header("x-ms-error-code"), "ContainerNotFound");
+    assert_eq!(reply.header("content-type"), "");
+    assert!(reply.body.is_empty());
+
+    // An account that does not exist, and a request that names none.
+    let reply = client.send_path_style(Blob, Method::GET, "/ghost?comp=list", &auth, "").await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+    let reply = client.send_path_style(Blob, Method::GET, "/?comp=list", &auth, "").await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+    assert_eq!(reply.header("x-ms-error-code"), "InvalidUri");
+}
+
 fn child(rest: &str) -> String {
     format!("{}/{rest}?{API}", account_path("rg", "mgmtacct"))
 }

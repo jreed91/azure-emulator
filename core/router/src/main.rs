@@ -38,6 +38,13 @@ OPTIONS:
         --sql-password <P> Password of the SQL login 'sa' [env: AZURE_EMULATOR_SQL_PASSWORD,
                            or MSSQL_SA_PASSWORD]; without one, 'sa' accepts any password
         --http             Serve plain HTTP instead of HTTPS
+        --blob-port <PORT> Also serve Blob storage path-style on this port, as
+                           Azurite does: http://<host>:<PORT>/<account>/...
+                           (plain HTTP; Azurite's port is 10000)
+        --queue-port <PORT>
+                           The same for Queue storage (Azurite's port is 10001)
+        --table-port <PORT>
+                           The same for Table storage (Azurite's port is 10002)
         --config <FILE>    Provision resources from a JSON file at startup
                            (see the README)
         --persist          Keep state across restarts, in <home>/state.json
@@ -57,7 +64,8 @@ OPTIONS:
 
 Every option can also be set in the environment: AZURE_EMULATOR_PORT,
 AZURE_EMULATOR_AMQP_PORT, AZURE_EMULATOR_AMQPS_PORT, AZURE_EMULATOR_SQL_PORT,
-AZURE_EMULATOR_SQL_PASSWORD,
+AZURE_EMULATOR_SQL_PASSWORD, AZURE_EMULATOR_BLOB_PORT,
+AZURE_EMULATOR_QUEUE_PORT, AZURE_EMULATOR_TABLE_PORT,
 AZURE_EMULATOR_BIND, AZURE_EMULATOR_HOST,
 AZURE_EMULATOR_DNS_SUFFIX, AZURE_EMULATOR_HTTP=1, AZURE_EMULATOR_CONFIG,
 AZURE_EMULATOR_ENFORCE_RBAC=1, AZURE_EMULATOR_RBAC_OWNERS (comma-separated),
@@ -231,6 +239,21 @@ async fn main() {
         sql_port = port.parse().unwrap_or_else(|_| fail("AZURE_EMULATOR_SQL_PORT is not a port"));
     }
     let mut sql_password = env("AZURE_EMULATOR_SQL_PASSWORD").or_else(|| env("MSSQL_SA_PASSWORD"));
+    // Path-style storage listeners (Azurite's addressing), off unless asked for.
+    let mut storage_ports: Vec<(azure_emulator::StorageService, u16)> = Vec::new();
+    for (name, service) in [
+        ("AZURE_EMULATOR_BLOB_PORT", azure_emulator::StorageService::Blob),
+        ("AZURE_EMULATOR_QUEUE_PORT", azure_emulator::StorageService::Queue),
+        ("AZURE_EMULATOR_TABLE_PORT", azure_emulator::StorageService::Table),
+    ] {
+        if let Some(port) = env(name) {
+            storage_ports.push((service, port.parse().unwrap_or_else(|_| fail(format!("{name} is not a port")))));
+        }
+    }
+    let set_storage_port = |ports: &mut Vec<(azure_emulator::StorageService, u16)>, service, port: u16| {
+        ports.retain(|(s, _)| *s != service);
+        ports.push((service, port));
+    };
     if let Some(value) = env("AZURE_EMULATOR_BIND") {
         bind = value;
     }
@@ -270,6 +293,15 @@ async fn main() {
             "--sql-port" => sql_port = value("--sql-port").parse().unwrap_or_else(|_| fail("--sql-port is not a port")),
             "--sql-password" => sql_password = Some(value("--sql-password")),
             "--http" => config.scheme = "http".into(),
+            "--blob-port" | "--queue-port" | "--table-port" => {
+                let service = match arg.as_str() {
+                    "--blob-port" => azure_emulator::StorageService::Blob,
+                    "--queue-port" => azure_emulator::StorageService::Queue,
+                    _ => azure_emulator::StorageService::Table,
+                };
+                let port = value(&arg).parse().unwrap_or_else(|_| fail(format!("{arg} is not a port")));
+                set_storage_port(&mut storage_ports, service, port);
+            }
             "--config" => config_file = Some(value("--config")),
             "--enforce-rbac" => config.enforce_rbac = true,
             "--persist" => persist = true,
@@ -392,6 +424,36 @@ async fn main() {
         Err(e) => eprintln!("warning: SQL Server endpoint not started: cannot listen on {sql_address}: {e} (use --sql-port)"),
     }
     println!("  CA certificate to trust:  {}", identity.ca_path.display());
+
+    // Path-style storage, each service on its own port, over plain HTTP as
+    // Azurite serves it by default.
+    for (service, port) in &storage_ports {
+        let storage_address: SocketAddr =
+            format!("{bind}:{port}").parse().unwrap_or_else(|_| fail("--bind is not an IP address"));
+        let listener = std::net::TcpListener::bind(storage_address)
+            .unwrap_or_else(|e| fail(format!("cannot listen for {service:?} storage on {storage_address}: {e}")));
+        let _ = listener.set_nonblocking(true);
+        let label = format!("{service:?} (path-style):");
+        println!("  {label:<26}http://{}:{port}/<account>/", if bind == "0.0.0.0" { "<host>" } else { bind.as_str() });
+        let activity = activity.clone();
+        let app = emulator
+            .storage_router(*service)
+            .layer(axum::middleware::from_fn(move |request, next: axum::middleware::Next| {
+                let busy = activity.begin();
+                async move {
+                    let response = next.run(request).await;
+                    drop(busy);
+                    response
+                }
+            }))
+            .into_make_service();
+        let server = axum_server::from_tcp(listener);
+        tokio::spawn(async move {
+            if let Err(error) = server.serve(app).await {
+                eprintln!("error: path-style storage listener stopped: {error}");
+            }
+        });
+    }
 
     let serving = async {
         if config.scheme == "https" {

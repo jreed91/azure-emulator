@@ -66,12 +66,29 @@ impl Client {
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
-        let response = self
-            .emulator
-            .router()
-            .oneshot(request.body(body.into()).expect("valid request"))
-            .await
-            .expect("the router is infallible");
+        let router = self.emulator.router();
+        self.send_via(router, request.body(body.into()).expect("valid request")).await
+    }
+
+    /// Sends one request to a path-style storage service, as its own port would.
+    pub async fn send_path_style(
+        &self,
+        service: azure_emulator::StorageService,
+        method: Method,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: impl Into<Body>,
+    ) -> Reply {
+        let mut request = Request::builder().method(method).uri(path).header("host", "azure:10000");
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let router = self.emulator.storage_router(service);
+        self.send_via(router, request.body(body.into()).expect("valid request")).await
+    }
+
+    async fn send_via(&self, router: axum::Router, request: Request<Body>) -> Reply {
+        let response = router.oneshot(request).await.expect("the router is infallible");
         let (parts, body) = response.into_parts();
         let body = axum::body::to_bytes(body, usize::MAX).await.expect("readable body");
         Reply {

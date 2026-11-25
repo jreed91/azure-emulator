@@ -30,6 +30,70 @@ use serde_json::{json, Value};
 pub use state::StorageState;
 use state::Account;
 
+/// Marks a request that arrived path-style, `/<account>/...`, as Azurite and the
+/// classic storage emulator address accounts (`http://127.0.0.1:10000/devstoreaccount1`).
+/// The router removes the account segment from the request's URI before a data
+/// plane sees it, and keeps the URI the client sent here: clients sign Shared Key
+/// requests over that path, account segment included.
+#[derive(Clone, Debug)]
+pub struct PathStyle {
+    /// The URI as the client sent it, with the account segment.
+    pub original: http::Uri,
+}
+
+/// The storage services served path-style, each on a port of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Service {
+    Blob,
+    Queue,
+    Table,
+}
+
+/// Splits a path-style request's URI into the account it names and the URI the
+/// data plane serves (the rest of the path, and the query). `None` when the path
+/// names no account.
+pub fn split_path_style(uri: &http::Uri) -> Option<(String, http::Uri)> {
+    let path = uri.path().strip_prefix('/')?;
+    let (account, rest) = path.split_once('/').unwrap_or((path, ""));
+    if account.is_empty() {
+        return None;
+    }
+    let account = emulator_core::http_util::percent_decode(account, false);
+    let target = match uri.query() {
+        Some(query) => format!("/{rest}?{query}"),
+        None => format!("/{rest}"),
+    };
+    Some((account, target.parse().ok()?))
+}
+
+/// Serves one request addressed path-style to `service`: the first path
+/// segment names the account.
+pub async fn handle_path_style(
+    engine: std::sync::Arc<emulator_core::Engine>,
+    service: Service,
+    request: http::Request<axum::body::Body>,
+) -> axum::response::Response {
+    let Some((account, target)) = split_path_style(request.uri()) else {
+        // Unverified against Azure: Azurite answers a request without an
+        // account segment with 400 InvalidUri.
+        let body = "<?xml version=\"1.0\" encoding=\"utf-8\"?><Error><Code>InvalidUri</Code><Message>The requested URI does not represent any resource on the server. Address an account path-style, as /<account>/...</Message></Error>";
+        let mut response = axum::response::Response::new(axum::body::Body::from(body));
+        *response.status_mut() = http::StatusCode::BAD_REQUEST;
+        response.headers_mut().insert(http::header::CONTENT_TYPE, http::HeaderValue::from_static("application/xml"));
+        response.headers_mut().insert("x-ms-error-code", http::HeaderValue::from_static("InvalidUri"));
+        return response;
+    };
+    let (mut parts, body) = request.into_parts();
+    let original = std::mem::replace(&mut parts.uri, target);
+    parts.extensions.insert(PathStyle { original });
+    let request = http::Request::from_parts(parts, body);
+    match service {
+        Service::Blob => blob::handle(engine, account, request).await,
+        Service::Queue => queue::handle(engine, account, request).await,
+        Service::Table => table::handle(engine, account, request).await,
+    }
+}
+
 const RESOURCE_TYPE: &str = "Microsoft.Storage/storageAccounts";
 
 /// Mounts the Storage resource provider on Resource Manager.

@@ -223,7 +223,12 @@ pub async fn handle(engine: Arc<Engine>, account: String, request: Request<Body>
         Ok(r) => (r.status, r.headers, r.body),
         Err(f) => (
             f.status,
-            vec![("x-ms-error-code".to_string(), f.code.to_string()), ("content-type".into(), "application/xml".into())],
+            // A HEAD answer has no body, so no Content-Type: the .NET SDK
+            // parses an XML-typed body to build its exception.
+            match parts.method == Method::HEAD {
+                true => vec![("x-ms-error-code".to_string(), f.code.to_string())],
+                false => vec![("x-ms-error-code".to_string(), f.code.to_string()), ("content-type".into(), "application/xml".into())],
+            },
             (parts.method != Method::HEAD).then(|| {
                 Body::from(format!(
                     "<?xml version=\"1.0\" encoding=\"utf-8\"?><Error><Code>{}</Code><Message>{}\nRequestId:{id}\nTime:{}</Message></Error>",

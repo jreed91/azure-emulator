@@ -21,6 +21,7 @@
   "sdk/test_files.py": "Azure Files",
   "sdk/test_files_more.py": "Azure Files",
   "sdk-js/files.test.js": "Azure Files",
+  "sdk-js/path-style.test.js": null,
   "sdk/test_keyvault.py": "Key Vault",
   "sdk/test_keyvault_management.py": "Key Vault",
   "sdk/test_keyvault_more.py": "Key Vault",

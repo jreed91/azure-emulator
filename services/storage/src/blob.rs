@@ -116,7 +116,13 @@ pub async fn handle(engine: Arc<Engine>, account: String, request: Request<Body>
             let mut headers = failure.headers;
             headers.push((name("x-ms-error-code"), failure.code.into()));
             let empty = is_head || failure.status == StatusCode::NOT_MODIFIED;
-            let mut response = xml(failure.status, if empty { String::new() } else { body });
+            // A response without a body carries no Content-Type: the .NET SDK
+            // parses an XML-typed body to build its exception, and fails on an
+            // empty one (the Functions host's lease manager stops on that).
+            let mut response = match empty {
+                true => respond(failure.status, Vec::new(), Body::empty()),
+                false => xml(failure.status, body),
+            };
             for (key, value) in headers {
                 if let Ok(value) = HeaderValue::from_str(&value) {
                     response.headers_mut().insert(key, value);
@@ -283,8 +289,11 @@ fn authorize(
             let state = state.lock();
             state.accounts.get(account).map(|a| a.keys.clone()).ok_or_else(failed)?
         };
-        let to_sign = shared_key::string_to_sign(&parts.method, &parts.uri, &parts.headers, account);
-        return match keys.iter().any(|key| shared_key::verify(&to_sign, key, signature)) {
+        let signed = shared_key::signed_uris(parts).into_iter().any(|uri| {
+            let to_sign = shared_key::string_to_sign(&parts.method, uri, &parts.headers, account);
+            keys.iter().any(|key| shared_key::verify(&to_sign, key, signature))
+        });
+        return match signed {
             true => Ok(()),
             false => Err(failed()),
         };
@@ -1813,11 +1822,24 @@ impl BlobRequest<'_> {
             .map_err(|_| cannot_verify(StatusCode::BAD_REQUEST, "The copy source is not a valid URL."))?;
         let host = request_host(&HeaderMap::new(), &uri);
         let config = self.engine.config();
-        let source_account = host
+        let by_host = host
             .strip_suffix(&config.blob_host_suffix())
             .or_else(|| host.strip_suffix(".blob.core.windows.net"))
-            .ok_or_else(|| cannot_verify(StatusCode::BAD_REQUEST, "The emulator copies only from blobs it holds."))?
-            .to_string();
+            .map(str::to_string);
+        // Otherwise a path-style URL (`http://<host>:<port>/<account>/...`)
+        // whose first segment names an account this emulator holds.
+        let path_style = || {
+            let (account, rest) = crate::split_path_style(&uri)?;
+            let state = self.engine.state::<StorageState>();
+            let known = state.lock().accounts.contains_key(&account);
+            known.then_some((account, rest))
+        };
+        let (source_account, source_uri) = match by_host {
+            Some(account) => (account, uri.clone()),
+            None => path_style()
+                .ok_or_else(|| cannot_verify(StatusCode::BAD_REQUEST, "The emulator copies only from blobs it holds."))?,
+        };
+        let uri = source_uri;
         let path = uri.path().trim_start_matches('/');
         let (source_container, source_blob) = path
             .split_once('/')
