@@ -149,6 +149,46 @@ test("sessions: a named session, the next available one, and state", async () =>
   await sender.close();
 });
 
+test("a session-enabled subscription's dead-letter queue takes non-session receivers", async () => {
+  await emulator.arm("PUT", `${namespace}/topics/sessioned`, {});
+  await emulator.arm("PUT", `${namespace}/topics/sessioned/subscriptions/work`, { properties: { requiresSession: true } });
+  const sender = client.createSender("sessioned");
+  await sender.sendMessages([
+    { body: "one", sessionId: "s" },
+    { body: "two", sessionId: "s" },
+    { body: "three", sessionId: "s" },
+  ]);
+  const session = await client.acceptSession("sessioned", "work", "s");
+  const got = await session.receiveMessages(3, { maxWaitTimeInMs: 2000 });
+  assert.deepEqual(got.map((m) => m.body), ["one", "two", "three"]);
+  for (const message of got) await session.deadLetterMessage(message, { deadLetterReason: "failed" });
+  await session.close();
+
+  // The subscription itself still refuses a non-session receiver.
+  const plain = client.createReceiver("sessioned", "work");
+  await assert.rejects(plain.receiveMessages(1, { maxWaitTimeInMs: 2000 }));
+  await plain.close();
+
+  // Peek-lock on the dead-letter queue, then complete.
+  const dead = client.createReceiver("sessioned", "work", { subQueueType: "deadLetter" });
+  assert.equal((await dead.peekMessages(10)).length, 3);
+  const [locked] = await dead.receiveMessages(1, { maxWaitTimeInMs: 2000 });
+  assert.equal(locked.body, "one");
+  assert.equal(locked.sessionId, "s", "a dead-lettered message keeps its session id");
+  assert.equal(locked.deadLetterReason, "failed");
+  await dead.completeMessage(locked);
+  await dead.close();
+
+  // Receive-and-delete, addressed as the Functions trigger does: the
+  // subscription name with a /$deadletterqueue suffix.
+  const deleting = client.createReceiver("sessioned", "work/$deadletterqueue", { receiveMode: "receiveAndDelete" });
+  const rest = await deleting.receiveMessages(5, { maxWaitTimeInMs: 2000 });
+  assert.deepEqual(rest.map((m) => m.body), ["two", "three"]);
+  assert.equal((await deleting.peekMessages(10)).length, 0);
+  await deleting.close();
+  await sender.close();
+});
+
 test("rules managed over AMQP are the subscription's rules", async () => {
   await emulator.arm("PUT", `${namespace}/topics/rules`, {});
   await emulator.arm("PUT", `${namespace}/topics/rules/subscriptions/audit`, {});

@@ -642,7 +642,8 @@ receive-and-delete, the dead-letter subqueue, scheduled messages (and
 cancelling them), deferred messages by sequence number, and peeking.
 
 Sessions: a session-enabled queue or subscription
-takes only messages with a session id; a receiver locks a named session or the
+takes only messages with a session id (its dead-letter subqueue is not
+session-enabled, so plain receivers read it, as on Azure); a receiver locks a named session or the
 next one with messages (waiting up to 30 seconds for one), receives only its
 messages, and can renew the session lock and get or set the session state;
 the lock is released when the receiver closes.
