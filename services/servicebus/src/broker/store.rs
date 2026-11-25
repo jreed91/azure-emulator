@@ -102,8 +102,11 @@ impl Entity {
         self.setting("maxMessageSizeInKilobytes").and_then(Json::as_u64).map_or(DEFAULT_MAX_MESSAGE_SIZE, |kb| kb * 1024)
     }
 
+    /// Whether receivers must lock a session. A dead-letter subqueue never
+    /// does, even under a session-enabled queue or subscription, as on Service
+    /// Bus: its messages keep their `SessionId` but are received without one.
     pub fn requires_session(&self) -> bool {
-        self.setting("requiresSession").and_then(Json::as_bool).unwrap_or(false)
+        !self.dead_letter && self.setting("requiresSession").and_then(Json::as_bool).unwrap_or(false)
     }
 
     fn status(&self) -> &str {
