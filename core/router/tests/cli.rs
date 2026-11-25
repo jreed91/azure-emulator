@@ -177,6 +177,7 @@ fn start(home: &std::path::Path, extra: &[&str]) -> (std::process::Child, u16) {
     let (port, amqp, amqps) = (free_port(), free_port(), free_port());
     let mut args = vec!["--http".to_string(), "--port".into(), port.to_string()];
     args.extend(["--amqp-port".into(), amqp.to_string(), "--amqps-port".into(), amqps.to_string()]);
+    args.extend(["--sql-port".into(), "0".into()]);
     args.extend(extra.iter().map(|a| a.to_string()));
     let child = Command::new(BINARY)
         .args(&args)

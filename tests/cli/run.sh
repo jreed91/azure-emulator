@@ -43,7 +43,7 @@ done
 
 work="$(mktemp -d)"
 trap 'kill "$emulator" 2>/dev/null || true; rm -rf "$work"' EXIT
-AZURE_EMULATOR_HOME="$work/home" "$binary" --port "$port" --amqp-port 0 --amqps-port 0 > "$work/emulator.log" 2>&1 &
+AZURE_EMULATOR_HOME="$work/home" "$binary" --port "$port" --amqp-port 0 --amqps-port 0 --sql-port 0 > "$work/emulator.log" 2>&1 &
 emulator=$!
 for _ in $(seq 1 100); do
   [[ -f "$work/home/ca.pem" ]] && curl -sf --cacert "$work/home/ca.pem" -o /dev/null \

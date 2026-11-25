@@ -122,7 +122,7 @@ def run_emulator(home, amqps_port=None, extra_args=(), port=None, amqp_port=None
     base = f"https://localhost:{port}"
     log = open(home / f"emulator-{port}.log", "w")
     process = subprocess.Popen(
-        [str(binary), "--port", str(port), "--amqp-port", str(amqp_port), "--amqps-port", str(amqps_port), *extra_args],
+        [str(binary), "--port", str(port), "--amqp-port", str(amqp_port), "--amqps-port", str(amqps_port), "--sql-port", "0", *extra_args],
         env={**os.environ, "AZURE_EMULATOR_HOME": str(home)},
         stdout=log,
         stderr=subprocess.STDOUT,

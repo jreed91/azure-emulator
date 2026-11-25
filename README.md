@@ -33,6 +33,7 @@ whether your own project is expected to work, see
 | `Microsoft.ServiceBus` | Namespaces, queues, topics, subscriptions, rules, authorization rules with `listKeys` and `regenerateKeys`, network rule sets, geo-disaster-recovery aliases with failover and break-pairing, legacy IP filter and virtual network rules, private link resources, Standard-to-Premium migration (start and revert; completion is not modeled), `checkNameAvailability`; messaging over AMQP 1.0 (see [Service Bus messaging](#service-bus-messaging)) |
 | `Microsoft.EventHub` | Namespaces (names shared with Service Bus), event hubs, consumer groups, authorization rules with `listKeys` and `regenerateKeys`, network rule sets, private link resources, geo-disaster-recovery aliases with failover, break-pairing and the alias's authorization rules and keys, `checkNameAvailability`; events over AMQP (see [Event Hubs](#event-hubs)) |
 | `Microsoft.DocumentDB` | Database accounts with `listKeys`, `readonlykeys`, `listConnectionStrings` and `regenerateKey`; SQL databases and containers (the same store as the data plane, reporting dedicated throughput under `options`); the Cosmos DB for NoSQL data plane (see [Cosmos DB](#cosmos-db)) |
+| SQL Server (Azure SQL Database) | A SQL Server endpoint over TDS on port 1433, with SQL authentication and TLS (`Encrypt=true` with `TrustServerCertificate`, or `Encrypt=strict` with the CA trusted), in memory. A subset of T-SQL: databases, schemas, tables with identity, defaults, primary keys, unique, check and foreign-key constraints, indexes; stored procedures with `OUTPUT` parameters and return values; queries with joins, `APPLY`, CTEs, grouping, window functions and set operations; `INSERT`/`UPDATE`/`DELETE` with `OUTPUT`; transactions with savepoints and rollback; `TRY`/`CATCH`; JSON functions; parameterized requests (`sp_executesql`, prepared statements) and the catalog views the common clients read (see [Azure SQL Database](#azure-sql-database)). No `Microsoft.Sql` resources |
 | `Microsoft.Network` | Served from the specification's schema, not modelled: virtual networks and subnets, network interfaces, security groups and rules, public addresses, route tables, load balancers, application gateways, private endpoints and the rest of what the provider's specification can create (122 resource types). Settings are checked against the schema, stored and returned, with references between resources kept as sent, so SDK calls, Bicep and Terraform configurations that only declare networking apply and read back. Nothing is allocated or connected; see [Known gaps](#known-gaps) |
 | Key Vault secrets | Set, get (latest or by version), update attributes, list, list versions, soft delete, get and list deleted, recover, purge, backup and restore (every version; the backup is the emulator's own format, so only the emulator restores it, and a certificate's secret is backed up with its certificate) |
 | Key Vault keys | RSA (2048, 3072, 4096) and EC (P-256, P-384, P-521, P-256K) keys, `-HSM` types in Premium vaults: create, import (JSON Web Key), get (latest or by version), update (operations, attributes, tags), list, list versions, rotate, rotation policy (stored; rotation is not automatic), backup and restore, soft delete with get and list deleted, recover and purge. Encrypt, decrypt, wrap and unwrap with `RSA1_5`, `RSA-OAEP` and `RSA-OAEP-256`; sign and verify with `RS256`–`RS512`, `PS256`–`PS512`, `ES256`, `ES384`, `ES512` and `ES256K` over a digest; random bytes. A key's permitted operations and `enabled` are enforced, and its `nbf` and `exp`: outside them it cannot encrypt, wrap or sign, but can still decrypt, unwrap and verify |
@@ -155,6 +156,17 @@ picture:
   permissions and resource tokens, spatial functions and the all-versions
   change feed answer `501`. Entra ID tokens are accepted without checking
   data-plane role assignments.
+- SQL: only the T-SQL listed under [Azure SQL Database](#azure-sql-database);
+  `MERGE`, cursors, user-defined functions and types, views, triggers,
+  `SELECT ... INTO`, `OUTPUT ... INTO`, computed columns, `FOR XML`, window
+  frames and `WAITFOR` fail with error 40517. Requests run one at a time with
+  no locking, so every session reads the others' uncommitted changes (as
+  `READ UNCOMMITTED`) and nothing ever blocks or deadlocks. There are no
+  permissions (every login may do anything), no Entra ID authentication, no
+  `Microsoft.Sql` servers or databases on Resource Manager, no query plans,
+  statistics or execution limits; data is held in memory and kept across
+  restarts only with `--persist`. Without a
+  password set, `sa` accepts any password.
 - Template deployments run to completion before the first response; there is
   no `Running` state and `cancel` always answers `409`. A `templateLink` or
   `parametersLink` answers `501`, as do
@@ -334,7 +346,7 @@ it refuses some, such as `10080`.)
 
 ```bash
 docker build -t azure-emulator .
-docker run -p 10443:10443 -p 5672:5672 -p 5671:5671 azure-emulator
+docker run -p 10443:10443 -p 5672:5672 -p 5671:5671 -p 1433:1433 azure-emulator
 ```
 
 Releases publish `ghcr.io/jreed91/azure-emulator:<version>` (such as
@@ -359,7 +371,7 @@ services:
       AZURE_EMULATOR_CONFIG: /config.json
     volumes:
       - ./azure-emulator.json:/config.json:ro
-    ports: ["10443:10443", "5672:5672", "5671:5671"]
+    ports: ["10443:10443", "5672:5672", "5671:5671", "1433:1433"]
 ```
 
 ### Keeping state across restarts
@@ -381,7 +393,8 @@ What is kept: resource groups and every resource, role assignments and custom
 roles, deployments; storage account keys, blobs (with snapshots, leases and
 staged blocks), queues and their messages, tables and entities; Key Vault
 secrets and keys, with their key material, and deleted items; Cosmos DB
-databases, containers and items; Service Bus and Event Hubs namespaces,
+databases, containers and items; SQL logins, databases, tables, rows and
+procedures; Service Bus and Event Hubs namespaces,
 entities and keys. Not kept: messages and events in flight in Service Bus and
 Event Hubs, which start empty again.
 
@@ -402,8 +415,8 @@ volumes:
 `--config <file>` (or `AZURE_EMULATOR_CONFIG`) creates resources before the
 emulator starts serving, through the same Resource Manager API a client would
 call, so they are validated the same way. Service Bus, Event Hubs, Cosmos DB
-(see [Cosmos DB](#cosmos-db)) and storage accounts have shorthands; any other
-resource can be listed by id:
+(see [Cosmos DB](#cosmos-db)), storage accounts and SQL have shorthands; any
+other resource can be listed by id:
 
 ```json
 {
@@ -421,6 +434,12 @@ resource can be listed by id:
       ]
     }]
   }],
+  "sql": {
+    "saPassword": "Str0ng!Passw0rd",
+    "logins": [{ "name": "app", "password": "App!Passw0rd" }],
+    "databases": ["orders"],
+    "scripts": ["USE orders\nGO\nCREATE TABLE dbo.Orders (Id INT IDENTITY PRIMARY KEY, Body NVARCHAR(MAX))"]
+  },
   "resources": [{
     "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/local/providers/Microsoft.Storage/storageAccounts/localfiles",
     "apiVersion": "2023-05-01",
@@ -490,6 +509,12 @@ emulator's service name is enough (see
 [Path-style storage addressing](#path-style-storage-addressing-azurite-style)).
 Without those ports, give the emulator's service a network alias for each
 hostname, such as `devstoreaccount1.blob.core.azure.localhost`.
+
+`sql` goes straight to the SQL engine: `saPassword` sets the password of the
+`sa` login, `logins` adds logins (each may use every database), `databases`
+creates databases that do not exist yet, and `scripts` runs T-SQL as `sa`,
+split into batches on `GO` lines as `sqlcmd` does. A failing script stops the
+emulator from starting.
 
 ### Trust the certificate
 
@@ -676,6 +701,57 @@ Cosmos DB emulator documents works:
   }]
 }
 ```
+
+### Azure SQL Database
+
+The emulator answers SQL Server's TDS protocol on port 1433 (`--sql-port`), so
+`mssql`/tedious, `Microsoft.Data.SqlClient`, ODBC, JDBC and `sqlcmd` connect
+to it as to a SQL Server. Log in as `sa` with the password from `--sql-password`,
+`AZURE_EMULATOR_SQL_PASSWORD` or `MSSQL_SA_PASSWORD` (as in the SQL Server
+container image), or from `saPassword` under `sql` in `--config`. With no
+password set, `sa` accepts any password. Connections are encrypted with the
+emulator's certificate: use `Encrypt=true;TrustServerCertificate=true`, or
+`Encrypt=strict` (TDS 8) with the emulator's CA trusted. A client that asks for
+no encryption gets none.
+
+```js
+import sql from "mssql";
+
+const pool = await sql.connect({
+  server: "localhost", port: 1433, user: "sa", password: process.env.MSSQL_SA_PASSWORD,
+  database: "master", options: { encrypt: true, trustServerCertificate: true },
+});
+await pool.request().batch("IF DB_ID('app') IS NULL CREATE DATABASE app");
+const result = await pool.request()
+  .input("payload", sql.NVarChar(sql.MAX), JSON.stringify({ Name: "a" }))
+  .output("ok", sql.Bit)
+  .execute("app.dbo.AddItem");
+```
+
+Supported T-SQL: `CREATE`/`DROP DATABASE`, `USE`, schemas; `CREATE`/`ALTER`/`DROP
+TABLE` with `IDENTITY`, defaults, `NULL`/`NOT NULL`, primary key, unique,
+check and foreign-key constraints (with `ON DELETE CASCADE`), indexes,
+`TRUNCATE`; temporary tables and table variables; `CREATE [OR ALTER]
+PROCEDURE` with defaults, `OUTPUT` parameters and `RETURN`; `EXEC` with named,
+positional and `OUTPUT` arguments, and `EXEC`/`sp_executesql` of dynamic SQL;
+`DECLARE`, `SET`, `SELECT @v = ...`, `IF`/`ELSE`, `WHILE`, `BEGIN`/`END`,
+`TRY`/`CATCH`, `THROW`, `RAISERROR`, `PRINT`; `SELECT` with joins, `APPLY`,
+subqueries, `EXISTS`, `IN`, CTEs, `GROUP BY`/`HAVING`, `DISTINCT`, `TOP`,
+`OFFSET`/`FETCH`, `UNION`/`INTERSECT`/`EXCEPT`, `ROW_NUMBER`, `RANK`, `LAG`
+and the other window functions, `FOR JSON`, `OPENJSON`; `INSERT` (values,
+`SELECT`, `EXEC`), `UPDATE` and `DELETE` with `FROM` and `OUTPUT`;
+`BEGIN`/`COMMIT`/`ROLLBACK`/`SAVE TRANSACTION`, `@@TRANCOUNT`, `XACT_STATE()`
+and `SET XACT_ABORT`; the string, date, math, conversion and JSON
+(`JSON_VALUE`, `JSON_QUERY`, `JSON_MODIFY`, `ISJSON`) functions; and the
+catalog views `sys.databases`, `sys.tables`, `sys.columns`, `sys.objects`,
+`sys.procedures`, `sys.indexes` and `INFORMATION_SCHEMA`. `DB_ID`,
+`OBJECT_ID` and `COL_LENGTH` answer as SQL Server does, so idempotent setup
+scripts (`IF OBJECT_ID(...) IS NULL CREATE TABLE ...`) run unchanged. Strings
+compare case-insensitively and ignore trailing spaces, as under SQL Server's
+default collation. Errors carry SQL Server's numbers (208, 2627, 547, 515,
+2628 and so on) and follow its rules on which errors end the statement,
+the batch or the transaction. Anything outside the subset fails with error
+40517 naming what is missing, instead of doing something else.
 
 ### Service Bus messaging
 
@@ -911,6 +987,7 @@ Each `Emulator` is fully isolated. `core/router/tests/` shows how to drive it.
 │   ├── servicebus/      # Microsoft.ServiceBus + the AMQP broker (Service Bus and Event Hubs)
 │   ├── eventhub/        # Microsoft.EventHub
 │   ├── cosmosdb/        # Microsoft.DocumentDB + NoSQL data plane
+│   ├── sql/             # SQL Server: TDS endpoint and an in-memory T-SQL engine
 │   └── network/         # Microsoft.Network, served from its schema
 ├── tools/scaffold/      # emulator-scaffold: OpenAPI specification → service scaffold
 ├── vendor/fe2o3-amqp/   # the AMQP library, patched (see PATCHED.md)

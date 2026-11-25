@@ -16,6 +16,7 @@ service-managedidentity = { workspace = true }
 service-entra = { workspace = true }
 service-storage = { workspace = true }
 service-keyvault = { workspace = true }
+service-sql = { workspace = true }
 axum = { workspace = true }
 axum-server = { workspace = true }
 http = { workspace = true }

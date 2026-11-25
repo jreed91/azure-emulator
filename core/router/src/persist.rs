@@ -9,7 +9,8 @@
 //! Persisted: Resource Manager (resources, role assignments, custom roles,
 //! deployments), Storage (blobs, queues, tables and their settings), Key
 //! Vault (secrets, keys with their material, deleted items), Cosmos DB
-//! (databases, containers, items) and Service Bus and Event Hubs keys.
+//! (databases, containers, items), SQL (logins, databases,
+//! tables, rows and procedures) and Service Bus and Event Hubs keys.
 //! Not persisted: messages and events in flight in Service Bus and Event
 //! Hubs; their namespaces, entities and settings are.
 
@@ -29,6 +30,7 @@ pub fn register(engine: &Engine) {
     engine.persist::<service_keyvault::KeyVaultState>("keyvault");
     engine.persist::<service_cosmosdb::CosmosState>("cosmosdb");
     engine.persist::<service_servicebus::ServiceBusState>("servicebus");
+    engine.persist::<service_sql::SqlState>("sql");
 }
 
 /// The snapshot's default place: `state.json` in the emulator's home directory.
