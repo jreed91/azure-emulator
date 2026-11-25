@@ -191,7 +191,7 @@ async fn blob_round_trip_with_a_bearer_token() {
 }
 
 /// Signs a body-less request the way a storage SDK does.
-fn sign(key: &str, method: &str, account: &str, path: &str, canonical_query: &str, date: &str) -> String {
+pub(crate) fn sign(key: &str, method: &str, account: &str, path: &str, canonical_query: &str, date: &str) -> String {
     let to_sign = format!(
         "{method}\n\n\n\n\n\n\n\n\n\n\n\nx-ms-date:{date}\nx-ms-version:2023-11-03\n/{account}{path}{canonical_query}"
     );
