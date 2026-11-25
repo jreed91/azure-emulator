@@ -11,6 +11,7 @@ members = [
     "services/cosmosdb",
     "services/eventhub",
     "services/network",
+    "services/sql",
     "tools/scaffold",
 ]
 
@@ -33,6 +34,7 @@ service-managedidentity = { path = "services/managedidentity" }
 service-entra = { path = "services/entra" }
 service-storage = { path = "services/storage" }
 service-keyvault = { path = "services/keyvault" }
+service-sql = { path = "services/sql" }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 base64 = "0.22"

@@ -13,6 +13,7 @@
     "@azure/service-bus": "7.9.5",
     "@azure/storage-blob": "12.34.0",
     "@azure/storage-file-share": "12.33.0",
-    "@azure/storage-queue": "12.32.0"
+    "@azure/storage-queue": "12.32.0",
+    "mssql": "12.1.0"
   }
 }

@@ -34,6 +34,9 @@ OPTIONS:
         --amqp-port <PORT> Port of the Service Bus AMQP listener [default: 5672]
         --amqps-port <PORT>
                            Port of the Service Bus AMQP-over-TLS listener [default: 5671]
+        --sql-port <PORT>  Port of the SQL Server (TDS) listener [default: 1433]
+        --sql-password <P> Password of the SQL login 'sa' [env: AZURE_EMULATOR_SQL_PASSWORD,
+                           or MSSQL_SA_PASSWORD]; without one, 'sa' accepts any password
         --http             Serve plain HTTP instead of HTTPS
         --config <FILE>    Provision resources from a JSON file at startup
                            (see the README)
@@ -53,7 +56,8 @@ OPTIONS:
     -h, --help             Print this help
 
 Every option can also be set in the environment: AZURE_EMULATOR_PORT,
-AZURE_EMULATOR_AMQP_PORT, AZURE_EMULATOR_AMQPS_PORT,
+AZURE_EMULATOR_AMQP_PORT, AZURE_EMULATOR_AMQPS_PORT, AZURE_EMULATOR_SQL_PORT,
+AZURE_EMULATOR_SQL_PASSWORD,
 AZURE_EMULATOR_BIND, AZURE_EMULATOR_HOST,
 AZURE_EMULATOR_DNS_SUFFIX, AZURE_EMULATOR_HTTP=1, AZURE_EMULATOR_CONFIG,
 AZURE_EMULATOR_ENFORCE_RBAC=1, AZURE_EMULATOR_RBAC_OWNERS (comma-separated),
@@ -222,6 +226,11 @@ async fn main() {
     if let Some(port) = env("AZURE_EMULATOR_AMQPS_PORT") {
         config.amqps_port = port.parse().unwrap_or_else(|_| fail("AZURE_EMULATOR_AMQPS_PORT is not a port"));
     }
+    let mut sql_port: u16 = 1433;
+    if let Some(port) = env("AZURE_EMULATOR_SQL_PORT") {
+        sql_port = port.parse().unwrap_or_else(|_| fail("AZURE_EMULATOR_SQL_PORT is not a port"));
+    }
+    let mut sql_password = env("AZURE_EMULATOR_SQL_PASSWORD").or_else(|| env("MSSQL_SA_PASSWORD"));
     if let Some(value) = env("AZURE_EMULATOR_BIND") {
         bind = value;
     }
@@ -258,6 +267,8 @@ async fn main() {
             "--amqps-port" => {
                 config.amqps_port = value("--amqps-port").parse().unwrap_or_else(|_| fail("--amqps-port is not a port"))
             }
+            "--sql-port" => sql_port = value("--sql-port").parse().unwrap_or_else(|_| fail("--sql-port is not a port")),
+            "--sql-password" => sql_password = Some(value("--sql-password")),
             "--http" => config.scheme = "http".into(),
             "--config" => config_file = Some(value("--config")),
             "--enforce-rbac" => config.enforce_rbac = true,
@@ -303,6 +314,9 @@ async fn main() {
             Ok(false) => {}
             Err(error) => eprintln!("warning: {error}"),
         }
+    }
+    if let Some(password) = &sql_password {
+        service_sql::set_password(&emulator.engine(), "sa", password);
     }
     if let Some(path) = &config_file {
         let text = std::fs::read_to_string(path).unwrap_or_else(|e| fail(format!("cannot read {path}: {e}")));
@@ -365,6 +379,18 @@ async fn main() {
     let amqps_tls = tls::acceptor(&identity).unwrap_or_else(|e| fail(format!("TLS setup failed: {e}")));
     println!("  Service Bus (AMQP + TLS): amqps://<namespace>.servicebus.{}:{}/", config.dns_suffix, config.amqps_port);
     tokio::spawn(serve_amqp(emulator.engine(), amqps, Some(amqps_tls), activity.clone()));
+    // SQL Server's TDS endpoint, with TLS inside the protocol as SQL Server does it.
+    let sql_address = format!("{bind}:{sql_port}");
+    match tokio::net::TcpListener::bind(&sql_address).await {
+        Ok(listener) => {
+            let sql_port = listener.local_addr().map(|a| a.port()).unwrap_or(sql_port);
+            let sql_tls = service_sql::tds::tls_configs(&identity.certificate_chain_pem, &identity.private_key_pem)
+                .unwrap_or_else(|e| fail(format!("TLS setup failed: {e}")));
+            println!("  SQL Server (TDS):         Server=localhost,{sql_port};User ID=sa;TrustServerCertificate=true");
+            tokio::spawn(serve_sql(emulator.engine(), listener, Arc::new(sql_tls), activity.clone()));
+        }
+        Err(e) => eprintln!("warning: SQL Server endpoint not started: cannot listen on {sql_address}: {e} (use --sql-port)"),
+    }
     println!("  CA certificate to trust:  {}", identity.ca_path.display());
 
     let serving = async {
@@ -436,6 +462,28 @@ async fn serve_amqp(
                 }
                 None => service_servicebus::broker::serve_stream(engine, stream).await,
             }
+            drop(busy);
+        });
+    }
+}
+
+/// Serves SQL Server (TDS) connections, marking the emulator busy while each is open.
+async fn serve_sql(
+    engine: Arc<emulator_core::Engine>,
+    listener: tokio::net::TcpListener,
+    tls: Arc<service_sql::tds::TlsConfigs>,
+    activity: Arc<Activity>,
+) {
+    loop {
+        let Ok((stream, _)) = listener.accept().await else {
+            continue;
+        };
+        let _ = stream.set_nodelay(true);
+        let busy = activity.begin();
+        let engine = engine.clone();
+        let tls = tls.clone();
+        tokio::spawn(async move {
+            service_sql::tds::serve_stream(engine, stream, Some(tls)).await;
             drop(busy);
         });
     }

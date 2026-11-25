@@ -34,6 +34,12 @@
 //!     "key": "<base64 key>",
 //!     "databases": [{ "id": "app", "containers": [{ "id": "orders", "partitionKey": "/tenant" }] }]
 //!   }],
+//!   "sql": {
+//!     "saPassword": "<password>",
+//!     "logins": [{ "name": "app", "password": "<password>" }],
+//!     "databases": ["app"],
+//!     "scripts": ["USE app\nGO\nCREATE TABLE dbo.Items (Id INT IDENTITY PRIMARY KEY, Payload NVARCHAR(MAX))"]
+//!   },
 //!   "resources": [
 //!     { "id": "/subscriptions/.../resourceGroups/local/providers/Microsoft.Storage/storageAccounts/files",
 //!       "apiVersion": "2023-05-01", "body": { "location": "eastus", "kind": "StorageV2", "sku": { "name": "Standard_LRS" } } }
@@ -257,6 +263,15 @@ fn steps(file: &Value, default_subscription: &str) -> Result<Vec<Step>, String> 
 
 /// Provisions what `file` describes. Returns one line per request made.
 pub async fn provision(emulator: &Emulator, file: &Value) -> Result<Vec<String>, String> {
+    let mut done = provision_arm(emulator, file).await?;
+    // SQL has no Resource Manager provider here; its entries go to the data plane directly.
+    if let Some(sql) = file.get("sql") {
+        done.extend(service_sql::provision(&emulator.engine(), sql)?);
+    }
+    Ok(done)
+}
+
+async fn provision_arm(emulator: &Emulator, file: &Value) -> Result<Vec<String>, String> {
     let config = emulator.config();
     let token = emulator_core::auth::issue_token(config, "https://management.azure.com/", emulator_core::auth::PROVISIONING_CLIENT);
     let host = format!("{}:{}", config.host, config.port);
