@@ -2,10 +2,11 @@
 //! Resource Manager request, so what it makes is checked through Resource
 //! Manager, and a refused request stops provisioning with the reason.
 
-use azure_emulator::provision::provision;
+use azure_emulator::provision::{provision, WELL_KNOWN_STORAGE_KEY};
 use http::Method;
 use serde_json::{json, Value};
 
+use crate::storage::sign;
 use crate::support::{Client, SUB};
 
 async fn get(client: &Client, path: &str, api: &str) -> Value {
@@ -82,6 +83,48 @@ async fn event_hubs_cosmos_and_raw_resources_are_provisioned() {
 }
 
 #[tokio::test]
+async fn storage_accounts_get_fixed_keys_containers_queues_and_tables() {
+    let client = Client::new();
+    let key2 = "c2Vjb25kLWtleS1mb3ItdGhlLXN0b3JhZ2UtYWNjb3VudA==";
+    let file = json!({
+        "storage": [{
+            "resourceGroup": "local",
+            "account": "devstoreaccount1",
+            "keys": {"key1": WELL_KNOWN_STORAGE_KEY, "key2": key2},
+            "containers": ["azure-webjobs-hosts", {"name": "reports", "properties": {"metadata": {"from": "config"}}}],
+            "queues": ["jobs"],
+            "tables": ["audit"],
+        }],
+    });
+    provision(&client.emulator, &file).await.expect("provisioning succeeds");
+
+    let account = format!("{SUB}/resourceGroups/local/providers/Microsoft.Storage/storageAccounts/devstoreaccount1");
+    let keys = post(&client, &format!("{account}/listKeys"), "2023-05-01").await;
+    assert_eq!(keys["keys"][0]["value"], WELL_KNOWN_STORAGE_KEY);
+    assert_eq!(keys["keys"][1]["value"], key2);
+    let reports = get(&client, &format!("{account}/blobServices/default/containers/reports"), "2023-05-01").await;
+    assert_eq!(reports["properties"]["metadata"], json!({"from": "config"}));
+    get(&client, &format!("{account}/queueServices/default/queues/jobs"), "2023-05-01").await;
+    get(&client, &format!("{account}/tableServices/default/tables/audit"), "2023-05-01").await;
+
+    // The well-known key signs data plane requests, so a connection string
+    // written ahead of time works.
+    let date = httpdate::fmt_http_date(std::time::SystemTime::now());
+    let authorization = sign(WELL_KNOWN_STORAGE_KEY, "GET", "devstoreaccount1", "/", "\ncomp:list", &date);
+    let headers = [("authorization", authorization.as_str()), ("x-ms-date", date.as_str()), ("x-ms-version", "2023-11-03")];
+    let reply = client.send(Method::GET, "devstoreaccount1.blob.core.azure.localhost:10443", "/?comp=list", &headers, "").await;
+    assert!(reply.text().contains("<Name>azure-webjobs-hosts</Name>"), "{}", reply.text());
+    let reply = client.send(Method::GET, "devstoreaccount1.queue.core.azure.localhost:10443", "/?comp=list", &headers, "").await;
+    assert!(reply.text().contains("<Name>jobs</Name>"), "{}", reply.text());
+
+    // Provisioning again (as after a restart with --persist) keeps the keys
+    // and what the account holds.
+    provision(&client.emulator, &file).await.expect("provisioning is repeatable");
+    let keys = post(&client, &format!("{account}/listKeys"), "2023-05-01").await;
+    assert_eq!(keys["keys"][0]["value"], WELL_KNOWN_STORAGE_KEY);
+}
+
+#[tokio::test]
 async fn bad_files_and_refused_requests_stop_provisioning() {
     let client = Client::new();
     let cases = [
@@ -90,6 +133,10 @@ async fn bad_files_and_refused_requests_stop_provisioning() {
         (json!({"eventHubs": [{"resourceGroup": "g", "namespace": "cg-names", "hubs": [{"name": "h", "consumerGroups": [1]}]}]}), "consumer groups are names"),
         (json!({"resources": [{"id": format!("{SUB}/resourceGroups/g")}]}), "apiVersion"),
         (json!({"cosmos": [{"resourceGroup": "g", "account": "c", "databases": [{"containers": []}]}]}), "'id' is required"),
+        (json!({"storage": [{"resourceGroup": "g", "account": "keysacct", "keys": {"key1": 5}}]}), "keys.key1"),
+        (json!({"storage": [{"resourceGroup": "g", "account": "queueacct", "queues": [{}]}]}), "'name' is required"),
+        // A key that is not base64 is refused by regenerateKey.
+        (json!({"storage": [{"resourceGroup": "g", "account": "notbase64", "keys": "not base64!"}]}), "base64"),
         // A request the emulator refuses: an invalid namespace name.
         (json!({"serviceBus": [{"resourceGroup": "g", "namespace": "x"}]}), "400"),
     ];

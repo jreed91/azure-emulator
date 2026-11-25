@@ -34,6 +34,14 @@
 //!     "key": "<base64 key>",
 //!     "databases": [{ "id": "app", "containers": [{ "id": "orders", "partitionKey": "/tenant" }] }]
 //!   }],
+//!   "storage": [{
+//!     "resourceGroup": "local",
+//!     "account": "devstoreaccount1",
+//!     "keys": { "key1": "<base64 key>", "key2": "<base64 key>" },
+//!     "containers": ["uploads", { "name": "reports", "properties": { "publicAccess": "None" } }],
+//!     "queues": ["jobs"],
+//!     "tables": ["audit"]
+//!   }],
 //!   "sql": {
 //!     "saPassword": "<password>",
 //!     "logins": [{ "name": "app", "password": "<password>" }],
@@ -47,8 +55,11 @@
 //! }
 //! ```
 //!
-//! A key under `keys` is either one string (the primary key) or
-//! `{ "primary": "...", "secondary": "..." }`.
+//! A key under a Service Bus or Event Hubs `keys` is either one string (the
+//! primary key) or `{ "primary": "...", "secondary": "..." }`. A storage
+//! account's `keys` is `{ "key1": "...", "key2": "..." }` (either may be left
+//! out to keep a generated key) or one string for `key1`. Containers, queues
+//! and tables are names, or `{ "name": "...", "properties": {...} }`.
 
 use axum::body::Body;
 use http::{Method, Request};
@@ -61,6 +72,12 @@ const SERVICE_BUS_API: &str = "2022-10-01-preview";
 const COSMOS_API: &str = "2024-11-15";
 const EVENT_HUBS_API: &str = "2024-01-01";
 const RESOURCES_API: &str = "2021-04-01";
+const STORAGE_API: &str = "2023-05-01";
+
+/// The storage emulator's well-known account key (Azurite and the legacy
+/// Azure Storage Emulator), for `devstoreaccount1`.
+pub const WELL_KNOWN_STORAGE_KEY: &str =
+    "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
 
 /// One Resource Manager request the file asks for.
 struct Step {
@@ -253,6 +270,58 @@ fn steps(file: &Value, default_subscription: &str) -> Result<Vec<Step>, String> 
             }
         }
     }
+    for storage in list(file, "storage") {
+        let group = text(storage, "resourceGroup", "storage entry")?;
+        let name = text(storage, "account", "storage entry")?;
+        let location = storage.get("location").and_then(Value::as_str).unwrap_or("eastus");
+        let group_path = format!("/subscriptions/{subscription}/resourceGroups/{group}");
+        if !groups.contains(&group_path) {
+            groups.push(group_path.clone());
+            steps.push(put(group_path.clone(), RESOURCES_API, json!({ "location": location })));
+        }
+        let account = format!("{group_path}/providers/Microsoft.Storage/storageAccounts/{name}");
+        let sku = storage.get("sku").and_then(Value::as_str).unwrap_or("Standard_LRS");
+        let kind = storage.get("kind").and_then(Value::as_str).unwrap_or("StorageV2");
+        let mut body = json!({ "location": location, "kind": kind, "sku": { "name": sku } });
+        if let Some(properties) = storage.get("properties") {
+            body["properties"] = properties.clone();
+        }
+        steps.push(put(account.clone(), STORAGE_API, body));
+        let keys: Vec<(&str, &str)> = match storage.get("keys") {
+            None => Vec::new(),
+            Some(Value::String(key1)) => vec![("key1", key1.as_str())],
+            Some(Value::Object(keys)) => {
+                if let Some(other) = keys.keys().find(|k| !matches!(k.as_str(), "key1" | "key2")) {
+                    return Err(format!("{name}: storage keys are 'key1' and 'key2', not '{other}'"));
+                }
+                ["key1", "key2"]
+                    .into_iter()
+                    .filter_map(|k| keys.get(k).map(|v| v.as_str().map(|v| (k, v)).ok_or_else(|| format!("{name}: keys.{k} must be a string"))))
+                    .collect::<Result<_, _>>()?
+            }
+            Some(_) => return Err(format!("{name}: keys is a key string or {{\"key1\", \"key2\"}}")),
+        };
+        for (key_name, key) in keys {
+            steps.push(Step {
+                method: Method::POST,
+                path: format!("{account}/regenerateKey?api-version={STORAGE_API}"),
+                body: json!({ "keyName": key_name, "key": key }),
+            });
+        }
+        for (field, service, child) in [
+            ("containers", "blobServices", "containers"),
+            ("queues", "queueServices", "queues"),
+            ("tables", "tableServices", "tables"),
+        ] {
+            for item in list(storage, field) {
+                let (item_name, body) = match item {
+                    Value::String(item_name) if !item_name.is_empty() => (item_name.as_str(), json!({ "properties": {} })),
+                    _ => (text(item, "name", field)?, properties(item)),
+                };
+                steps.push(put(format!("{account}/{service}/default/{child}/{item_name}"), STORAGE_API, body));
+            }
+        }
+    }
     for resource in list(file, "resources") {
         let id = text(resource, "id", "resource")?;
         let api = text(resource, "apiVersion", id)?;
@@ -334,6 +403,46 @@ mod tests {
                 format!("POST {ns}/AuthorizationRules/app/regenerateKeys"),
             ]
         );
+    }
+
+    #[test]
+    fn storage_shorthand_expands_to_requests() {
+        let file = json!({
+            "storage": [{
+                "resourceGroup": "local", "account": "devstoreaccount1",
+                "keys": { "key1": WELL_KNOWN_STORAGE_KEY },
+                "containers": ["uploads", { "name": "reports", "properties": { "publicAccess": "None" } }],
+                "queues": ["jobs"],
+                "tables": [{ "name": "audit" }]
+            }]
+        });
+        let steps = steps(&file, "sub").unwrap();
+        let lines: Vec<String> = steps
+            .iter()
+            .map(|s| format!("{} {}", s.method, s.path.split('?').next().unwrap().trim_start_matches("/subscriptions/sub/resourceGroups/local")))
+            .collect();
+        let account = "/providers/Microsoft.Storage/storageAccounts/devstoreaccount1";
+        assert_eq!(
+            lines,
+            vec![
+                "PUT ".to_string(),
+                format!("PUT {account}"),
+                format!("POST {account}/regenerateKey"),
+                format!("PUT {account}/blobServices/default/containers/uploads"),
+                format!("PUT {account}/blobServices/default/containers/reports"),
+                format!("PUT {account}/queueServices/default/queues/jobs"),
+                format!("PUT {account}/tableServices/default/tables/audit"),
+            ]
+        );
+        assert_eq!(steps[1].body["kind"], "StorageV2");
+        assert_eq!(steps[2].body, json!({ "keyName": "key1", "key": WELL_KNOWN_STORAGE_KEY }));
+        assert_eq!(steps[4].body, json!({ "properties": { "publicAccess": "None" } }));
+    }
+
+    #[test]
+    fn storage_keys_other_than_key1_and_key2_are_refused() {
+        let file = json!({ "storage": [{ "resourceGroup": "local", "account": "a1b2c3", "keys": { "primary": "x" } }] });
+        assert!(steps(&file, "sub").err().unwrap().contains("not 'primary'"));
     }
 
     #[test]
