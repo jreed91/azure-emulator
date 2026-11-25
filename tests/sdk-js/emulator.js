@@ -28,8 +28,11 @@ function freePort() {
 /** Starts an emulator; `config` is an optional provisioning file's content. */
 export async function startEmulator(config) {
   const [port, amqpPort, amqpsPort] = [await freePort(), await freePort(), await freePort()];
+  // Path-style (Azurite) storage ports.
+  const storagePorts = { blob: await freePort(), queue: await freePort(), table: await freePort() };
   const home = mkdtempSync(join(tmpdir(), "azure-emulator-"));
   const args = ["--http", "--port", String(port), "--amqp-port", String(amqpPort), "--amqps-port", String(amqpsPort)];
+  for (const [service, servicePort] of Object.entries(storagePorts)) args.push(`--${service}-port`, String(servicePort));
   if (config) {
     writeFileSync(join(home, "config.json"), JSON.stringify(config));
     args.push("--config", join(home, "config.json"));
@@ -62,5 +65,5 @@ export async function startEmulator(config) {
     return text ? JSON.parse(text) : null;
   }
 
-  return { base, amqpPort, arm, stop: () => child.kill() };
+  return { base, amqpPort, storagePorts, arm, stop: () => child.kill() };
 }
